@@ -4,7 +4,7 @@
 
 SHELL := /bin/bash
 
-MAIN_CHAIN_DIRS := scenario contracts planning safe_rl_v2 tests
+MAIN_CHAIN_DIRS := scenario contracts checkpointing planning safe_rl_v2 tests
 MAIN_PY := $(shell find $(MAIN_CHAIN_DIRS) -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null)
 
 .PHONY: check test contract probe smoke train eval figures report
