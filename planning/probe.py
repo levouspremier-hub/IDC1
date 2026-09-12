@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import time
 import tracemalloc
+from typing import Any
 
 import numpy as np
 
@@ -20,7 +21,7 @@ from safe_rl.corrector_wrapper import CorrectorWrapper
 def main() -> None:
     env = CorrectorWrapper(IDCPriceEnv20D())
     env.reset(seed=0)
-    raw = env.env  # 未包装环境
+    raw: Any = env.env  # 未包装环境
     action = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
 
     tracemalloc.start()
