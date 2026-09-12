@@ -64,6 +64,8 @@
 !docs/
 !docs/dev_reports/
 !docs/dev_reports/*.md
+!docs/IMPLEMENTATION_PLAN.md
+!docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md
 !.gitignore
 
 # Generated outputs and large artifacts.
