@@ -71,6 +71,8 @@
 !runs/
 !runs/writer.py
 !runs/__init__.py
+!viz/
+!viz/*.py
 !scripts/
 !scripts/*.py
 !data/
