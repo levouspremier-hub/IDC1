@@ -53,6 +53,7 @@ class IDCPriceEnv20D(gym.Env):
         peak_power_threshold_kW: float = 18.0,
         peak_power_ref_kW: float = 10.0,
         grid_power_limit_kW: float = 18.0,
+        access_limit_kw: float = 18.0,
         sla_ref: float = 50.0,
         sla_penalty_ref: float | None = None,
         bess_capacity_kWh: float = 100.0,
@@ -175,6 +176,7 @@ class IDCPriceEnv20D(gym.Env):
         self.peak_power_threshold_kW = float(peak_power_threshold_kW) * max(self.idc_power_scale_factor, 1e-9)
         self.peak_power_ref_kW = float(peak_power_ref_kW) * max(self.idc_power_scale_factor, 1e-9)
         self.grid_power_limit_kW = float(grid_power_limit_kW) * max(self.idc_power_scale_factor, 1e-9)
+        self.access_limit_kw = float(access_limit_kw) * max(self.idc_power_scale_factor, 1e-9)
         # SLA pressure is task-count/priority/lateness based, not workload based.
         # Keep the legacy attribute as an alias for downstream reporting.
         self.sla_penalty_ref = float(
@@ -699,7 +701,9 @@ class IDCPriceEnv20D(gym.Env):
         wind_used_kW = min(wind_available_kW, max(P_after_pv_kW, 0.0))
         wind_curtail_kW = max(wind_available_kW - wind_used_kW, 0.0)
         P_bus_net_kW = P_after_pv_kW - wind_used_kW
-        P_grid_kW = max(P_bus_net_kW, 0.0)
+        # 接入上限为不可违反的物理上限（M3.7），超出部分记为缺口
+        unserved_load_kW = max(P_bus_net_kW - self.access_limit_kw, 0.0)
+        P_grid_kW = min(max(P_bus_net_kW, 0.0), self.access_limit_kw)
 
         idc_energy_kWh = P_IDC_kW * self.delta_t_hours
         grid_energy_kWh = P_grid_kW * self.delta_t_hours
@@ -1001,6 +1005,8 @@ class IDCPriceEnv20D(gym.Env):
             "P_local_net_before_pv_kW": float(P_local_net_before_pv_kW),
             "P_bus_net_kW": float(P_bus_net_kW),
             "P_grid_kW": float(P_grid_kW),
+            "access_limit_kw": float(self.access_limit_kw),
+            "unserved_load_kW": float(unserved_load_kW),
             "grid_power_kW": float(grid_power_kW),
             "grid_power_limit_kW": float(self.grid_power_limit_kW),
             **self._server_group_info(),

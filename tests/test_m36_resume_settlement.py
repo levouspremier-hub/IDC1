@@ -14,7 +14,7 @@ def test_72h_continuity():
     env.reset(seed=0)
     ids_0 = {t.task_id for t in env.tasks}
     a = _neutral(env)
-    for t in range(72):
+    for _ in range(72):
         _, _, term, trunc, _ = env.step(a)
         if term or trunc:
             break

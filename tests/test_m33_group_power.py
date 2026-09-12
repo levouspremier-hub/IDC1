@@ -36,11 +36,22 @@ def test_loads_from_group_completion_uses_capacity(env):
 
 
 def test_energy_balance_holds(env):
-    """每步能量平衡：grid + pv_available + discharge = IDC + charge + curtail。"""
+    """每步能量平衡：grid + unserved + pv + wind + discharge = IDC + charge + curtail。"""
     a = np.full(env.action_dim, 0.5, dtype=np.float32)
     env.reset(seed=0)
     for _ in range(5):
         _, _, _, _, info = env.step(a)
-        lhs = info["P_grid_kW"] + info["pv_available_kW"] + info["bess_discharge_power_kW"]
-        rhs = info["P_IDC_kW"] + info["bess_charge_power_kW"] + info["pv_curtail_kW"]
+        lhs = (
+            info["P_grid_kW"]
+            + info["unserved_load_kW"]
+            + info["pv_available_kW"]
+            + info["wind_available_kW"]
+            + info["bess_discharge_power_kW"]
+        )
+        rhs = (
+            info["P_IDC_kW"]
+            + info["bess_charge_power_kW"]
+            + info["pv_curtail_kW"]
+            + info["wind_curtail_kW"]
+        )
         assert lhs == pytest.approx(rhs, rel=1e-6, abs=1e-6)
