@@ -21,6 +21,7 @@
 !pyproject.toml
 !.python-version
 !uv.lock
+!Makefile
 
 # Module package directories.
 !configs/
