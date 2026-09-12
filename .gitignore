@@ -60,6 +60,8 @@
 !contracts/*.py
 !checkpointing/
 !checkpointing/*.py
+!planning/
+!planning/*.py
 !scripts/
 !scripts/*.py
 !data/
