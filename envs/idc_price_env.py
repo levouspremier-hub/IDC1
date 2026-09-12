@@ -1075,6 +1075,9 @@ class IDCPriceEnv20D(gym.Env):
             **task_metrics,
         }
 
+        if terminated:
+            info["settlement"] = self._terminal_settlement()
+
         return obs, float(reward), terminated, truncated, info
 
     def _activate_arrivals(self, current_time: int) -> int:
@@ -1330,6 +1333,30 @@ class IDCPriceEnv20D(gym.Env):
         c_server = np.asarray(self.model.C_server, dtype=np.float64)
         loads = np.asarray(completed_work_by_group, dtype=np.float64) / np.maximum(c_server, 1e-6)
         return np.clip(loads, 0.0, self.max_task_load_per_server)
+
+    def _terminal_settlement(self) -> dict:
+        """M3.6 尾段结算：遗留工作、违约（deadline miss）、恢复库存成本。"""
+        soc_deviation = abs(self.bess_soc - self.bess_soc_target)
+        recovery_kwh = (
+            max(soc_deviation - self.bess_soc_final_tolerance, 0.0) * self.bess_capacity_kWh
+        )
+        return {
+            "leftover_work": float(self._compute_backlog_work()),
+            "deadline_miss_total": int(len(self.deadline_miss_task_ids)),
+            "soc_recovery_energy_kwh": float(recovery_kwh),
+        }
+
+    def state_dict(self) -> dict:
+        """M3.6 环境状态快照（任务、SOC、累计、RNG），用于中断恢复等价。"""
+        import copy
+
+        return copy.deepcopy(self.__dict__)
+
+    def load_state_dict(self, state: dict) -> None:
+        import copy
+
+        self.__dict__.clear()
+        self.__dict__.update(copy.deepcopy(state))
 
     def _actual_loads_from_completed_work(
         self,
