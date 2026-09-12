@@ -104,6 +104,7 @@ class IDCPriceEnv20D(gym.Env):
         forecast_seed=None,
         task_forecast_mode: str = "noisy",
         forecast_error_level: float = 0.20,
+        forecast_cutoff: int = 4,
         task_forecast_seed_offset: int = 300000,
         enable_server_group_model: bool = False,
         server_group_size: int = 1,
@@ -130,6 +131,7 @@ class IDCPriceEnv20D(gym.Env):
             validate_task_forecast_config(task_forecast_mode, forecast_error_level)
         )
         self.task_forecast_seed_offset = int(task_forecast_seed_offset)
+        self.forecast_cutoff = int(forecast_cutoff)
         if forecast_seed is None:
             forecast_seed = (
                 None
@@ -1750,13 +1752,17 @@ class IDCPriceEnv20D(gym.Env):
         """
         eps = 1e-6
         hours = np.arange(self.horizon, dtype=np.float64)
+        # 可见窗口掩码：仅暴露 [0, t + forecast_cutoff]（M3.10 避免未来真值泄漏）
+        t = int(self.current_step)
+        visible = np.zeros(self.horizon, dtype=np.float64)
+        visible[: min(t + self.forecast_cutoff + 1, self.horizon)] = 1.0
 
-        price_24h = np.asarray(self.price_t, dtype=np.float64) / max(self.price_ref, eps)
-        T_amb_24h = np.asarray(self.T_amb, dtype=np.float64) / 40.0
+        price_24h = np.asarray(self.price_t, dtype=np.float64) / max(self.price_ref, eps) * visible
+        T_amb_24h = np.asarray(self.T_amb, dtype=np.float64) / 40.0 * visible
         lambda_24h = np.asarray(
             self.task_arrival_forecast, dtype=np.float64
         ) / max(self.lambda_ref, eps)
-        pv_24h = np.asarray(self.pv_t, dtype=np.float64) / max(self.pv_ref_kw, eps)
+        pv_24h = np.asarray(self.pv_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
         time_sin_24h = np.sin(2 * np.pi * hours / max(self.horizon, 1))
         time_cos_24h = np.cos(2 * np.pi * hours / max(self.horizon, 1))
 
