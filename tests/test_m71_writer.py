@@ -14,7 +14,9 @@ def _metrics() -> pd.DataFrame:
 
 
 def test_write_run_creates_all_files(tmp_path):
-    run_dir = write_run("r1", config={"a": 1}, metrics=_metrics(), report={"x": 1}, base_dir=str(tmp_path))
+    run_dir = write_run(
+        "r1", config={"a": 1}, metrics=_metrics(), report={"x": 1}, base_dir=str(tmp_path)
+    )
     assert (run_dir / "config.yaml").exists()
     assert (run_dir / "metrics.parquet").exists()
     assert (run_dir / "report.json").exists()
