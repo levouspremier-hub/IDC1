@@ -1078,6 +1078,7 @@ class IDCPriceEnv20D(gym.Env):
             "idc_energy_per_task": idc_energy_per_task,
             "carbon_per_task": carbon_per_task,
 
+            "task_classification": self._compute_task_classification(t),
             **task_metrics,
         }
 
@@ -1351,6 +1352,29 @@ class IDCPriceEnv20D(gym.Env):
             "deadline_miss_total": int(len(self.deadline_miss_task_ids)),
             "soc_recovery_energy_kwh": float(recovery_kwh),
         }
+
+    def _compute_task_classification(self, current_time: int) -> dict:
+        """M3.8 任务四分类：未到期积压 / 逾期积压 / 逾期完成 / 按时完成（互斥完备）。"""
+        counts = {
+            "not_due_backlog": 0,
+            "overdue_backlog": 0,
+            "overdue_completed": 0,
+            "on_time_completed": 0,
+        }
+        for task in self.tasks:
+            if task.status in ("not_arrived", "failed"):
+                continue
+            if task.status == "finished" or task.remaining_work <= 1e-6:
+                finish = int(task.finish_time) if task.finish_time is not None else int(current_time)
+                if finish > int(task.latest_finish_time):
+                    counts["overdue_completed"] += 1
+                else:
+                    counts["on_time_completed"] += 1
+            elif current_time + 1 > int(task.latest_finish_time):
+                counts["overdue_backlog"] += 1
+            else:
+                counts["not_due_backlog"] += 1
+        return counts
 
     def state_dict(self) -> dict:
         """M3.6 环境状态快照（任务、SOC、累计、RNG），用于中断恢复等价。"""
