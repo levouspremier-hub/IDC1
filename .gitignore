@@ -18,6 +18,9 @@
 !export_task_timeline_sin.py
 !experiment_cases.py
 !environment.yml
+!pyproject.toml
+!.python-version
+!uv.lock
 
 # Module package directories.
 !configs/
