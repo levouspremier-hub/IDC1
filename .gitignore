@@ -58,6 +58,8 @@
 !scenario/*.py
 !contracts/
 !contracts/*.py
+!checkpointing/
+!checkpointing/*.py
 !scripts/
 !scripts/*.py
 !data/
