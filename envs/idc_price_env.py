@@ -331,6 +331,9 @@ class IDCPriceEnv20D(gym.Env):
         self.total_pv_available_kWh = 0.0
         self.total_pv_used_kWh = 0.0
         self.total_pv_curtail_kWh = 0.0
+        self.total_wind_available_kWh = 0.0
+        self.total_wind_used_kWh = 0.0
+        self.total_wind_curtail_kWh = 0.0
         self.deadline_miss_task_ids = set()
 
         # 10. 任务启停统计指标
@@ -482,6 +485,9 @@ class IDCPriceEnv20D(gym.Env):
         self.total_pv_available_kWh = 0.0
         self.total_pv_used_kWh = 0.0
         self.total_pv_curtail_kWh = 0.0
+        self.total_wind_available_kWh = 0.0
+        self.total_wind_used_kWh = 0.0
+        self.total_wind_curtail_kWh = 0.0
         self.deadline_miss_task_ids = set()
         self.total_pause_count = 0
         self.total_resume_count = 0
@@ -687,7 +693,12 @@ class IDCPriceEnv20D(gym.Env):
         pv_available_kW = max(pv_now, 0.0)
         pv_used_kW = min(pv_available_kW, max(P_local_net_before_pv_kW, 0.0))
         pv_curtail_kW = max(pv_available_kW - pv_used_kW, 0.0)
-        P_bus_net_kW = P_local_net_before_pv_kW - pv_used_kW
+        # 风电同样抵消本地净负荷（M3.5），与 PV 一样无反送电
+        P_after_pv_kW = P_local_net_before_pv_kW - pv_used_kW
+        wind_available_kW = max(wt_now, 0.0)
+        wind_used_kW = min(wind_available_kW, max(P_after_pv_kW, 0.0))
+        wind_curtail_kW = max(wind_available_kW - wind_used_kW, 0.0)
+        P_bus_net_kW = P_after_pv_kW - wind_used_kW
         P_grid_kW = max(P_bus_net_kW, 0.0)
 
         idc_energy_kWh = P_IDC_kW * self.delta_t_hours
@@ -695,6 +706,9 @@ class IDCPriceEnv20D(gym.Env):
         pv_available_kWh = pv_available_kW * self.delta_t_hours
         pv_used_kWh = pv_used_kW * self.delta_t_hours
         pv_curtail_kWh = pv_curtail_kW * self.delta_t_hours
+        wind_available_kWh = wind_available_kW * self.delta_t_hours
+        wind_used_kWh = wind_used_kW * self.delta_t_hours
+        wind_curtail_kWh = wind_curtail_kW * self.delta_t_hours
         # Backward-compatible alias: energy_kWh now means grid-purchased energy for cost/carbon.
         energy_kWh = grid_energy_kWh
         cost_t = grid_energy_kWh * price_now
@@ -719,6 +733,9 @@ class IDCPriceEnv20D(gym.Env):
         self.total_pv_available_kWh += pv_available_kWh
         self.total_pv_used_kWh += pv_used_kWh
         self.total_pv_curtail_kWh += pv_curtail_kWh
+        self.total_wind_available_kWh += wind_available_kWh
+        self.total_wind_used_kWh += wind_used_kWh
+        self.total_wind_curtail_kWh += wind_curtail_kWh
 
         # 11. reward：任务类综合奖励
         # 奖励项：完成工作量、完整完成任务数、高优先级任务完成；
@@ -869,8 +886,13 @@ class IDCPriceEnv20D(gym.Env):
             if self.total_pv_available_kWh > 0.0
             else 0.0
         )
+        wind_utilization_rate = (
+            self.total_wind_used_kWh / max(self.total_wind_available_kWh, 1e-9)
+            if self.total_wind_available_kWh > 0.0
+            else 0.0
+        )
         renewable_share = (
-            self.total_pv_used_kWh / max(self.total_idc_energy_kWh, 1e-9)
+            (self.total_pv_used_kWh + self.total_wind_used_kWh) / max(self.total_idc_energy_kWh, 1e-9)
             if self.total_idc_energy_kWh > 0.0
             else 0.0
         )
@@ -895,6 +917,9 @@ class IDCPriceEnv20D(gym.Env):
             "pv_available_kW": float(pv_available_kW),
             "pv_used_kW": float(pv_used_kW),
             "pv_curtail_kW": float(pv_curtail_kW),
+            "wind_available_kW": float(wind_available_kW),
+            "wind_used_kW": float(wind_used_kW),
+            "wind_curtail_kW": float(wind_curtail_kW),
             "allow_pv_export": bool(self.allow_pv_export),
             "lambda_t": lambda_now,
             **self._task_forecast_info(include_profiles=terminated),
@@ -1032,6 +1057,9 @@ class IDCPriceEnv20D(gym.Env):
             "total_pv_available_kWh": float(self.total_pv_available_kWh),
             "total_pv_used_kWh": float(self.total_pv_used_kWh),
             "total_pv_curtail_kWh": float(self.total_pv_curtail_kWh),
+            "total_wind_available_kWh": float(self.total_wind_available_kWh),
+            "total_wind_used_kWh": float(self.total_wind_used_kWh),
+            "total_wind_curtail_kWh": float(self.total_wind_curtail_kWh),
             "pv_utilization_rate": float(pv_utilization_rate),
             "renewable_share": float(renewable_share),
             "total_cost": self.total_cost,

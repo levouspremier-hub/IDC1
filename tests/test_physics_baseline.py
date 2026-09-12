@@ -53,14 +53,12 @@ def test_baseline_planned_capacity_is_scalar(env):
     assert np.asarray(info["planned_capacity"]).ndim == 0
 
 
-@pytest.mark.xfail(strict=True, reason="M3.1: planned_capacity 应为长度 20 向量")
-def test_future_planned_capacity_is_vector(env):
+def test_planned_capacity_vec_is_vector(env):
     _, _, _, _, info = env.step(_neutral(env))
-    assert np.asarray(info["planned_capacity"]).shape == (20,)
+    assert np.asarray(info["planned_capacity_vec"]).shape == (20,)
 
 
-@pytest.mark.xfail(strict=True, reason="M3.5: 风电进入能量平衡")
-def test_future_wind_enters_energy_balance(env):
+def test_wind_enters_energy_balance(env):
     _, _, _, _, info = env.step(_neutral(env))
     assert "wind_used_kW" in info
 
