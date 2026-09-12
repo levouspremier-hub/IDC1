@@ -62,6 +62,8 @@
 !checkpointing/*.py
 !planning/
 !planning/*.py
+!safe_rl_v2/
+!safe_rl_v2/*.py
 !scripts/
 !scripts/*.py
 !data/
