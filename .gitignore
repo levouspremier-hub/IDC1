@@ -19,6 +19,21 @@
 !experiment_cases.py
 !environment.yml
 
+# Python environment definition (uv).
+!pyproject.toml
+!uv.lock
+!.python-version
+
+# Engineering shell (M0).
+!Makefile
+!AGENTS.md
+!contracts/
+!contracts/*.py
+!planning/
+!planning/*.py
+!tests/
+!tests/*.py
+
 # Module package directories.
 !configs/
 !configs/*.py
@@ -68,6 +83,7 @@
 
 # Generated outputs and large artifacts.
 report_outputs/
+runs/
 __pycache__/
 *.pyc
 *.pkl
@@ -96,3 +112,6 @@ marl/**/*.pyc
 # Track multi-agent documentation
 !docs/MULTI_AGENT_ENV_INTERFACE_SPEC.md
 !docs/MULTI_AGENT_ENV_IMPLEMENTATION_REPORT.md
+!docs/EXECUTION_PLAN.md
+!docs/AUDIT_EXECUTION_CHAIN.md
+!docs/DATA_SOURCES.md
