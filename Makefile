@@ -27,7 +27,7 @@ contract:
 
 probe:
 	@test -f scripts/probe_physics.py || { echo "模块未完成：scripts/probe_physics.py 不存在（M3.0 交付）"; exit 1; }
-	@uv run python scripts/probe_physics.py
+	@uv run python -m scripts.probe_physics
 
 smoke:
 	@test -f scripts/smoke_main_chain.py || { echo "模块未完成：scripts/smoke_main_chain.py 不存在（M4 交付）"; exit 1; }

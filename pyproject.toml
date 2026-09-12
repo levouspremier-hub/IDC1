@@ -43,6 +43,10 @@ select = ["E", "F", "W", "I", "UP", "B"]
 python_version = "3.12"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["envs", "envs.*", "idc_model", "idc_model.*"]
+follow_imports = "skip"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
