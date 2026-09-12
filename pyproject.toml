@@ -1,0 +1,25 @@
+[project]
+name = "idc-energy-scheduling"
+version = "0.1.0"
+description = "Data-center energy co-scheduling: safe PPO + joint feasibility corrector (M0-M9 rebuild)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.5.1",
+    "numpy>=2.2.6",
+    "pandas>=2.3.3",
+    "scipy>=1.15.3",
+    "gymnasium>=1.2.3",
+    "stable-baselines3>=2.8.0",
+    "pandapower>=3.4.0",
+    "pydantic>=2.13.4",
+    "matplotlib>=3.10.9",
+    "networkx>=3.4.2",
+    "sympy>=1.13.1",
+    "tensorboard>=2.20.0",
+    "pyyaml>=6.0.3",
+    "tqdm>=4.67.3",
+]
+
+[tool.uv]
+# Non-package application: install dependencies only, never build/install the repo itself.
+package = false
