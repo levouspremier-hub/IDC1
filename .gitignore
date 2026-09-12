@@ -59,6 +59,8 @@
 !data/
 !data/grid_node_sensitivity/
 !data/grid_node_sensitivity/.gitkeep
+!data/raw/
+!data/raw/*.md
 !report_tools/
 !report_tools/*.py
 !legacy/
