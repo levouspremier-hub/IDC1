@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 
 MAIN_CHAIN_DIRS := scenario contracts checkpointing planning safe_rl_v2 tests
-MAIN_CHAIN_FILES := idc_model/allocation.py safe_rl/corrector.py
+MAIN_CHAIN_FILES := idc_model/allocation.py safe_rl/corrector.py safe_rl/corrector_wrapper.py
 MAIN_PY := $(shell find $(MAIN_CHAIN_DIRS) -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null) $(foreach f,$(MAIN_CHAIN_FILES),$(wildcard $(f)))
 
 .PHONY: check test contract probe smoke train eval figures report
