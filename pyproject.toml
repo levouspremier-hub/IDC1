@@ -20,6 +20,34 @@ dependencies = [
     "tqdm>=4.67.3",
 ]
 
+[dependency-groups]
+dev = [
+    "ruff>=0.16",
+    "mypy>=1.15",
+    "pytest>=8.0",
+]
+
 [tool.uv]
 # Non-package application: install dependencies only, never build/install the repo itself.
 package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["marl", "grid_model", "legacy", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "leakage: future-information leakage regression",
+    "resume: interruption-recovery consistency",
+    "slow: slow tests excluded by make check",
+]
