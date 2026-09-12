@@ -243,13 +243,12 @@ class IDCPriceEnv20D(gym.Env):
         #    action[N+2]：BESS 动作；step() 内部将 [0, 1] 线性映射到 [-1, 1]。
         #    默认 N=20，因此 action_dim=N+3=23。
         self.server_action_dim = self.model.N
-        self.extra_action_dim = 3
+        self.extra_action_dim = 1
         self.action_dim = self.server_action_dim + self.extra_action_dim
-        self.action_space = spaces.Box(
-            low=np.zeros(self.action_dim, dtype=np.float32),
-            high=np.ones(self.action_dim, dtype=np.float32),
-            dtype=np.float32,
-        )
+        # 21 维：20 组计算（[0,1]）+ 1 有符号储能（[-1,1]）
+        low = np.concatenate([np.zeros(self.server_action_dim, dtype=np.float32), np.array([-1.0], dtype=np.float32)])
+        high = np.ones(self.action_dim, dtype=np.float32)
+        self.action_space = spaces.Box(low=low, high=high, dtype=np.float32)
 
         # 6. 底层 observation 的维度随 N 和 horizon 变化：
         #    current_obs_dim = 6 个全局特征 + 10 个任务池特征 + 6 组 server-group 特征 × N；
@@ -556,19 +555,17 @@ class IDCPriceEnv20D(gym.Env):
         """
         t = self.current_step
 
-        # 1. 解析 N+3 维动作；默认 N=20 时为 23 维。
+        # 1. 解析 N+1 维动作；默认 N=20 时为 21 维。
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         if action.shape[0] != self.action_dim:
             raise ValueError(
                 f"动作维度错误：期望 {self.action_dim} 维，实际 {action.shape[0]} 维。"
             )
-        action = np.clip(action, 0.0, 1.0)
-
-        server_action = action[:self.model.N]
-        urgent_preference = float(action[self.model.N])
-        continuity_preference = float(action[self.model.N + 1])
-        bess_action = float(action[self.model.N + 2])
-        bess_raw_action = 2.0 * bess_action - 1.0
+        server_action = np.clip(action[:self.model.N], 0.0, 1.0)
+        bess_raw_action = float(np.clip(action[self.model.N], -1.0, 1.0))
+        # urgent/continuity 动作维度已移除（M3.9），由任务自身 priority/deadline 约束替代
+        urgent_preference = 0.0
+        continuity_preference = 0.0
 
         # 2. PPO 计划任务负载：仅用于计算计划处理能力，不直接用于功耗
         planned_task_loads = server_action * self.max_task_load_per_server

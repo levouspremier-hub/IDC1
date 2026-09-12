@@ -17,10 +17,6 @@ def _neutral(env: IDCPriceEnv20D) -> np.ndarray:
     return np.full(env.action_dim, 0.5, dtype=np.float32)
 
 
-def test_baseline_action_dim_is_23(env):
-    assert env.action_dim == 23
-
-
 def test_baseline_obs_dim_is_280(env):
     assert env.obs_dim == 280
 
@@ -29,8 +25,7 @@ def test_baseline_num_groups_is_20(env):
     assert env.model.N == 20
 
 
-@pytest.mark.xfail(strict=True, reason="M3.9: 动作空间收敛到 21 维（20 compute + 1 storage）")
-def test_future_action_dim_is_21(env):
+def test_action_dim_is_21(env):
     assert env.action_dim == 21
 
 
