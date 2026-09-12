@@ -96,6 +96,7 @@
 !docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md
 !docs/BASELINE_AUDIT.md
 !docs/AUDIT_EXECUTION_CHAIN.md
+!docs/GRID_IEEE14_AUDIT.md
 !docs/task_cards/
 !docs/task_cards/*.md
 !.gitignore
