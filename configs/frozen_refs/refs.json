@@ -1,0 +1,19 @@
+{
+  "schema_version": "frozen-refs-v1",
+  "source": "declared physical scales (M1.2 training data not yet frozen)",
+  "training_range": null,
+  "data_hash": null,
+  "references": {
+    "price_ref": 1.5,
+    "lambda_ref": 2000.0,
+    "queue_ref": 6000.0,
+    "queue_capacity_ref": 6000.0,
+    "cost_ref": 60.0,
+    "carbon_ref": 15.0,
+    "peak_power_threshold_kW": 18.0,
+    "peak_power_ref_kW": 10.0,
+    "grid_power_limit_kW": 18.0,
+    "sla_penalty_ref": 50.0,
+    "planned_load_reserve_alpha": 0.4
+  }
+}
