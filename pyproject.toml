@@ -25,6 +25,8 @@ dev = [
     "ruff>=0.16",
     "mypy>=1.15",
     "pytest>=8.0",
+    "duckdb>=1.0",
+    "pyarrow>=18.0",
 ]
 
 [tool.uv]

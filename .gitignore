@@ -68,6 +68,8 @@
 !safe_rl_v2/*.py
 !evaluation/
 !evaluation/*.py
+!runs/writer.py
+!runs/__init__.py
 !scripts/
 !scripts/*.py
 !data/
