@@ -46,7 +46,7 @@ python_version = "3.12"
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["envs", "envs.*"]
+module = ["envs", "envs.*", "grid_model", "grid_model.*"]
 follow_imports = "skip"
 
 [tool.pytest.ini_options]
