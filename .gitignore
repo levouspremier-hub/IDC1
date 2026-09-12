@@ -54,6 +54,8 @@
 !safe_rl/*.py
 !tests/
 !tests/*.py
+!scenario/
+!scenario/*.py
 !scripts/
 !scripts/*.py
 !data/
