@@ -566,8 +566,9 @@ class IDCPriceEnv20D(gym.Env):
         planned_task_loads = server_action * self.max_task_load_per_server
         planned_total_loads = np.clip(self.base_load + planned_task_loads, 0.0, 1.0)
 
-        # 按每台服务器算力计算计划处理能力
-        planned_capacity = float(np.sum(planned_task_loads * self.model.C_server))
+        # 按每台服务器算力计算逐组计划处理能力（M3.1：不再 np.sum 成标量）
+        planned_capacity_vec = planned_task_loads * np.asarray(self.model.C_server, dtype=np.float64)
+        planned_capacity = float(planned_capacity_vec.sum())
 
         # 3. 当前小时外部输入
         T_amb_t = float(self.T_amb[t])
@@ -583,6 +584,7 @@ class IDCPriceEnv20D(gym.Env):
         # 5. 根据动作中的任务偏好执行任务，并记录任务暂停/恢复事件
         (
             completed_work,
+            completed_work_by_group,
             newly_finished_count,
             newly_finished_priority_sum,
             new_deadline_miss_count,
@@ -590,7 +592,7 @@ class IDCPriceEnv20D(gym.Env):
             resume_count_this_step,
             non_interruptible_interruption_this_step,
         ) = self._execute_tasks_action_guided(
-            available_capacity=planned_capacity,
+            planned_capacity_vec=planned_capacity_vec,
             current_time=t,
             urgent_preference=urgent_preference,
             continuity_preference=continuity_preference,
@@ -915,6 +917,8 @@ class IDCPriceEnv20D(gym.Env):
 
             "planned_capacity": planned_capacity,
             "raw_capacity": planned_capacity,  # 兼容旧字段名
+            "planned_capacity_vec": planned_capacity_vec,
+            "completed_work_by_group": completed_work_by_group,
             "completed_work": completed_work,
             "unused_capacity": unused_capacity,
             "Q": Q_next,
@@ -1123,7 +1127,7 @@ class IDCPriceEnv20D(gym.Env):
 
     def _execute_tasks_action_guided(
         self,
-        available_capacity: float,
+        planned_capacity_vec: np.ndarray,
         current_time: int,
         urgent_preference: float,
         continuity_preference: float,
@@ -1143,7 +1147,8 @@ class IDCPriceEnv20D(gym.Env):
         - continuity_preference 控制对已启动未完成任务的连续执行偏向；
         - 当两个偏好都很低时，排序退化为 FIFO。
         """
-        remaining_capacity = float(max(available_capacity, 0.0))
+        remaining_capacity = np.maximum(np.asarray(planned_capacity_vec, dtype=np.float64), 0.0)
+        completed_by_group = np.zeros(self.model.N, dtype=np.float64)
         completed_this_hour = 0.0
         newly_finished_count = 0
         newly_finished_priority_sum = 0.0
@@ -1177,7 +1182,8 @@ class IDCPriceEnv20D(gym.Env):
         ordered_tasks = [task for _, task in scored_tasks]
 
         for task in ordered_tasks:
-            if remaining_capacity <= 1e-6:
+            total_available = float(remaining_capacity.sum())
+            if total_available <= 1e-6:
                 break
 
             before_status = task.status
@@ -1190,7 +1196,7 @@ class IDCPriceEnv20D(gym.Env):
                 task.is_paused = False
 
             actual_work = task.execute(
-                work_amount=remaining_capacity,
+                work_amount=total_available,
                 current_time=current_time,
             )
 
@@ -1198,7 +1204,18 @@ class IDCPriceEnv20D(gym.Env):
                 executed_task_ids.add(task.task_id)
                 task.last_executed_time = int(current_time)
 
-            remaining_capacity -= actual_work
+            # 将 actual_work 按组序贪心分配到各组剩余容量（逐组记账）
+            remaining_to_allocate = float(actual_work)
+            for g in range(self.model.N):
+                if remaining_to_allocate <= 1e-9:
+                    break
+                if remaining_capacity[g] <= 1e-6:
+                    continue
+                take = min(remaining_to_allocate, float(remaining_capacity[g]))
+                remaining_capacity[g] -= take
+                completed_by_group[g] += take
+                remaining_to_allocate -= take
+
             completed_this_hour += actual_work
 
             if before_status != "finished" and task.status == "finished":
@@ -1215,6 +1232,7 @@ class IDCPriceEnv20D(gym.Env):
 
         return (
             float(completed_this_hour),
+            completed_by_group,
             int(newly_finished_count),
             float(newly_finished_priority_sum),
             int(new_deadline_miss_count),
