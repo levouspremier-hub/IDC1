@@ -106,8 +106,6 @@ class TaskAllocation(ContractBase):
 
     @model_validator(mode="after")
     def _validate_matrix(self) -> TaskAllocation:
-        if not self.matrix:
-            raise ValueError("matrix 不能为空")
         n_group = len(self.group_ids)
         if len(self.matrix) != len(self.task_ids):
             raise ValueError("matrix 行数 != len(task_ids)")
