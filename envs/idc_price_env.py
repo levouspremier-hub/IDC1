@@ -600,12 +600,8 @@ class IDCPriceEnv20D(gym.Env):
 
         unused_capacity = max(planned_capacity - completed_work, 0.0)
 
-        # 6. 按实际完成任务量反推实际任务负载
-        actual_task_loads = self._actual_loads_from_completed_work(
-            planned_task_loads=planned_task_loads,
-            planned_capacity=planned_capacity,
-            completed_work=completed_work,
-        )
+        # 6. 每组实际负载由完成工作/组能力导出（M3.3 废除比例回分与 α）
+        actual_task_loads = self._loads_from_group_completion(completed_work_by_group)
         actual_total_loads = np.clip(self.base_load + actual_task_loads, 0.0, 1.0)
 
         # 7. 用实际负载计算当前小时功耗
@@ -1300,6 +1296,12 @@ class IDCPriceEnv20D(gym.Env):
                     self.deadline_miss_task_ids.add(task.task_id)
                     new_count += 1
         return new_count
+
+    def _loads_from_group_completion(self, completed_work_by_group: np.ndarray) -> np.ndarray:
+        """每组实际负载 = 完成工作 / 组能力（M3.3 废除比例回分与 α）。"""
+        c_server = np.asarray(self.model.C_server, dtype=np.float64)
+        loads = np.asarray(completed_work_by_group, dtype=np.float64) / np.maximum(c_server, 1e-6)
+        return np.clip(loads, 0.0, self.max_task_load_per_server)
 
     def _actual_loads_from_completed_work(
         self,
