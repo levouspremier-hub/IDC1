@@ -12,6 +12,17 @@ from idc_model.task_forecast import (
 )
 
 
+def visible_window_slice(t: int, forecast_cutoff: int, horizon: int) -> tuple[int, int]:
+    """统一定义（M3.10a）：时刻 t 的可见预测区间为 [t, t + forecast_cutoff)。
+
+    `forecast_cutoff` = 当前时刻起、含当前时刻在内的可见预测点数；
+    首个不可见真值下标 = t + forecast_cutoff。区间按 horizon 裁剪。
+    """
+    start = max(int(t), 0)
+    end = min(int(t) + int(forecast_cutoff), int(horizon))
+    return start, end
+
+
 def decompose_supply(base_demand_kW: float, total_demand_kW: float, budget_kW: float) -> dict:
     """独立供应分解（M3.7c）：基础负载优先供给，剩余预算给任务，两断供独立计算。"""
     task_incremental = max(total_demand_kW - base_demand_kW, 0.0)
@@ -1863,16 +1874,17 @@ class IDCPriceEnv20D(gym.Env):
         """
         eps = 1e-6
         hours = np.arange(self.horizon, dtype=np.float64)
-        # 可见窗口掩码：仅暴露 [0, t + forecast_cutoff]（M3.10 避免未来真值泄漏）
+        # 可见窗口掩码（M3.10a 统一定义）：仅暴露 [t, t + forecast_cutoff)。
         t = int(self.current_step)
+        start, end = visible_window_slice(t, self.forecast_cutoff, self.horizon)
         visible = np.zeros(self.horizon, dtype=np.float64)
-        visible[: min(t + self.forecast_cutoff + 1, self.horizon)] = 1.0
+        visible[start:end] = 1.0
 
         price_24h = np.asarray(self.price_t, dtype=np.float64) / max(self.price_ref, eps) * visible
         T_amb_24h = np.asarray(self.T_amb, dtype=np.float64) / 40.0 * visible
         lambda_24h = np.asarray(
             self.task_arrival_forecast, dtype=np.float64
-        ) / max(self.lambda_ref, eps)
+        ) / max(self.lambda_ref, eps) * visible
         pv_24h = np.asarray(self.pv_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
         time_sin_24h = np.sin(2 * np.pi * hours / max(self.horizon, 1))
         time_cos_24h = np.cos(2 * np.pi * hours / max(self.horizon, 1))

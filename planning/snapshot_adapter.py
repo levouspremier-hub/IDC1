@@ -1,7 +1,8 @@
 """M4.1 从环境构建受限 SystemSnapshot。
 
-红线：adapter 不访问 policy、value 或未来真值；可见预测仅取 [t, t+forecast_cutoff) 窗口，
-长度 == forecast_cutoff（与 contracts.validators 一致）；缺失预测段（系统负荷）用声明边界假设。
+红线：adapter 不访问 policy、value 或未来真值；可见预测仅取 [t, t+forecast_cutoff) 窗口
+（M3.10a 与环境观测共用 `visible_window_slice` 同一定义），长度 == forecast_cutoff
+（与 contracts.validators 一致）；缺失预测段（系统负荷）用声明边界假设。
 """
 
 from __future__ import annotations
@@ -9,11 +10,14 @@ from __future__ import annotations
 import numpy as np
 
 from contracts.models import ScenarioBundle, SystemSnapshot, TaskState
+from envs.idc_price_env import visible_window_slice
 
 
 def _visible_window(series: np.ndarray, t: int, cutoff: int, horizon: int) -> list[float]:
+    """固定长度 cutoff 的可见窗口；horizon 尾部缺失部分显式零填充。"""
+    start, end = visible_window_slice(t, cutoff, horizon)
     window = np.zeros(cutoff, dtype=np.float64)
-    seg = np.asarray(series, dtype=np.float64)[t : min(t + cutoff, horizon)]
+    seg = np.asarray(series, dtype=np.float64)[start:end]
     window[: len(seg)] = seg
     return window.tolist()
 
