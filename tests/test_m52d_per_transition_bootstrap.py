@@ -196,12 +196,13 @@ def test_train_forwards_both_batches(monkeypatch):
 
 def test_second_episode_observation_does_not_pollute_first_episode_bootstrap(monkeypatch):
     """改动 t=1 的 observation，t=0 的截断 bootstrap 与其 target 必须不变。"""
-    policy = make_policy()
-    snapshot = copy.deepcopy(policy)
 
-    def run(obs_1: float) -> tuple[dict, dict, dict]:
+    def run(obs_1: float) -> dict:
         with monkeypatch.context() as ctx:
             install_fake_collector(ctx, two_episode_transitions(obs_1=obs_1))
+            # 每次都用**全新且同权重**的策略：dry_run_update 会 optimizer.step()，
+            # 复用同一实例会让第二次比较落在不同的 critic 上。
+            policy = make_policy(seed=0)
             lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
             optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
             return capture_target_call(ctx, policy, lagrangian, optimizer)
@@ -219,15 +220,17 @@ def test_second_episode_observation_does_not_pollute_first_episode_bootstrap(mon
             base["_call"]["args"][3][head][1] != changed["_call"]["args"][3][head][1]
         ), f"{head}: t=1 的 current value 应随其 observation 改变"
 
-    # 端到端：t=0 的 target 不变（截断中断递推），t=1 的 target 改变
+    # 端到端：t=0 的 target **逐元素不变**（截断切断递推，下一 episode 无法污染）
     for head in HEADS:
         np.testing.assert_allclose(
             base["critic_targets"][head][0], changed["critic_targets"][head][0]
         )
-        assert not np.allclose(
-            base["critic_targets"][head][1], changed["critic_targets"][head][1]
-        )
-    assert critic_values(snapshot, OBS_1) != critic_values(snapshot, 0.55)
+
+    # 同时确认 obs_1 确实流入了链路：t=1 的 critic 估计改变，critic loss 随之改变。
+    # 注意 target[t] = advantage + value 中 current_values[t] 会相消，
+    # 故**不能**用 target[1] 的变化作为「obs_1 生效」的证据。
+    assert base["critic_loss_by_head"] != changed["critic_loss_by_head"]
+    assert critic_values(make_policy(seed=0), OBS_1) != critic_values(make_policy(seed=0), 0.55)
 
 
 def test_truncated_step_target_uses_its_own_next_value_end_to_end(monkeypatch):
@@ -258,7 +261,6 @@ def test_truncated_step_target_uses_its_own_next_value_end_to_end(monkeypatch):
 
 def test_exec_action_never_enters_targets(monkeypatch):
     """把 exec_action 改成荒谬值，三套 target 必须逐元素不变。"""
-    policy = make_policy()
 
     def run(exec_value: float) -> dict:
         transitions = two_episode_transitions()
@@ -266,6 +268,8 @@ def test_exec_action_never_enters_targets(monkeypatch):
             t.exec_action = np.full(ACTION_DIM, exec_value, dtype=np.float32)
         with monkeypatch.context() as ctx:
             install_fake_collector(ctx, transitions)
+            # 每次全新同权重策略（dry_run_update 会更新参数）
+            policy = make_policy(seed=0)
             lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
             optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
             return run_dry(policy, lagrangian, optimizer)
