@@ -200,14 +200,13 @@ def test_deadline_shortfall_still_executable():
 
 # --- 5. 旧 solver 不再被 corrector 调用 ---
 
-def test_corrector_does_not_call_legacy_solver(monkeypatch):
-    import planning.solver as legacy_solver
+def test_corrector_does_not_use_legacy_solver():
+    """M4.4b 后旧模块已删除；守卫改为「模块不存在 + corrector 源码不引用」。"""
+    import importlib
 
-    def _boom(*a, **k):
-        raise AssertionError("corrector 仍在调用 legacy planning.solver.solve")
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("planning.solver")
 
-    monkeypatch.setattr(legacy_solver, "solve", _boom)
-    monkeypatch.setattr(corrector_mod, "solve", _boom, raising=False)
     snap = build_snapshot(_env(access_limit_kw=1000.0))
     c = correct(snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=5.0)
     assert c.failure == FailureClass.NONE

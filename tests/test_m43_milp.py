@@ -1,9 +1,7 @@
-"""M4.3 测试：MILP 二元互斥、LP 松弛、窗口、容量/剩余约束。"""
+"""M4.3 窗口工具测试（旧单步 MILP 用例已于 M4.4b 随该路径退役）。"""
 
-import pytest
 
 from contracts.models import PlanningExogenousForecast, ScenarioBundle, SystemSnapshot, TaskState
-from planning.solver import solve
 from planning.window import compute_window
 
 
@@ -75,38 +73,6 @@ def _snapshot() -> SystemSnapshot:
         tasks=tasks,
         forecast=_forecast(),
     )
-
-
-def test_mip_solves():
-    r = solve(_snapshot())
-    assert r.success
-    assert r.allocation.shape == (2, 2)
-
-
-def test_mip_mutual_exclusion():
-    r = solve(_snapshot())
-    assert r.charge * r.discharge == pytest.approx(0.0, abs=1e-6)
-    assert abs(r.z - round(r.z)) < 1e-6  # z 为二元
-
-
-def test_group_capacity_respected():
-    snap = _snapshot()
-    r = solve(snap)
-    for g in range(2):
-        col_sum = sum(r.allocation[i][g] for i in range(2))
-        assert col_sum <= snap.group_work_capacity[g] + 1e-6
-
-
-def test_task_remaining_respected():
-    snap = _snapshot()
-    r = solve(snap)
-    for i, task in enumerate(snap.tasks):
-        assert sum(r.allocation[i]) <= task.remaining_work + 1e-6
-
-
-def test_lp_relaxation_runs():
-    r = solve(_snapshot(), allow_lp_relaxation=True)
-    assert r.success
 
 
 def test_window_extends_to_latest_deadline():
