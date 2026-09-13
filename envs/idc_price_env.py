@@ -819,6 +819,10 @@ class IDCPriceEnv20D(gym.Env):
         self.total_wind_available_kWh += wind_available_kWh
         self.total_wind_used_kWh += wind_used_kWh
         self.total_wind_curtail_kWh += wind_curtail_kWh
+        # 每步统一更新客观目标账务（M3.6a）：非终止步罚项为 0，终止步由结算写入。
+        self.total_objective_cost = (
+            self.total_cost + self.total_bess_degradation_cost + self.terminal_settlement_penalty
+        )
 
         # 11. reward：任务类综合奖励
         # 奖励项：完成工作量、完整完成任务数、高优先级任务完成；
