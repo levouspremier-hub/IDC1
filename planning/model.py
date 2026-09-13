@@ -13,9 +13,9 @@
   该结果**不得进入执行路径**，互斥留待 M4.3b/M4.5 的 MIP；
 - 不做窗口外真值读取（规划输入由 `planning_forecast` 提供，窗口外为声明假设）。
 
-注：文件末尾保留**未接线遗留块**（旧单步 `build_milp`），供 `planning/solver.py` /
-`planning/corrector.py` 继续使用。**H 步 MIP 已于 M4.4a 接线**（corrector 使用新入口），
-遗留块只待 **M4.4b** 退役。
+注：文件末尾保留**遗留块**（旧单步 `build_milp`）。`planning/corrector.py` 已于 **M4.4a**
+切换到 H 步 MIP、**不再使用旧 `build_milp`**；当前仅 **`planning/solver.py` 与旧测试**
+仍保留 legacy 路径，待 **M4.4b** 退役。
 """
 
 from __future__ import annotations
@@ -254,35 +254,70 @@ def _base_only_lp(
     )
 
 
-def diagnose_base_feasibility(snapshot: SystemSnapshot) -> BaseFeasibilityDiagnostic:
-    """基础负载专用可行性诊断（M4.3a1）。
+def diagnose_base_feasibility(
+    snapshot: SystemSnapshot, *, time_limit_s: float | None = None
+) -> BaseFeasibilityDiagnostic:
+    """基础负载专用可行性诊断（M4.3a1 / M4.4a2）。
 
     用与主 LP **相同的物理约束**（接入、PV/wind 使用与弃电、充放电、SOC、效率、无反送电、
     能量平衡）判定「仅基础负载」是否可服务；不含任何任务变量、任务 slack 或未来真实任务。
+
+    `time_limit_s` 为**诊断可用的剩余预算**：内部两次 LP **共享同一 deadline**，
+    不会各自重新获得完整预算；任一次超时 → `outcome="time_limit"`（不得据此报 base_shortage）。
     """
     import time
 
     H = int(snapshot.planning_horizon_steps)
     t0 = time.perf_counter()
+    deadline = None if time_limit_s is None else _monotonic() + float(time_limit_s)
+
+    def _remaining() -> float | None:
+        if deadline is None:
+            return None
+        return max(deadline - _monotonic(), 0.0)
+
+    def _lp_options() -> dict:
+        rem = _remaining()
+        return {} if rem is None else {"time_limit": float(rem)}
+
     if H <= 0:
         return BaseFeasibilityDiagnostic(True, "trivial_empty_horizon", 0.0, 0.0)
+
+    rem0 = _remaining()
+    if rem0 is not None and rem0 <= 0.0:
+        return BaseFeasibilityDiagnostic(False, "diagnostic_not_started", 0.0, float("nan"))
 
     model = _base_only_lp(snapshot, H, with_shortfall_slack=False)
     res = linprog(
         c=model.c, A_eq=model.a_eq, b_eq=model.b_eq,
-        bounds=list(zip(model.lb, model.ub, strict=True)), method="highs",
+        bounds=list(zip(model.lb, model.ub, strict=True)),
+        method="highs", options=_lp_options(),
     )
     if res.success:
         return BaseFeasibilityDiagnostic(
             True, str(res.message), time.perf_counter() - t0, 0.0
         )
+    if int(getattr(res, "status", 4)) == 1:
+        return BaseFeasibilityDiagnostic(
+            False, "diagnostic_time_limit", time.perf_counter() - t0, float("nan")
+        )
 
-    # 不可行：用松弛量量化最小未服务基础能量（kWh）
+    # 不可行：用松弛量量化最小未服务基础能量（kWh）——仍受同一 deadline 约束
+    rem1 = _remaining()
+    if rem1 is not None and rem1 <= 0.0:
+        return BaseFeasibilityDiagnostic(
+            False, "diagnostic_time_limit", time.perf_counter() - t0, float("nan")
+        )
     model2 = _base_only_lp(snapshot, H, with_shortfall_slack=True)
     res2 = linprog(
         c=model2.c, A_eq=model2.a_eq, b_eq=model2.b_eq,
-        bounds=list(zip(model2.lb, model2.ub, strict=True)), method="highs",
+        bounds=list(zip(model2.lb, model2.ub, strict=True)),
+        method="highs", options=_lp_options(),
     )
+    if int(getattr(res2, "status", 4)) == 1:
+        return BaseFeasibilityDiagnostic(
+            False, "diagnostic_time_limit", time.perf_counter() - t0, float("nan")
+        )
     shortfall = float(res2.fun) if res2.success else float("nan")
     status = f"infeasible ({res.message})" if res2.success else str(res2.message)
     return BaseFeasibilityDiagnostic(False, status, time.perf_counter() - t0, shortfall)
@@ -543,12 +578,20 @@ def _solve_time_indexed(
     else:
         a_ub, b_ub = None, None
 
+    deadline = None if time_limit_s is None else _monotonic() + float(time_limit_s)
+
+    def _remaining() -> float | None:
+        if deadline is None:
+            return None
+        return max(deadline - _monotonic(), 0.0)
+
     if backend == "mip":
         from scipy.optimize import milp as _milp
 
         integrality = np.zeros(n_vars)
         integrality[off_z:off_z + H] = 1
-        options = {} if time_limit_s is None else {"time_limit": float(time_limit_s)}
+        rem = _remaining()
+        options = {} if rem is None else {"time_limit": float(rem)}
         res = _milp(
             c=c,
             constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
@@ -585,16 +628,27 @@ def _solve_time_indexed(
                 FAILURE_TIMEOUT, None,
                 backend=backend, n_integer_variables=n_int,
             )
-        base_diag = (
-            diagnose_base_feasibility(snapshot)
-            if solver_status == SOLVER_INFEASIBLE
-            else None
-        )
-        failure = (
-            FAILURE_BASE_SHORTAGE
-            if (base_diag is not None and not base_diag.feasible)
-            else FAILURE_SOLVER_FAILURE
-        )
+        base_diag = None
+        failure = FAILURE_SOLVER_FAILURE
+        if solver_status == SOLVER_INFEASIBLE:
+            rem = _remaining()
+            if rem is not None and rem <= 0.0:
+                # 预算耗尽 → 不启动诊断，整体 timeout（不得误报 base_shortage）
+                return _empty_result(
+                    snapshot, H, n_vars, len(rows), SOLVER_TIME_LIMIT, solve_time,
+                    FAILURE_TIMEOUT, None,
+                    backend=backend, n_integer_variables=n_int,
+                )
+            base_diag = diagnose_base_feasibility(snapshot, time_limit_s=rem)
+            if "time_limit" in base_diag.status or "not_started" in base_diag.status:
+                return _empty_result(
+                    snapshot, H, n_vars, len(rows), SOLVER_TIME_LIMIT, solve_time,
+                    FAILURE_TIMEOUT, base_diag,
+                    backend=backend, n_integer_variables=n_int,
+                )
+            failure = (
+                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
+            )
         return _empty_result(
             snapshot, H, n_vars, len(rows), solver_status, solve_time, failure,
             base_diag, backend=backend, n_integer_variables=n_int,
@@ -711,6 +765,10 @@ class RawProjectionResult:
     stage_b_objective: float
     projection_offset: float
 
+    # 诊断审计（M4.4a2）：not_run / not_started / diagnostic_time_limit / infeasible(...)
+    diagnostic_status: str
+    diagnostic_solve_time_s: float
+
     # 第 0 步 exec action
     exec_compute_actions: list[float]
     exec_storage_action: float
@@ -747,6 +805,8 @@ def _projection_empty(
         stage_a_solve_time_s=float(audit.get("stage_a_solve_time_s", 0.0)),
         stage_b_solve_time_s=float(audit.get("stage_b_solve_time_s", 0.0)),
         stage_a_objective=0.0, stage_b_objective=0.0, projection_offset=0.0,
+        diagnostic_status=str(audit.get("diagnostic_status", "not_run")),
+        diagnostic_solve_time_s=float(audit.get("diagnostic_solve_time_s", 0.0)),
         exec_compute_actions=[0.0] * n_group, exec_storage_action=0.0,
         business_gap_work=float(sum(t.remaining_work for t in snapshot.tasks)),
         deadline_shortfall_work=0.0,
@@ -949,23 +1009,39 @@ def solve_time_indexed_mip_raw_projection(
     tA = time.perf_counter() - tA0
     status_a = _status(res_a)
     if status_a != SOLVER_OPTIMAL:
-        if status_a == SOLVER_INFEASIBLE and deadline is None:
-            base_diag = diagnose_base_feasibility(snapshot)
-            failure = (
-                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
-            )
-        elif status_a == SOLVER_INFEASIBLE:
-            base_diag = diagnose_base_feasibility(snapshot)
-            failure = (
-                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
-            )
-        elif status_a == SOLVER_TIME_LIMIT:
+        diag_audit = {"diagnostic_status": "not_run", "diagnostic_solve_time_s": 0.0}
+        if status_a == SOLVER_TIME_LIMIT:
             failure = FAILURE_TIMEOUT  # timeout 路径不运行 base-only 诊断
+        elif status_a == SOLVER_INFEASIBLE:
+            rem = _remaining()
+            if rem is not None and rem <= 0.0:
+                # 预算耗尽 → 不启动诊断，直接 timeout
+                diag_audit["diagnostic_status"] = "not_started"
+                return _projection_empty(
+                    snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT,
+                    {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA,
+                     "stage_b_status": "not_run", **diag_audit},
+                )
+            base_diag = diagnose_base_feasibility(snapshot, time_limit_s=rem)
+            diag_audit = {
+                "diagnostic_status": base_diag.status,
+                "diagnostic_solve_time_s": base_diag.solve_time_s,
+            }
+            if "time_limit" in base_diag.status or "not_started" in base_diag.status:
+                # 诊断自身 timeout → 整体 timeout，不得误报 base_shortage
+                return _projection_empty(
+                    snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT,
+                    {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA,
+                     "stage_b_status": "not_run", **diag_audit},
+                )
+            failure = (
+                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
+            )
         else:
             failure = FAILURE_SOLVER_FAILURE
         return _projection_empty(
             snapshot, status_a, failure,
-            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA},
+            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA, **diag_audit},
         )
 
     offset_a = float(c_off @ res_a.x)
@@ -1054,6 +1130,7 @@ def solve_time_indexed_mip_raw_projection(
         stage_a_solve_time_s=tA, stage_b_solve_time_s=tB,
         stage_a_objective=offset_a, stage_b_objective=float(c_econ @ x),
         projection_offset=offset_val,
+        diagnostic_status="not_required_optimal", diagnostic_solve_time_s=0.0,
         exec_compute_actions=exec_compute, exec_storage_action=exec_storage,
         business_gap_work=total_business, deadline_shortfall_work=total_deadline,
         allocation=allocation, charge_kw=charge, discharge_kw=discharge,
