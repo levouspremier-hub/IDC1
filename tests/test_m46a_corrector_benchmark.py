@@ -8,7 +8,15 @@ import subprocess
 
 import pytest
 
-from scripts.benchmark_corrector import BUDGET_MATRIX_S, build_comparison_table, run_benchmark
+from scripts.benchmark_corrector import (
+    BUDGET_MATRIX_S,
+    EXECUTABLE_REASONS,
+    SCENARIOS,
+    build_comparison_table,
+    classify_outcome,
+    make_scenario_env,
+    run_benchmark,
+)
 
 STAT_KEYS = {"mean_s", "median_s", "p95_s", "max_s"}
 
@@ -103,3 +111,87 @@ def test_cli_outputs_json():
     report = json.loads(out)
     assert report["measurement_basis"]["tracemalloc_active"] is False
     assert "candidate_budget_table" in report
+
+
+# --- M4.6a1：场景一致性与结果会计 ---
+
+def test_raw_baseline_uses_same_scenario_config():
+    """raw baseline 工厂必须接收与 wrapper 完全相同的 scenario 配置。"""
+    seen = {}
+
+    for scenario, cfg in SCENARIOS.items():
+        env = make_scenario_env(scenario, horizon=6)
+        seen[scenario] = {
+            "access_limit_kw": float(env.access_limit_kw),
+            "bess_soc_init": float(env.bess_soc_init),
+            "horizon": int(env.horizon),
+        }
+        assert seen[scenario]["horizon"] == 6
+        assert seen[scenario]["bess_soc_init"] == pytest.approx(cfg["soc_init"])
+        # access_limit 会被 idc_power_scale_factor 缩放，故按比例核验
+        assert seen[scenario]["access_limit_kw"] > 0.0
+
+
+def test_scenario_config_reported(small_report):
+    for scenario in ("normal", "tight"):
+        cfg = small_report["scenarios"][scenario]["scenario_config"]
+        assert set(cfg) == {"access_limit_kw", "access_limit_kw_declared", "bess_soc_init", "horizon"}
+        assert cfg["horizon"] == 4
+
+
+def test_outcome_classification_table():
+    assert EXECUTABLE_REASONS == {"none", "deadline_shortfall"}
+    cases = {
+        "none": "executable_candidate",
+        "deadline_shortfall": "executable_candidate",
+        "timeout": "timeout",
+        "base_shortage": "non_timeout_failure",
+        "solver_failure": "non_timeout_failure",
+        "proposal_invalid": "non_timeout_failure",
+        "some_unknown_reason": "non_timeout_failure",
+    }
+    for reason, expected in cases.items():
+        assert classify_outcome(reason) == expected, reason
+
+
+def test_accounting_identity_holds(small_report):
+    for scenario in ("normal", "tight"):
+        for entry in small_report["scenarios"][scenario]["budgets"].values():
+            assert entry["n_steps"] == (
+                entry["executable_candidate_count"]
+                + entry["timeout_count"]
+                + entry["non_timeout_failure_count"]
+            ), entry
+            # timeout 必须归入 failure_counts；且不计为 executable candidate
+            assert entry["failure_counts"].get("timeout", 0) == entry["timeout_count"]
+            assert "executable_candidate_count" in entry
+
+
+def test_failure_counts_cover_all_failures(small_report):
+    for scenario in ("normal", "tight"):
+        for entry in small_report["scenarios"][scenario]["budgets"].values():
+            total_failures = entry["timeout_count"] + entry["non_timeout_failure_count"]
+            assert sum(entry["failure_counts"].values()) == total_failures
+            for key in ("base_shortage", "solver_failure", "proposal_invalid"):
+                assert key in entry["failure_counts"], key
+
+
+def test_zero_action_fallback_and_unsafe_counts(small_report):
+    for scenario in ("normal", "tight"):
+        for entry in small_report["scenarios"][scenario]["budgets"].values():
+            # 失败类别绝不允许发送非零动作
+            assert entry["unsafe_failure_action_count"] == 0
+            # 零动作回退数至少覆盖 timeout
+            assert entry["zero_action_fallback_count"] >= entry["timeout_count"]
+
+
+def test_no_optimal_count_field(small_report):
+    for scenario in ("normal", "tight"):
+        for entry in small_report["scenarios"][scenario]["budgets"].values():
+            assert "optimal_count" not in entry
+
+
+def test_timeout_is_not_executable_candidate(small_report):
+    entry = small_report["scenarios"]["normal"]["budgets"]["0.01"]
+    if entry["timeout_count"] > 0:
+        assert entry["executable_candidate_count"] <= entry["n_steps"] - entry["timeout_count"]
