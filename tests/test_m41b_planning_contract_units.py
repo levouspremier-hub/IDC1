@@ -117,6 +117,23 @@ def test_soc_max_must_not_exceed_capacity():
 @pytest.mark.parametrize(
     "field, value",
     [
+        ("bess_charge_efficiency", 0.0),
+        ("bess_charge_efficiency", -0.1),
+        ("bess_charge_efficiency", 1.5),
+        ("bess_discharge_efficiency", 0.0),
+        ("bess_discharge_efficiency", 2.0),
+    ],
+)
+def test_validator_rejects_illegal_efficiency(field, value):
+    kwargs = _kwargs()
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="efficiency"):
+        validate_snapshot(SystemSnapshot(**kwargs))
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
         ("group_work_capacity", [1.0] * 3),
         ("group_power_coeff_kw_per_work", [0.01] * 3),
         ("group_power_upper_kw", [0.7] * 3),
