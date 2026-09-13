@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from envs.idc_price_env import IDCPriceEnv20D
-from planning.model import build_milp
+from planning.model import build_milp, solve_time_indexed_lp
 from planning.snapshot_adapter import build_snapshot
 from safe_rl.corrector_wrapper import CorrectorWrapper
 
@@ -40,12 +40,28 @@ def main() -> None:
     snapshot = build_snapshot(raw)
     model = build_milp(snapshot)
 
+    # M4.3a：时间索引 LP 规划核心——在 episode 中段（非终止步）测规模/耗时/残差
+    probe_env = IDCPriceEnv20D()
+    probe_env.reset(seed=0)
+    probe_env.step(action)
+    lp_snapshot = build_snapshot(probe_env)
+    lp_result = solve_time_indexed_lp(lp_snapshot)
+
     report = {
         "n_server_groups": 20,
         "horizon": raw.horizon,
         "n_tasks": len(snapshot.tasks),
         "milp_n_vars": int(model.c.shape[0]),
         "milp_n_integer": int(model.integrality.sum()),
+        "lp_planning_horizon_steps": lp_result.horizon_steps,
+        "lp_n_vars": lp_result.n_variables,
+        "lp_n_constraints": lp_result.n_constraints,
+        "lp_solve_time_s": lp_result.solve_time_s,
+        "lp_max_constraint_residual": lp_result.max_constraint_residual,
+        "lp_solver_status": lp_result.solver_status,
+        "lp_failure_class": lp_result.failure_class,
+        "lp_power_approximation_used": lp_result.power_approximation_used,
+        "lp_storage_relaxation_active": lp_result.storage_relaxation_active,
         "env_step_mean_s": float(np.mean(step_times)),
         "env_step_p95_s": float(np.percentile(step_times, 95)),
         "corrector_solve_mean_s": float(np.mean(solve_times)),
