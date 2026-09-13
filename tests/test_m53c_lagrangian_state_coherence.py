@@ -5,6 +5,7 @@
 """
 
 import copy
+from typing import Any
 
 import pytest
 
@@ -287,7 +288,7 @@ def test_capped_history_is_accepted():
 
 # --- 7. 回归：任何被接受的状态都必须是不动点 --------------------------------
 
-MUTANTS = [
+MUTANTS: list[object] = [
     0.0, -0.0, 1.0, -1.0, 1.0e-9, -1.0e-9, 0.4, 2.0, 9.0, 13.0,
     BUSINESS_MAX, BUSINESS_MAX + 1.0, CARBON_MAX, CARBON_MAX + 1.0,
     float("nan"), float("inf"), float("-inf"), None, "x", [], {}, True, 3,
@@ -295,22 +296,22 @@ MUTANTS = [
 
 
 def _leaf_paths(state: dict) -> list[tuple[str, ...]]:
-    paths = [("updates",)]
+    paths: list[tuple[str, ...]] = [("updates",)]
     for name, entry in state["constraints"].items():
         for field in entry:
             paths.append(("constraints", name, field))
     return paths
 
 
-def _get(state: dict, path: tuple[str, ...]):
+def _get(state: dict, path: tuple[str, ...]) -> object:
     node = state
     for key in path:
         node = node[key]
     return node
 
 
-def _set(state: dict, path: tuple[str, ...], value) -> None:
-    node = state
+def _set(state: dict, path: tuple[str, ...], value: object) -> None:
+    node: Any = state
     for key in path[:-1]:
         node = node[key]
     node[path[-1]] = value
