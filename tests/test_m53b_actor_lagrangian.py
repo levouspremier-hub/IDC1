@@ -434,3 +434,81 @@ def test_metrics_are_labelled_dry_run_diagnostics(monkeypatch):
         if key != "claims" and any(s in key.lower() for s in forbidden)
     ]
     assert offenders == []
+
+
+# --- 6. 回归：乘子必须真正进入损失，且跨轮连续 ---
+
+def test_multipliers_actually_change_the_actor_loss(monkeypatch):
+    """不能只改上报值：换一组乘子，actor_loss 本身必须改变。"""
+    losses, terms = [], []
+    for carbon_seed in (13.0, 30.0):
+        transitions = [make_transition(i) for i in range(len(REWARDS))]
+        with monkeypatch.context() as ctx:
+            install_fake_collector(ctx, transitions)
+            policy = make_policy()
+            lag = Lagrangian(make_specs())
+            lag.update({"business": [SEED_BUSINESS], "carbon": [carbon_seed]})
+            opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+            result = run_dry(policy, lag, opt)
+        losses.append(result["actor_loss"])
+        terms.append(result["effective_advantage_terms"])
+
+    assert losses[0] != pytest.approx(losses[1]), "乘子必须真正进入 actor loss"
+    assert terms[0]["reward_mean"] == pytest.approx(terms[1]["reward_mean"])
+    assert terms[0]["business_mean"] == pytest.approx(terms[1]["business_mean"])
+    assert terms[0]["carbon_mean"] != pytest.approx(terms[1]["carbon_mean"])
+
+
+def test_zero_multipliers_reproduce_the_reward_only_objective(monkeypatch):
+    """λ 全为 0 时 actor_loss 必须精确等于只用 reward 优势的旧目标。"""
+    transitions = [make_transition(i) for i in range(len(REWARDS))]
+    install_fake_collector(monkeypatch, transitions)
+    policy = make_policy()
+    snapshot = copy.deepcopy(policy)
+    lag = Lagrangian(make_specs())
+    opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+
+    result = run_dry(policy, lag, opt)
+    ref = independent_heads(snapshot, transitions)
+    expected = -float(np.mean(ref["advantages"]["reward"] * ref["log_probs"]))
+    assert result["actor_loss"] == pytest.approx(expected)
+
+
+def test_multiplier_chain_is_continuous_across_rounds(monkeypatch):
+    """连续三轮：第 i+1 轮的 pre-update 乘子必须等于第 i 轮的 post-update。"""
+    transitions = [make_transition(i) for i in range(len(REWARDS))]
+    install_fake_collector(monkeypatch, transitions)
+    lag = Lagrangian(make_specs())
+
+    pre, post = [], []
+    for _ in range(3):
+        policy = make_policy()  # 每轮全新同权重策略，避免上一轮 step 的干扰
+        opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+        result = run_dry(policy, lag, opt)
+        pre.append(result["multipliers_pre_update"])
+        post.append(result["multipliers_post_update"])
+
+    assert pre[0] == {"business": 0.0, "carbon": 0.0}
+    for index in range(1, 3):
+        assert pre[index] == post[index - 1], "乘子链必须连续"
+    # business mean=2.0 < budget=5.0 -> 恒被截断为 0；carbon mean=5.0 > budget=3.0 -> 单调上升
+    assert all(state["business"] == 0.0 for state in post)
+    assert post[0]["carbon"] < post[1]["carbon"] < post[2]["carbon"]
+
+
+def test_constraint_terms_scale_linearly_with_their_multiplier(monkeypatch):
+    """约束项必须与其乘子成正比：λ 翻倍则该项均值翻倍。"""
+    def term_for(carbon_seed: float) -> float:
+        transitions = [make_transition(i) for i in range(len(REWARDS))]
+        with monkeypatch.context() as ctx:
+            install_fake_collector(ctx, transitions)
+            policy = make_policy()
+            lag = Lagrangian(make_specs())
+            lag.update({"business": [5.0], "carbon": [carbon_seed]})  # λ_b = 0
+            opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+            return run_dry(policy, lag, opt)["effective_advantage_terms"]["carbon_mean"]
+
+    one = term_for(13.0)   # λ_c = 2.0
+    two = term_for(23.0)   # λ_c = 4.0
+    assert one != pytest.approx(0.0)
+    assert two == pytest.approx(2.0 * one)
