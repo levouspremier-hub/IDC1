@@ -1,6 +1,11 @@
 """M4.2 测试：单步修正器修正计算范围、SOC、接入上限；确定性；记录 raw/exec/reason。"""
 
-from contracts.models import DispatchProposal, ScenarioBundle, SystemSnapshot
+from contracts.models import (
+    DispatchProposal,
+    PlanningExogenousForecast,
+    ScenarioBundle,
+    SystemSnapshot,
+)
 from safe_rl.corrector import correct
 
 
@@ -38,6 +43,15 @@ def _snapshot(soc_kwh=50.0, access_limit_kw=10.0, capacity=None) -> SystemSnapsh
         bess_discharge_efficiency=0.95,
         bess_degradation_cost_per_kwh=0.02,
         base_idc_power_forecast_kw=[14.0] * 24,
+            planning_forecast=PlanningExogenousForecast(
+            horizon_steps=24,
+            price=[0.2] * 24, pv=[0.0] * 24, wind=[0.0] * 24,
+            temperature=[28.0] * 24, carbon=[0.0] * 24, arrival=[0.0] * 24,
+            base_idc_power=[14.0] * 24,
+            visible_mask=[False] * 24, assumed_mask=[True] * 24,
+            extension_policy="test fixture policy",
+        ),
+
         group_power_coeff_kw_per_work=[0.01] * 1,
         group_power_upper_kw=[0.7] * 1,
         power_approximation_note="planning approximation; verify with env physics chain",

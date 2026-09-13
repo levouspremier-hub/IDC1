@@ -29,7 +29,6 @@ def _env(cutoff: int = CUTOFF, t: int = 0, horizon: int = HORIZON) -> IDCPriceEn
         pv_t=1.0 + 0.1 * np.arange(h),
         wt_t=2.0 + 0.1 * np.arange(h),
         carbon_factor_t=0.5 + 0.01 * np.arange(h),
-        temperature_forecast=None,
         T_amb=20.0 + 0.5 * np.arange(h),
     )
     env.reset(seed=0)

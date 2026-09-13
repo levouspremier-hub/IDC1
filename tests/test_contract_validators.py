@@ -9,6 +9,7 @@ from contracts import (
     SystemSnapshot,
     TaskAllocation,
 )
+from contracts.models import PlanningExogenousForecast
 from contracts.validators import (
     validate_dispatch_proposal,
     validate_dispatch_result,
@@ -52,6 +53,15 @@ def _snapshot(**overrides) -> SystemSnapshot:
         bess_discharge_efficiency=0.95,
         bess_degradation_cost_per_kwh=0.02,
         base_idc_power_forecast_kw=[14.0] * 24,
+            planning_forecast=PlanningExogenousForecast(
+            horizon_steps=24,
+            price=[0.2] * 24, pv=[0.0] * 24, wind=[0.0] * 24,
+            temperature=[28.0] * 24, carbon=[0.0] * 24, arrival=[0.0] * 24,
+            base_idc_power=[14.0] * 24,
+            visible_mask=[False] * 24, assumed_mask=[True] * 24,
+            extension_policy="test fixture policy",
+        ),
+
         power_approximation_note="planning approximation; verify with env physics chain",
         group_work_capacity=[1.0] * 20,
         access_limit_kw=18.0,

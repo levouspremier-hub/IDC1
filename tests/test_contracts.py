@@ -12,6 +12,7 @@ from contracts import (
     TaskAllocation,
     TaskState,
 )
+from contracts.models import PlanningExogenousForecast
 
 
 def _scenario(source_hashes: dict[str, str] | None = None) -> ScenarioBundle:
@@ -92,6 +93,15 @@ def test_nested_roundtrip():
         bess_discharge_efficiency=0.95,
         bess_degradation_cost_per_kwh=0.02,
         base_idc_power_forecast_kw=[14.0] * 24,
+            planning_forecast=PlanningExogenousForecast(
+            horizon_steps=24,
+            price=[0.2] * 24, pv=[0.0] * 24, wind=[0.0] * 24,
+            temperature=[28.0] * 24, carbon=[0.0] * 24, arrival=[0.0] * 24,
+            base_idc_power=[14.0] * 24,
+            visible_mask=[False] * 24, assumed_mask=[True] * 24,
+            extension_policy="test fixture policy",
+        ),
+
         group_power_coeff_kw_per_work=[0.01] * 1,
         group_power_upper_kw=[0.7] * 1,
         power_approximation_note="planning approximation; verify with env physics chain",

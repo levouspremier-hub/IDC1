@@ -1,6 +1,6 @@
 """M4.6 测试：MILP 模型变量/整数计数正确。"""
 
-from contracts.models import ScenarioBundle, SystemSnapshot, TaskState
+from contracts.models import PlanningExogenousForecast, ScenarioBundle, SystemSnapshot, TaskState
 from planning.model import build_milp
 
 
@@ -37,6 +37,15 @@ def _snapshot() -> SystemSnapshot:
         bess_discharge_efficiency=0.95,
         bess_degradation_cost_per_kwh=0.02,
         base_idc_power_forecast_kw=[14.0] * 24,
+            planning_forecast=PlanningExogenousForecast(
+            horizon_steps=24,
+            price=[0.2] * 24, pv=[0.0] * 24, wind=[0.0] * 24,
+            temperature=[28.0] * 24, carbon=[0.0] * 24, arrival=[0.0] * 24,
+            base_idc_power=[14.0] * 24,
+            visible_mask=[False] * 24, assumed_mask=[True] * 24,
+            extension_policy="test fixture policy",
+        ),
+
         group_power_coeff_kw_per_work=[0.01] * 2,
         group_power_upper_kw=[0.7] * 2,
         power_approximation_note="planning approximation; verify with env physics chain",

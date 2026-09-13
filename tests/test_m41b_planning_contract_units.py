@@ -171,8 +171,8 @@ def test_active_task_negative_values_rejected():
 
 # --- 4. contract-v4 与旧 payload 拒绝 ---
 
-def test_contract_version_is_v4():
-    assert CONTRACT_VERSION_ID == "contract-v4"
+def test_contract_version_is_v5():
+    assert CONTRACT_VERSION_ID == "contract-v5"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 
