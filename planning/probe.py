@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 
 from envs.idc_price_env import IDCPriceEnv20D
-from planning.model import build_milp, solve_time_indexed_lp
+from planning.model import build_milp, solve_time_indexed_lp, solve_time_indexed_mip
 from planning.snapshot_adapter import build_snapshot
 from safe_rl.corrector_wrapper import CorrectorWrapper
 
@@ -46,13 +46,16 @@ def main() -> None:
     probe_env.step(action)
     lp_snapshot = build_snapshot(probe_env)
     lp_result = solve_time_indexed_lp(lp_snapshot)
+    mip_result = solve_time_indexed_mip(lp_snapshot)
 
     report = {
         "n_server_groups": 20,
         "horizon": raw.horizon,
         "n_tasks": len(snapshot.tasks),
-        "milp_n_vars": int(model.c.shape[0]),
-        "milp_n_integer": int(model.integrality.sum()),
+        # [遗留] 旧单步 build_milp：仍被 solver.py / corrector.py 使用，
+        # **不是**新 H 步规划器规模，仅作对照
+        "legacy_single_step_milp_n_vars": int(model.c.shape[0]),
+        "legacy_single_step_milp_n_integer": int(model.integrality.sum()),
         "lp_planning_horizon_steps": lp_result.horizon_steps,
         "lp_n_vars": lp_result.n_variables,
         "lp_n_constraints": lp_result.n_constraints,
@@ -62,6 +65,22 @@ def main() -> None:
         "lp_failure_class": lp_result.failure_class,
         "lp_power_approximation_used": lp_result.power_approximation_used,
         "lp_storage_relaxation_active": lp_result.storage_relaxation_active,
+        "lp_backend": lp_result.backend,
+        "lp_objective_sgd": lp_result.total_objective_sgd,
+        "mip_planning_horizon_steps": mip_result.horizon_steps,
+        "mip_n_vars": mip_result.n_variables,
+        "mip_n_integer": mip_result.n_integer_variables,
+        "mip_n_constraints": mip_result.n_constraints,
+        "mip_solve_time_s": mip_result.solve_time_s,
+        "mip_solver_status": mip_result.solver_status,
+        "mip_failure_class": mip_result.failure_class,
+        "mip_objective_sgd": mip_result.total_objective_sgd,
+        "mip_max_constraint_residual": mip_result.max_constraint_residual,
+        "mip_storage_mutual_exclusion_ok": all(
+            c * d <= 1e-9
+            for c, d in zip(mip_result.charge_kw, mip_result.discharge_kw, strict=True)
+        ),
+        "mip_backend": mip_result.backend,
         "env_step_mean_s": float(np.mean(step_times)),
         "env_step_p95_s": float(np.percentile(step_times, 95)),
         "corrector_solve_mean_s": float(np.mean(solve_times)),
