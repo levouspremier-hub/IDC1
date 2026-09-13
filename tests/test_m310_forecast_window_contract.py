@@ -26,8 +26,9 @@ def _env(cutoff: int, t: int = 0) -> IDCPriceEnv20D:
         carbon_factor_t=hours + 1.0,
     )
     env.reset(seed=0)
+    action = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
     for _ in range(t):
-        env.step(np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)]))
+        env.step(action)
     return env
 
 
