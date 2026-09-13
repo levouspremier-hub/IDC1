@@ -115,7 +115,7 @@ def sample_raw_action(rng: np.random.Generator) -> np.ndarray:
 
 
 def _record(
-    checks: dict[str, list[dict]], name: str, step: int, passed: bool, detail: str
+    checks: dict[str, list[dict]], name: str, step: int, passed: bool | np.bool_, detail: str
 ) -> None:
     checks.setdefault(name, []).append({"step": step, "passed": bool(passed), "detail": detail})
     if not passed:
