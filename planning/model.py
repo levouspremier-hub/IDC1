@@ -14,7 +14,8 @@
 - 不做窗口外真值读取（规划输入由 `planning_forecast` 提供，窗口外为声明假设）。
 
 注：文件末尾保留**未接线遗留块**（旧单步 `build_milp`），供 `planning/solver.py` /
-`planning/corrector.py` 继续使用；本卡不重新接线，遗留块将在 M4.3b/M4.5 移除。
+`planning/corrector.py` 继续使用。**H 步 MIP 已于 M4.4a 接线**（corrector 使用新入口），
+遗留块只待 **M4.4b** 退役。
 """
 
 from __future__ import annotations
@@ -50,6 +51,13 @@ FAILURE_TIMEOUT = "timeout"
 FAILURE_PROPOSAL_INVALID = "proposal_invalid"
 
 _TOL = 1e-6
+
+
+def _monotonic() -> float:
+    """单调时钟（可被测试替换，用于确定性 deadline 测试）。"""
+    import time
+
+    return time.monotonic()
 
 
 @dataclass
@@ -607,8 +615,8 @@ def _solve_time_indexed(
     discharge = [float(x[off_discharge + k]) for k in range(H)]
     curtail = [float(x[off_curtail + k]) for k in range(H)]
     soc = [float(x[off_soc + k]) for k in range(H + 1)]
-    business = [float(x[off_bus + i]) for i in range(n_task)]
-    deadline = [float(x[off_dls + i]) for i in range(n_task)]
+    business_slack = [float(x[off_bus + i]) for i in range(n_task)]
+    deadline_slack = [float(x[off_dls + i]) for i in range(n_task)]
 
     electricity_cost = sum(
         p_grid[k] * dt * pf.price[k] for k in range(H)
@@ -617,8 +625,8 @@ def _solve_time_indexed(
         (charge[k] + discharge[k]) * dt * snapshot.bess_degradation_cost_per_kwh
         for k in range(H)
     )
-    business_cost = sum(business) * business_penalty_sgd_per_work
-    deadline_cost = sum(deadline) * deadline_penalty_sgd_per_work
+    business_cost = sum(business_slack) * business_penalty_sgd_per_work
+    deadline_cost = sum(deadline_slack) * deadline_penalty_sgd_per_work
 
     ax = np.asarray(A_csr.dot(x)).ravel()
     residuals = {}
@@ -635,8 +643,8 @@ def _solve_time_indexed(
     storage_relaxation = any(
         c_k > _TOL and d_k > _TOL for c_k, d_k in zip(charge, discharge, strict=True)
     )
-    total_business = float(sum(business))
-    total_deadline = float(sum(deadline))
+    total_business = float(sum(business_slack))
+    total_deadline = float(sum(deadline_slack))
     if total_deadline > _TOL:
         failure = FAILURE_DEADLINE_SHORTFALL
     else:
@@ -721,14 +729,23 @@ class RawProjectionResult:
     power_approximation_used: bool
 
 
-def _projection_empty(snapshot: SystemSnapshot, status: str, failure: str) -> RawProjectionResult:
+def _projection_empty(
+    snapshot: SystemSnapshot, status: str, failure: str, audit: dict | None = None
+) -> RawProjectionResult:
+    """失败/timeout 结果：仍保留已知结构审计信息（不得用全 0 掩盖求解规模）。"""
+    audit = audit or {}
     n_group = len(snapshot.group_work_capacity)
     H = int(snapshot.planning_horizon_steps)
     return RawProjectionResult(
         backend="mip", solver_status=status, failure_class=failure,
-        horizon_steps=H, n_variables=0, n_integer_variables=0, n_constraints=0,
-        stage_a_status=status, stage_b_status="not_run",
-        stage_a_solve_time_s=0.0, stage_b_solve_time_s=0.0,
+        horizon_steps=H,
+        n_variables=int(audit.get("n_variables", 0)),
+        n_integer_variables=int(audit.get("n_integer_variables", H)),
+        n_constraints=int(audit.get("n_constraints", 0)),
+        stage_a_status=str(audit.get("stage_a_status", status)),
+        stage_b_status=str(audit.get("stage_b_status", "not_run")),
+        stage_a_solve_time_s=float(audit.get("stage_a_solve_time_s", 0.0)),
+        stage_b_solve_time_s=float(audit.get("stage_b_solve_time_s", 0.0)),
         stage_a_objective=0.0, stage_b_objective=0.0, projection_offset=0.0,
         exec_compute_actions=[0.0] * n_group, exec_storage_action=0.0,
         business_gap_work=float(sum(t.remaining_work for t in snapshot.tasks)),
@@ -895,8 +912,22 @@ def solve_time_indexed_mip_raw_projection(
     bounds_vec = Bounds(lb=lb, ub=ub)
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
-    options = {} if time_limit_s is None else {"time_limit": float(time_limit_s)}
+    # 全局 deadline：阶段 A 与 B 共享同一次调用的总预算
+    deadline = None if time_limit_s is None else _monotonic() + float(time_limit_s)
+
+    def _remaining() -> float | None:
+        if deadline is None:
+            return None
+        return max(deadline - _monotonic(), 0.0)
+
+    def _options() -> dict:
+        rem = _remaining()
+        return {} if rem is None else {"time_limit": float(rem)}
+
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
+    _audit = {
+        "n_variables": n_vars, "n_integer_variables": H, "n_constraints": len(rows) + 1,
+    }
 
     def _status(res) -> str:
         code = int(getattr(res, "status", 4))
@@ -913,25 +944,40 @@ def solve_time_indexed_mip_raw_projection(
     tA0 = time.perf_counter()
     res_a = _milp(
         c=c_off, constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
-        integrality=integrality, bounds=bounds_vec, options=options,
+        integrality=integrality, bounds=bounds_vec, options=_options(),
     )
     tA = time.perf_counter() - tA0
     status_a = _status(res_a)
     if status_a != SOLVER_OPTIMAL:
-        base_diag = (
-            diagnose_base_feasibility(snapshot) if status_a == SOLVER_INFEASIBLE else None
-        )
-        if status_a == SOLVER_TIME_LIMIT:
-            failure = FAILURE_TIMEOUT
-        elif base_diag is not None and not base_diag.feasible:
-            failure = FAILURE_BASE_SHORTAGE
+        if status_a == SOLVER_INFEASIBLE and deadline is None:
+            base_diag = diagnose_base_feasibility(snapshot)
+            failure = (
+                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
+            )
+        elif status_a == SOLVER_INFEASIBLE:
+            base_diag = diagnose_base_feasibility(snapshot)
+            failure = (
+                FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
+            )
+        elif status_a == SOLVER_TIME_LIMIT:
+            failure = FAILURE_TIMEOUT  # timeout 路径不运行 base-only 诊断
         else:
             failure = FAILURE_SOLVER_FAILURE
-        out = _projection_empty(snapshot, status_a, failure)
-        out.stage_a_solve_time_s = tA
-        return out
+        return _projection_empty(
+            snapshot, status_a, failure,
+            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA},
+        )
 
     offset_a = float(c_off @ res_a.x)
+
+    # 阶段 A 后预算已耗尽 → 不启动阶段 B，直接 timeout
+    rem_b = _remaining()
+    if rem_b is not None and rem_b <= 0.0:
+        return _projection_empty(
+            snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT,
+            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA,
+             "stage_b_status": "not_run"},
+        )
 
     # --- 阶段 B：固定偏移上界，再以经济/服务目标 tie-break ---
     rows_b = list(rows) + [offset_row]
@@ -946,16 +992,20 @@ def solve_time_indexed_mip_raw_projection(
     tB0 = time.perf_counter()
     res_b = _milp(
         c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
-        integrality=integrality, bounds=bounds_vec, options=options,
+        integrality=integrality, bounds=bounds_vec, options=_options(),
     )
     tB = time.perf_counter() - tB0
     status_b = _status(res_b)
     if status_b != SOLVER_OPTIMAL:
-        out = _projection_empty(snapshot, status_b, FAILURE_SOLVER_FAILURE)
-        out.stage_a_solve_time_s = tA
-        out.stage_b_solve_time_s = tB
-        out.stage_a_objective = offset_a
-        return out
+        # 保真分类：stage-B time_limit 不得被改写为 solver_failure
+        failure = (
+            FAILURE_TIMEOUT if status_b == SOLVER_TIME_LIMIT else FAILURE_SOLVER_FAILURE
+        )
+        return _projection_empty(
+            snapshot, status_b, failure,
+            {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
+             "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB},
+        )
 
     x = res_b.x
     allocation = np.zeros((n_task, n_group, H))
@@ -978,8 +1028,8 @@ def solve_time_indexed_mip_raw_projection(
 
     charge = [float(x[off_charge + k]) for k in range(H)]
     discharge = [float(x[off_discharge + k]) for k in range(H)]
-    business = [float(x[off_bus + i]) for i in range(n_task)]
-    deadline = [float(x[off_dls + i]) for i in range(n_task)]
+    business_slack = [float(x[off_bus + i]) for i in range(n_task)]
+    deadline_slack = [float(x[off_dls + i]) for i in range(n_task)]
 
     ax = np.asarray(A_b.dot(x)).ravel()
     residuals = {}
@@ -993,8 +1043,8 @@ def solve_time_indexed_mip_raw_projection(
             residuals[name] = abs(value - lbs[r])
     max_residual = max(residuals.values()) if residuals else 0.0
 
-    total_business = float(sum(business))
-    total_deadline = float(sum(deadline))
+    total_business = float(sum(business_slack))
+    total_deadline = float(sum(deadline_slack))
     failure = FAILURE_DEADLINE_SHORTFALL if total_deadline > _TOL else FAILURE_NONE
 
     return RawProjectionResult(
