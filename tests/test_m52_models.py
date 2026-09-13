@@ -1,8 +1,9 @@
 """M5.2 测试：三套价值独立，改变一种 cost 不影响另两种 target。
 
 M5.2a 迁移：`compute_gae` 已移除，改为 `compute_signal_gae`；三套 target API 的
-`terminated` / `truncated` 为必填关键字参数。本文件**只补掩码**（全非终止，
-等价于迁移前的纯 GAE 语义），**未改动、未删除、未弱化任何断言**。
+`terminated` / `truncated` 为必填关键字参数。
+M5.2c 迁移：`values[T+1]` 退役，改为逐 transition 的 `(current_values, next_values)`；
+本文件用 `_split` 做等价映射。**未改动、未删除、未弱化任何断言**。
 """
 
 import numpy as np
@@ -24,10 +25,25 @@ def _values() -> dict[str, np.ndarray]:
     }
 
 
+def _split(values):
+    """旧 `values[T+1]` → 新 `(current_values[T], next_values[T])`（等价映射）。"""
+    arr = np.asarray(values, dtype=np.float64)
+    return arr[:-1], arr[1:]
+
+
+def _split3(values: dict) -> tuple[dict, dict]:
+    """三头 dict 版本的 `_split`。"""
+    current: dict = {}
+    nxt: dict = {}
+    for head, arr in values.items():
+        current[head], nxt[head] = _split(arr)
+    return current, nxt
+
+
 def test_compute_gae_shape():
     terminated, truncated = _masks()
     adv, tgt = compute_signal_gae(
-        [1.0, 1.0, 1.0], np.zeros(4),
+        [1.0, 1.0, 1.0], *_split(np.zeros(4)),
         terminated=terminated, truncated=truncated,
     )
     assert adv.shape == (3,)
@@ -40,13 +56,13 @@ def test_three_value_independence():
     business = np.array([0.5, 0.5, 0.5])
     carbon = np.array([0.3, 0.3, 0.3])
     r1 = compute_three_value_targets(
-        rewards, business, carbon, _values(),
+        rewards, business, carbon, *_split3(_values()),
         terminated=terminated, truncated=truncated,
     )
 
     business_changed = np.array([0.5, 0.5, 9.9])
     r2 = compute_three_value_targets(
-        rewards, business_changed, carbon, _values(),
+        rewards, business_changed, carbon, *_split3(_values()),
         terminated=terminated, truncated=truncated,
     )
 
@@ -62,13 +78,13 @@ def test_three_value_independence_carbon():
     business = np.array([0.5, 0.5, 0.5])
     carbon = np.array([0.3, 0.3, 0.3])
     r1 = compute_three_value_targets(
-        rewards, business, carbon, _values(),
+        rewards, business, carbon, *_split3(_values()),
         terminated=terminated, truncated=truncated,
     )
 
     carbon_changed = np.array([0.3, 0.3, 8.8])
     r2 = compute_three_value_targets(
-        rewards, business, carbon_changed, _values(),
+        rewards, business, carbon_changed, *_split3(_values()),
         terminated=terminated, truncated=truncated,
     )
 
