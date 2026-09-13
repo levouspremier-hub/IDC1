@@ -317,3 +317,60 @@ def test_mip_unknown_status_classified_as_solver_failure(monkeypatch):
         assert res.failure_class == FAILURE_SOLVER_FAILURE
         np.testing.assert_allclose(res.allocation, 0.0)
         assert res.electricity_cost_sgd == 0.0
+
+
+# --- 8. 诊断纳入全局 deadline（M4.4a2） ---
+
+import planning.model as _model_mod  # noqa: E402
+
+
+class _FakeLpDiag:
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+        self.budgets: list[float | None] = []
+
+    def __call__(self, **kw):
+        self.budgets.append((kw.get("options") or {}).get("time_limit"))
+
+        class _R:
+            pass
+
+        r = _R()
+        r.status = self.statuses.pop(0) if self.statuses else 0
+        r.success = r.status == 0
+        r.message = f"fake lp {r.status}"
+        r.fun = 0.0
+        r.x = None
+        return r
+
+
+class _FakeMilpStatus:
+    def __init__(self, status):
+        self.status = status
+
+    def __call__(self, **kw):
+        r = self
+        return r
+
+
+def test_mip_diagnostic_timeout_is_overall_timeout(monkeypatch):
+    from envs.idc_price_env import IDCPriceEnv20D as _E
+
+    snap = build_snapshot(_E(horizon=HORIZON, forecast_cutoff=CUTOFF, access_limit_kw=1000.0))
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilpStatus(2))
+    monkeypatch.setattr("scipy.optimize.linprog", _FakeLpDiag([1]))
+    res = solve_time_indexed_mip(snap, time_limit_s=10.0)
+    assert res.solver_status != "optimal"
+    assert res.failure_class != FAILURE_BASE_SHORTAGE   # 不得误报
+    np.testing.assert_allclose(res.allocation, 0.0)
+
+
+def test_mip_in_budget_diagnostic_confirms_base_shortage(monkeypatch):
+    from envs.idc_price_env import IDCPriceEnv20D as _E
+
+    env = _E(horizon=HORIZON, forecast_cutoff=CUTOFF, access_limit_kw=1.0, bess_soc_init=0.1)
+    env.reset(seed=0)
+    snap = build_snapshot(env)
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilpStatus(2))
+    res = solve_time_indexed_mip(snap, time_limit_s=10.0)
+    assert res.failure_class == FAILURE_BASE_SHORTAGE

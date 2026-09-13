@@ -451,3 +451,104 @@ def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
     np.testing.assert_allclose(np.asarray(info["raw_action"]), raw, atol=0.0)
     assert info["correction_reason"] == "timeout"
     assert info["business_gap"] > 0.0
+
+
+# --- 9. 诊断纳入全局 deadline（M4.4a2） ---
+
+import scipy.optimize as _sopt  # noqa: E402
+
+
+class _FakeLinprog:
+    """模拟诊断用的 linprog：记录 options.time_limit，按脚本返回状态。"""
+
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+        self.budgets: list[float | None] = []
+
+    def __call__(self, **kw):
+        self.budgets.append((kw.get("options") or {}).get("time_limit"))
+
+        class _R:
+            pass
+
+        r = _R()
+        r.status = self.statuses.pop(0) if self.statuses else 0
+        r.success = r.status == 0
+        r.message = f"fake lp {r.status}"
+        r.fun = 0.0
+        r.x = None
+        return r
+
+
+def test_projection_main_infeasible_budget_exhausted_no_diagnostic(monkeypatch):
+    """主阶段 infeasible 且预算耗尽 → 不启动诊断，整体 timeout。"""
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    called = {"n": 0}
+    real = model_mod.diagnose_base_feasibility
+
+    def _spy(s, **kw):
+        called["n"] += 1
+        return real(s, **kw)
+
+    monkeypatch.setattr(model_mod, "diagnose_base_feasibility", _spy)
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
+    clock = _fixed_clock([0.0, 5.0, 5.0, 5.0])
+    monkeypatch.setattr(model_mod, "_monotonic", clock)
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=1.0
+    )
+    assert called["n"] == 0                     # 诊断未被启动
+    assert res.solver_status == "time_limit"
+    assert res.failure_class == FAILURE_TIMEOUT # 不得误报 base_shortage
+
+
+def test_projection_diagnostic_timeout_is_overall_timeout(monkeypatch):
+    """诊断 LP timeout → 整体 timeout、零动作、业务缺口显式。"""
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
+    monkeypatch.setattr("scipy.optimize.linprog", _FakeLinprog([1]))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.solver_status == "time_limit"
+    assert res.failure_class == FAILURE_TIMEOUT
+    assert all(v == 0.0 for v in res.exec_compute_actions)
+    assert res.exec_storage_action == 0.0
+    assert res.business_gap_work > 0.0
+    assert "diagnos" in res.stage_b_status.lower() or "diagnos" in str(res.residuals_by_constraint)
+
+
+def test_projection_in_budget_diagnostic_confirms_base_shortage(monkeypatch):
+    """预算内诊断确认 base-only 不可行 → base_shortage。"""
+    snap = build_snapshot(_env(access_limit_kw=1.0, soc_init=0.1))
+    real_diag = model_mod.diagnose_base_feasibility
+    seen = {}
+
+    def _spy(s, **kw):
+        seen.update(kw)
+        return real_diag(s, **kw)
+
+    monkeypatch.setattr(model_mod, "diagnose_base_feasibility", _spy)
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.failure_class == FAILURE_BASE_SHORTAGE
+    assert "time_limit_s" in seen and seen["time_limit_s"] is not None
+
+
+def test_diagnostic_budget_within_global_deadline(monkeypatch):
+    """断言诊断获得的预算不超过同一全局 deadline 的剩余量。"""
+    snap = build_snapshot(_env(access_limit_kw=1.0, soc_init=0.1))
+    fake_lp = _FakeLinprog([2, 0])
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
+    monkeypatch.setattr("scipy.optimize.linprog", fake_lp)
+    # deadline = 0 + 10 = 10；主 milp 前后时钟推进到 3
+    clock = _fixed_clock([0.0, 3.0, 3.0, 4.0, 4.0, 5.0])
+    monkeypatch.setattr(model_mod, "_monotonic", clock)
+    solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert fake_lp.budgets, "诊断未被调用"
+    for b in fake_lp.budgets:
+        assert b is not None and b <= 10.0 + 1e-9
