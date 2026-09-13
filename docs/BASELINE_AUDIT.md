@@ -1,5 +1,9 @@
 # 基线审计（M0.1）
 
+> **性质：基线历史，非当前实现。** 本文件描述改造**之前**的代码状态（基线 commit `787a3c8`）。
+> 其中涉及的旧 α 预留损耗（`planned_load_reserve_alpha`）已在 M3.3 退出正式链、在 M3.4a 被彻底删除；
+> 现行实现中已无该参数、属性与方法。引用本文时请以改造后的代码与任务卡为准。
+>
 > 角色：Agent。本文件为只读审计，不修改任何算法、配置或数据。
 > 生成日期：2026-09-12。基线 commit：`787a3c8`。分支：`p0-bootstrap`（自 `paper-baseline` 切出）。
 > 依据：`docs/IMPLEMENTATION_PLAN.md` §2、`docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md` §5 M0.1。
