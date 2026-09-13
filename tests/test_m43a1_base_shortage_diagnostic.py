@@ -74,8 +74,11 @@ def test_main_lp_classified_base_shortage_matches_diagnostic():
 # --- 3. 可再生足够 → 不报 base_shortage ---
 
 def test_renewables_cover_base_load_is_feasible():
+    # 规划时域须完全落在可见窗口内：窗口外 PV 按 M4.1c 规则保守为 0
     base_kw = build_snapshot(_env()).planning_forecast.base_idc_power[0]
-    snap = build_snapshot(_env(access_limit_kw=1.0, soc_init=0.1, pv=base_kw + 5.0))
+    snap = build_snapshot(_env(horizon=4, access_limit_kw=1.0, soc_init=0.1, pv=base_kw + 5.0))
+    assert snap.planning_horizon_steps == 4
+    assert all(v > 0.0 for v in snap.planning_forecast.pv)
     diag = diagnose_base_feasibility(snap)
     assert diag.feasible is True
     res = solve_time_indexed_lp(snap)
@@ -111,7 +114,7 @@ def test_diagnostic_respects_soc_and_power_bounds():
         assert res.discharge_kw[k] <= snap.bess_discharge_power_max_kw + TOL
         lhs = (res.p_grid_kw[k] + res.pv_used_kw[k] + res.wind_used_kw[k]
                + res.discharge_kw[k])
-        rhs = res.p_idc_kw[k] + res.charge_kw[k] + res.curtail_kw[k]
+        rhs = res.p_idc_kw[k] + res.charge_kw[k]
         assert lhs == pytest.approx(rhs, abs=1e-6)
     for k in range(res.horizon_steps + 1):
         assert snap.soc_min_kwh - TOL <= res.soc_kwh[k] <= snap.soc_max_kwh + TOL

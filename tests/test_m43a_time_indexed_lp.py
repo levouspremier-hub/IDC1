@@ -145,10 +145,14 @@ def test_energy_and_storage_constraints_hold():
         assert -TOL <= res.wind_used_kw[k] <= pf.wind[k] + TOL
         assert res.charge_kw[k] <= snap.bess_charge_power_max_kw + TOL
         assert res.discharge_kw[k] <= snap.bess_discharge_power_max_kw + TOL
+        # 修正后形式（与 env M3.5 一致）：弃电是未被消费的可再生，不入需求侧
         lhs = (res.p_grid_kw[k] + res.pv_used_kw[k] + res.wind_used_kw[k]
                + res.discharge_kw[k])
-        rhs = res.p_idc_kw[k] + res.charge_kw[k] + res.curtail_kw[k]
+        rhs = res.p_idc_kw[k] + res.charge_kw[k]
         assert lhs == pytest.approx(rhs, abs=1e-6)
+        assert res.curtail_kw[k] == pytest.approx(
+            pf.pv[k] - res.pv_used_kw[k] + pf.wind[k] - res.wind_used_kw[k], abs=1e-6
+        )
     for k in range(res.horizon_steps + 1):
         assert snap.soc_min_kwh - TOL <= res.soc_kwh[k] <= snap.soc_max_kwh + TOL
     for k in range(res.horizon_steps):
