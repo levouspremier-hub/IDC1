@@ -37,11 +37,10 @@ class IDCPriceEnv20D(gym.Env):
     1. 接入 Task 对象，不再把任务本体压缩成聚合队列 Q；
     2. reset() 时重新生成任务，避免上一轮 episode 的任务状态污染下一轮；
     3. Q_t 只作为由 Task.remaining_work 统计得到的积压量；
-    4. step() 内部按小时激活到达任务，并按 FIFO 规则执行任务；
-    5. PPO 动作由 N 个 server-group 执行强度、紧急任务偏好、连续执行偏好和 BESS 动作组成；
-       默认 N=20，因此总维度为 N+3=23；
+    4. step() 内部按小时激活到达任务，并按优先级/期限约束执行任务；
+    5. PPO 动作由 N 个 server-group 计算强度 + 1 个有符号储能动作组成（21 维，默认 N=20）；
     6. observation 维度按 6 + 10 + 6*N + 6*horizon 计算；默认 N=20、horizon=24 时为 280；
-    7. 功耗按实际完成任务量反推实际负载，并加入计划负载预留损耗，避免高计划负载完全无成本；
+    7. 功耗按逐组完成工作/组能力导出实际负载（不再有 α 预留损耗）；
     8. reward 扩展为任务类综合奖励：完成量、完整任务完成、高优先级任务完成、成本、积压、紧急积压、等待、超时、未使用能力、高电价高负载、暂停/恢复和不可暂停中断；
     9. 新增任务启停跟踪：记录任务启动、暂停、恢复与不可暂停任务中断。
 
@@ -256,12 +255,9 @@ class IDCPriceEnv20D(gym.Env):
         self.reward_soc_final_weight = float(reward_soc_final_weight)
         self.reward_grid_peak_weight = float(reward_grid_peak_weight)
 
-        # 5. 动作由 N 个 server-group 执行强度和 3 个额外控制量组成：
-        #    action[0:N]：N 个 server-group 的任务执行强度；
-        #    action[N]：紧急任务偏好，越高越偏向 deadline 近、priority 高的任务；
-        #    action[N+1]：连续执行偏好，越高越偏向继续执行已启动但未完成的任务；
-        #    action[N+2]：BESS 动作；step() 内部将 [0, 1] 线性映射到 [-1, 1]。
-        #    默认 N=20，因此 action_dim=N+3=23。
+        # 5. 动作由 N 个 server-group 计算强度 + 1 个有符号储能动作组成（21 维）：
+        #    action[0:N]：N 个 server-group 的计算强度（[0,1]）；
+        #    action[N]：有符号储能动作（[-1,1]，负充电、正放电）。
         self.server_action_dim = self.model.N
         self.extra_action_dim = 1
         self.action_dim = self.server_action_dim + self.extra_action_dim
@@ -356,6 +352,14 @@ class IDCPriceEnv20D(gym.Env):
         self.total_wind_used_kWh = 0.0
         self.total_wind_curtail_kWh = 0.0
         self.deadline_miss_task_ids = set()
+        # 终止结算账务字段（M3.6）
+        self._settlement_done = False
+        self.terminal_leftover_work = 0.0
+        self.terminal_deadline_miss_count = 0
+        self.terminal_soc_recovery_kwh = 0.0
+        self.terminal_service_violation = 0
+        self.terminal_settlement_penalty = 0.0
+        self.total_objective_cost = 0.0
 
         # 10. 任务启停统计指标
         self.total_pause_count = 0
@@ -510,6 +514,14 @@ class IDCPriceEnv20D(gym.Env):
         self.total_wind_used_kWh = 0.0
         self.total_wind_curtail_kWh = 0.0
         self.deadline_miss_task_ids = set()
+        # 终止结算账务字段（M3.6）
+        self._settlement_done = False
+        self.terminal_leftover_work = 0.0
+        self.terminal_deadline_miss_count = 0
+        self.terminal_soc_recovery_kwh = 0.0
+        self.terminal_service_violation = 0
+        self.terminal_settlement_penalty = 0.0
+        self.total_objective_cost = 0.0
         self.total_pause_count = 0
         self.total_resume_count = 0
         self.total_non_interruptible_interruption_count = 0
@@ -560,16 +572,14 @@ class IDCPriceEnv20D(gym.Env):
         """
         执行一步，也就是推进 1 小时。
 
-        PPO 输入为 [0, 1] 范围内的 N+3 维 flat action：
-            action[0:N] 表示 N 个 server-group 的任务执行强度；
-            action[N] 表示紧急任务偏好；
-            action[N+1] 表示连续执行偏好；
-            action[N+2] 表示 BESS 动作，并在本方法内映射到 [-1, 1]。
+        PPO 输入为 N+1 维 flat action（默认 N=20 时为 21 维）：
+            action[0:N] 表示 N 个 server-group 的计算强度（[0, 1]）；
+            action[N] 表示有符号储能动作（[-1, 1]，负充电、正放电）。
 
         本版处理逻辑：
             1. 动作先转换为计划任务负载和计划处理能力；
-            2. 根据紧急任务偏好和连续执行偏好，引导任务执行顺序；
-            3. 根据实际完成任务量反推实际任务负载；
+            2. 执行前按接入/可再生/储能算功率预算，限缩计划容量后走逐组 A[i,g] 分配；
+            3. 每组实际负载由完成工作/组能力导出；
             4. 用实际负载计算功耗和成本；
             5. Q_t 由 Task.remaining_work 统计得到。
         """
@@ -939,6 +949,12 @@ class IDCPriceEnv20D(gym.Env):
         self.bess_energy_kWh = float(bess_energy_next)
         self.current_step += 1
 
+        # 12b. 终止结算账务（在 info 构建前应用，使扁平字段与累计一致）
+        if terminated:
+            settlement = self._apply_terminal_settlement()
+        else:
+            settlement = None
+
         # 13. 生成下一状态
         if terminated:
             obs = np.zeros(self.observation_space.shape, dtype=np.float32)
@@ -1155,12 +1171,17 @@ class IDCPriceEnv20D(gym.Env):
             "idc_energy_per_task": idc_energy_per_task,
             "carbon_per_task": carbon_per_task,
 
+            "electricity_cost": float(cost_t),
+            "terminal_leftover_work": float(self.terminal_leftover_work),
+            "terminal_deadline_miss_count": int(self.terminal_deadline_miss_count),
+            "terminal_soc_recovery_kwh": float(self.terminal_soc_recovery_kwh),
+            "terminal_service_violation": int(self.terminal_service_violation),
+            "terminal_settlement_penalty": float(self.terminal_settlement_penalty),
+            "total_objective_cost": float(self.total_objective_cost),
+            "settlement": settlement,
             "task_classification": self._compute_task_classification(t),
             **task_metrics,
         }
-
-        if terminated:
-            info["settlement"] = self._terminal_settlement()
 
         return obs, float(reward), terminated, truncated, info
 
@@ -1414,16 +1435,53 @@ class IDCPriceEnv20D(gym.Env):
         P, *_ = self.model.calc_pue_and_total_power(L, np.array([T_amb], dtype=np.float64))
         return float(P[0]) / 1000.0
 
-    def _terminal_settlement(self) -> dict:
-        """M3.6 尾段结算：遗留工作、违约（deadline miss）、恢复库存成本。"""
+    def _apply_terminal_settlement(self) -> dict:
+        """终止结算账务（M3.6 重做）：计算并一次性写入结算字段，只执行一次。
+
+        reward 结算项（r_final_queue / r_soc_final，用于 RL 奖励）、会计结算项
+        （terminal_settlement_penalty 等，用于 episode 汇总与客观目标）、违规记录
+        （terminal_service_violation，标志）三者关系：
+        - reward 项 = -reward_*_weight × 归一化违规（无量纲，仅进 reward）；
+        - 会计项 = 未加权的归一化违规之和（无量纲，进 total_objective_cost）；
+        - 违规记录 = 是否发生任一违规的标志（供评估/报告）。
+        三者互不混用；不把 reward 权重当货币系数。
+        """
+        if self._settlement_done:
+            return {
+                "leftover_work": self.terminal_leftover_work,
+                "deadline_miss_total": self.terminal_deadline_miss_count,
+                "soc_recovery_energy_kwh": self.terminal_soc_recovery_kwh,
+                "service_violation": self.terminal_service_violation,
+                "settlement_penalty": self.terminal_settlement_penalty,
+            }
+
+        leftover = float(self._compute_backlog_work())
+        deadline_miss = int(len(self.deadline_miss_task_ids))
         soc_deviation = abs(self.bess_soc - self.bess_soc_target)
-        recovery_kwh = (
-            max(soc_deviation - self.bess_soc_final_tolerance, 0.0) * self.bess_capacity_kWh
+        soc_excess = max(soc_deviation - self.bess_soc_final_tolerance, 0.0)
+        soc_recovery_kwh = soc_excess * self.bess_capacity_kWh
+
+        leftover_norm = leftover / max(self.queue_ref, 1e-6)
+        deadline_miss_norm = deadline_miss / max(len(self.tasks), 1)
+        settlement_penalty = leftover_norm + deadline_miss_norm + soc_excess
+        service_violation = 1 if (leftover > 1e-9 or deadline_miss > 0 or soc_recovery_kwh > 1e-9) else 0
+
+        self.terminal_leftover_work = leftover
+        self.terminal_deadline_miss_count = deadline_miss
+        self.terminal_soc_recovery_kwh = soc_recovery_kwh
+        self.terminal_service_violation = service_violation
+        self.terminal_settlement_penalty = settlement_penalty
+        self.total_objective_cost = (
+            self.total_cost + self.total_bess_degradation_cost + settlement_penalty
         )
+        self._settlement_done = True
+
         return {
-            "leftover_work": float(self._compute_backlog_work()),
-            "deadline_miss_total": int(len(self.deadline_miss_task_ids)),
-            "soc_recovery_energy_kwh": float(recovery_kwh),
+            "leftover_work": leftover,
+            "deadline_miss_total": deadline_miss,
+            "soc_recovery_energy_kwh": soc_recovery_kwh,
+            "service_violation": service_violation,
+            "settlement_penalty": settlement_penalty,
         }
 
     def _compute_task_classification(self, current_time: int) -> dict:
