@@ -21,7 +21,7 @@ from contracts import CONTRACT_VERSION_ID
 from contracts.models import ScenarioBundle
 
 # 六类预测序列（M1.3a 增补 carbon，与契约字段一一对应）。
-SERIES_KEYS = ("price", "load", "pv", "wind", "temperature", "carbon")
+SERIES_KEYS = ("price", "load", "pv", "wind", "temperature", "carbon", "arrival")
 _REQUIRED_MANIFEST_FIELDS = ("source", "units", "sha256")
 
 __all__ = ["SERIES_KEYS", "ScenarioBundle", "build_scenario", "build_scenario_from_true"]
@@ -75,6 +75,7 @@ def build_scenario_from_true(
         wind_forecast=_window("wind"),
         temperature_forecast=_window("temperature"),
         carbon_forecast=_window("carbon"),
+        arrival_forecast=_window("arrival"),
         source_hashes=source_hashes,
         synthetic=synthetic,
     )
@@ -104,6 +105,7 @@ def _build_synthetic(
             + 0.5 * rng.normal(size=horizon)
         ),
         "carbon": 0.5 + 0.1 * np.sin(2 * np.pi * t / 24.0),
+        "arrival": np.clip(80.0 + 40.0 * np.sin(2 * np.pi * (t - 8.0) / 24.0), 0.0, None),
     }
     source_hashes = {
         "synthetic_seed": str(seed),

@@ -20,6 +20,7 @@ _FORECAST_FIELDS = (
     "wind_forecast",
     "temperature_forecast",
     "carbon_forecast",
+    "arrival_forecast",
 )
 
 
@@ -41,17 +42,42 @@ def validate_scenario(scenario: ScenarioBundle) -> None:
 
 
 def validate_snapshot(snapshot: SystemSnapshot) -> None:
-    """SOC 范围 + 容量/接入非负。"""
+    """规划输入契约校验（M4.1a）：SOC 范围、效率、功率上限、逐组容量与近似系数。"""
     if not (snapshot.soc_min_kwh <= snapshot.soc_kwh <= snapshot.soc_max_kwh):
         raise ValueError(
             f"soc_kwh {snapshot.soc_kwh} 超出 [{snapshot.soc_min_kwh}, {snapshot.soc_max_kwh}]"
         )
+    if snapshot.soc_min_kwh < 0 or snapshot.soc_capacity_kwh <= 0:
+        raise ValueError("soc_min_kwh / soc_capacity_kwh 非法（soc_min_kwh 需 >=0，容量需 >0）")
+    for name in ("bess_charge_efficiency", "bess_discharge_efficiency"):
+        value = getattr(snapshot, name)
+        if not (0.0 < value <= 1.0):
+            raise ValueError(f"{name} efficiency 必须在 (0, 1]，实际 {value}")
+    for name in ("bess_charge_power_max_kw", "bess_discharge_power_max_kw"):
+        value = getattr(snapshot, name)
+        if value < 0:
+            raise ValueError(f"{name} power 上限为负：{value}")
+    if snapshot.bess_degradation_cost_per_kwh < 0:
+        raise ValueError("bess_degradation_cost_per_kwh 为负")
     if any(c < 0 for c in snapshot.group_capacity_kw):
         raise ValueError("group_capacity_kw 含负值")
+    if any(c < 0 for c in snapshot.group_power_coeff_kw_per_work):
+        raise ValueError("group_power_coeff_kw_per_work coeff 含负值")
+    if any(c < 0 for c in snapshot.group_power_upper_kw):
+        raise ValueError("group_power_upper_kw 含负值")
+    if len(snapshot.group_power_coeff_kw_per_work) != len(snapshot.group_capacity_kw):
+        raise ValueError("group_power_coeff_kw_per_work 长度 != 组数")
+    if len(snapshot.base_idc_power_forecast_kw) != snapshot.planning_horizon_steps:
+        raise ValueError("base_idc_power_forecast_kw 长度 != planning_horizon_steps")
     if snapshot.access_limit_kw < 0:
         raise ValueError("access_limit_kw 为负")
     if snapshot.budget_remaining_sgd < 0:
         raise ValueError("budget_remaining_sgd 为负")
+    for task in snapshot.tasks:
+        if task.status == "not_arrived":
+            raise ValueError(f"未来任务 {task.task_id} 不得进入规划快照")
+        if task.max_rate_work_per_step < 0:
+            raise ValueError(f"任务 {task.task_id} max_rate_work_per_step 为负")
 
 
 def validate_dispatch_proposal(proposal: DispatchProposal, snapshot: SystemSnapshot) -> None:

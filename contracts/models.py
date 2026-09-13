@@ -35,6 +35,7 @@ class ScenarioBundle(ContractBase):
     wind_forecast: list[float]
     temperature_forecast: list[float]
     carbon_forecast: list[float]
+    arrival_forecast: list[float]
     source_hashes: dict[str, str]
     synthetic: bool = False
 
@@ -45,6 +46,7 @@ class ScenarioBundle(ContractBase):
         "wind_forecast": "kW",
         "temperature_forecast": "degC",
         "carbon_forecast": "kgCO2/kWh",
+        "arrival_forecast": "work-units/step",
     }
 
     def content_hash(self) -> str:
@@ -60,29 +62,73 @@ class TaskState(ContractBase):
     deadline: int
     priority: float
     status: str
+    max_rate_work_per_step: float
 
-    UNITS: ClassVar[dict[str, str]] = {"remaining_work": "work-units"}
+    UNITS: ClassVar[dict[str, str]] = {
+        "remaining_work": "work-units",
+        "deadline": "step index (latest finish step)",
+        "max_rate_work_per_step": "work-units/step",
+    }
 
 
 class SystemSnapshot(ContractBase):
-    """当前系统状态（供修正器/规划器）。"""
+    """滚动规划输入契约（M4.1a 扩展）。
 
+    注意：`group_capacity_kw` 字段名历史上带 `_kw`，实际存放**逐组 work capacity**
+    （work-units）。为不破坏未授权模块（planning/model.py、planning/corrector.py、
+    safe_rl/corrector.py）其名称保持不变，但声明单位已更正为 `work-units`。
+    """
+
+    # 1. 时间
     step: int
+    delta_t_hours: float
+    planning_horizon_steps: int
+
+    # 2. 储能
     soc_kwh: float
     soc_min_kwh: float
     soc_max_kwh: float
-    group_capacity_kw: list[float]
+    soc_capacity_kwh: float
+    bess_charge_power_max_kw: float
+    bess_discharge_power_max_kw: float
+    bess_charge_efficiency: float
+    bess_discharge_efficiency: float
+    bess_degradation_cost_per_kwh: float
+
+    # 3. 接入与基础负载
     access_limit_kw: float
-    budget_remaining_sgd: float
+    base_idc_power_forecast_kw: list[float]
+
+    # 4/5. 任务与预测
     tasks: list[TaskState]
     forecast: ScenarioBundle
 
+    # 6. 逐组容量与规划用功率线性近似
+    group_capacity_kw: list[float]  # 逐组 work capacity（单位见 UNITS）
+    group_power_coeff_kw_per_work: list[float]
+    group_power_upper_kw: list[float]
+    power_approximation_note: str
+
+    budget_remaining_sgd: float
+
     UNITS: ClassVar[dict[str, str]] = {
+        "step": "step index",
+        "delta_t_hours": "h",
+        "planning_horizon_steps": "steps",
         "soc_kwh": "kWh",
         "soc_min_kwh": "kWh",
         "soc_max_kwh": "kWh",
-        "group_capacity_kw": "kW",
+        "soc_capacity_kwh": "kWh",
+        "bess_charge_power_max_kw": "kW",
+        "bess_discharge_power_max_kw": "kW",
+        "bess_charge_efficiency": "fraction",
+        "bess_discharge_efficiency": "fraction",
+        "bess_degradation_cost_per_kwh": "SGD/kWh",
         "access_limit_kw": "kW",
+        "base_idc_power_forecast_kw": "kW",
+        "group_capacity_kw": "work-units",
+        "group_power_coeff_kw_per_work": "kW/work-unit",
+        "group_power_upper_kw": "kW",
         "budget_remaining_sgd": "SGD",
     }
 
