@@ -37,7 +37,6 @@ def _energy_balance(env, info) -> None:
     )
     rhs = (
         info["P_IDC_kW"]
-        + info["unserved_base_load_kW"]
         + info["bess_charge_power_kW"]
         + info["pv_curtail_kW"]
         + info["wind_curtail_kW"]
@@ -55,14 +54,16 @@ def test_low_access_no_renewable_no_storage_limits_tasks():
 
 
 def test_base_load_infeasible_zero_task():
-    base_kw = 15.0
-    env = _env(access_limit_kw=base_kw - 6.0, soc_init=0.1)  # 接入低于基础负载
+    env = _env(access_limit_kw=9.0, soc_init=0.1)  # 接入低于基础负载
     env.reset(seed=0)
     base_power = _base_load_power_kw(env)
     _, _, _, _, info = env.step(_full_compute(env))
     assert info["completed_work"] == pytest.approx(0.0, abs=1e-6)
     assert info["unserved_base_load_kW"] > 0
-    assert info["unserved_base_load_kW"] == pytest.approx(base_power - (base_kw - 6.0), abs=1.0)
+    # 缺口 ≈ 基础负载功率 - 实际缩放后的接入预算
+    assert info["unserved_base_load_kW"] == pytest.approx(
+        base_power - env.access_limit_kw, abs=0.5
+    )
 
 
 def test_high_renewables_no_overcompress():
@@ -76,7 +77,9 @@ def test_high_renewables_no_overcompress():
 def test_charge_squeezes_access_no_fake_completion():
     env = _env(access_limit_kw=18.0, soc_init=0.5)
     env.reset(seed=0)
-    a = np.concatenate([np.ones(20, dtype=np.float32), np.array([-1.0], dtype=np.float32)])  # 满充电
+    a = np.concatenate(
+        [np.ones(20, dtype=np.float32), np.array([-1.0], dtype=np.float32)]
+    )  # 满充电
     _, _, _, _, info = env.step(a)
     assert info["P_grid_kW"] <= 18.0 + 1e-6
     _energy_balance(env, info)

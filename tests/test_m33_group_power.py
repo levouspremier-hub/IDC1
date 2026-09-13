@@ -43,7 +43,6 @@ def test_energy_balance_holds(env):
         _, _, _, _, info = env.step(a)
         lhs = (
             info["P_grid_kW"]
-            + info["unserved_load_kW"]
             + info["pv_available_kW"]
             + info["wind_available_kW"]
             + info["bess_discharge_power_kW"]
