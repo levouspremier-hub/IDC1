@@ -8,6 +8,8 @@ from idc_model.task import Task
 from planning.model import (
     FAILURE_BASE_SHORTAGE,
     FAILURE_NONE,
+    FAILURE_SOLVER_FAILURE,
+    FAILURE_TIMEOUT,
     solve_time_indexed_lp,
     solve_time_indexed_mip,
 )
@@ -71,18 +73,38 @@ def test_mip_enforces_mutual_exclusion_every_step():
         )
 
 
-def test_lp_may_violate_but_mip_must_not():
-    """同一快照：LP 允许同步充放（松弛），MIP 不允许。"""
+def test_mip_mutual_exclusion_under_storage_pressure():
+    """储能压力场景：MIP 逐步满足 charge×discharge≈0（无条件断言，不做条件式覆盖）。"""
+    snap = build_snapshot(
+        _env(access_limit_kw=25.0, soc_init=0.5, price_high_at=(10, 11, 12, 13))
+    )
+    mip = solve_time_indexed_mip(snap)
+    assert mip.solver_status == "optimal"
+    assert mip.horizon_steps > 1
+    for k in range(mip.horizon_steps):
+        assert mip.charge_kw[k] * mip.discharge_kw[k] == pytest.approx(0.0, abs=TOL)
+    # 该场景确有储能活动（否则断言空洞）
+    assert max(max(mip.charge_kw), max(mip.discharge_kw)) > TOL
+
+
+def test_lp_is_non_executable_relaxation_by_structure():
+    """LP 的松弛是**结构性**的：不含任何互斥约束行；MIP 含 2H 条。
+
+    说明：严格正退化成本 + 有损往返下，LP 最优解不会真的同步充放
+    （同时充放严格劣于同时置零），故此处**不伪造 coflow**，而以约束结构取证。
+    """
     snap = build_snapshot(_env(access_limit_kw=25.0, soc_init=0.5))
     lp = solve_time_indexed_lp(snap)
     mip = solve_time_indexed_mip(snap)
-    if lp.storage_relaxation_active:
-        assert any(
-            c > TOL and d > TOL
-            for c, d in zip(lp.charge_kw, lp.discharge_kw, strict=True)
-        )
-    for k in range(mip.horizon_steps):
-        assert mip.charge_kw[k] * mip.discharge_kw[k] == pytest.approx(0.0, abs=TOL)
+    assert lp.backend == "lp"
+    assert lp.n_integer_variables == 0
+    assert mip.backend == "mip"
+    assert mip.n_integer_variables == mip.horizon_steps
+
+    lp_excl = [k for k in lp.residuals_by_constraint if k.startswith("storage_excl")]
+    mip_excl = [k for k in mip.residuals_by_constraint if k.startswith("storage_excl")]
+    assert lp_excl == []                     # LP 无互斥约束 → 松弛且不可执行
+    assert len(mip_excl) == 2 * mip.horizon_steps  # MIP 每步 2 条互斥约束
 
 
 # --- 2. 物理与结构约束 ---
@@ -226,3 +248,71 @@ def test_mip_feasible_case_classified_none():
     res = solve_time_indexed_mip(build_snapshot(env))
     assert res.failure_class == FAILURE_NONE
     assert res.solver_status == "optimal"
+
+
+# --- 7. 失败路径语义（求解器边界单元测试，不依赖真实超时） ---
+
+def _fake_milp(status: int, x=None):
+    """构造一个假的 scipy.optimize.milp 返回值（仅用于边界测试）。"""
+    class _Res:
+        pass
+
+    r = _Res()
+    r.status = status
+    r.success = status == 0
+    r.message = f"fake status {status}"
+    r.fun = 0.0
+    r.x = x
+    return r
+
+
+def test_mip_time_limit_classified_as_timeout(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=25.0, soc_init=0.5))
+    monkeypatch.setattr(
+        "scipy.optimize.milp", lambda **kw: _fake_milp(1)
+    )
+    res = solve_time_indexed_mip(snap)
+    assert res.solver_status == "time_limit"
+    assert res.failure_class == FAILURE_TIMEOUT          # 不得混入 solver_failure
+    assert res.backend == "mip"
+    assert res.n_integer_variables == res.horizon_steps
+    # 立即零执行返回，不伪造任何执行结果
+    np.testing.assert_allclose(res.allocation, 0.0)
+    assert res.electricity_cost_sgd == 0.0
+    assert res.degradation_cost_sgd == 0.0
+    assert res.total_objective_sgd == 0.0
+    assert all(v == 0.0 for v in res.p_grid_kw)
+    assert all(v == 0.0 for v in res.charge_kw)
+    assert all(v == 0.0 for v in res.discharge_kw)
+    assert res.business_shortfall_work == pytest.approx(
+        sum(t.remaining_work for t in snap.tasks), abs=1e-9
+    )
+
+
+def test_mip_timeout_does_not_run_second_solve(monkeypatch):
+    """timeout 后不得调用 diagnose_base_feasibility（不得再启动第二次求解）。"""
+    import planning.model as mod
+
+    called = {"n": 0}
+    real = mod.diagnose_base_feasibility
+
+    def _spy(snapshot):
+        called["n"] += 1
+        return real(snapshot)
+
+    monkeypatch.setattr(mod, "diagnose_base_feasibility", _spy)
+    monkeypatch.setattr("scipy.optimize.milp", lambda **kw: _fake_milp(1))
+    res = solve_time_indexed_mip(build_snapshot(_env(access_limit_kw=25.0)))
+    assert res.failure_class == FAILURE_TIMEOUT
+    assert called["n"] == 0
+
+
+def test_mip_unknown_status_classified_as_solver_failure(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=25.0, soc_init=0.5))
+    for status in (3, 4):
+        monkeypatch.setattr("scipy.optimize.milp", lambda *a, s=status, **kw: _fake_milp(s))
+        res = solve_time_indexed_mip(snap)
+        assert res.solver_status == "solver_failure"
+        assert res.failure_class == FAILURE_SOLVER_FAILURE
+        np.testing.assert_allclose(res.allocation, 0.0)
+        assert res.electricity_cost_sgd == 0.0
