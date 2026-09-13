@@ -66,8 +66,8 @@ def test_feature_order_documented_and_stable():
 
 
 def test_wind_carbon_refs_are_declared_and_frozen():
-    from pathlib import Path
     import json
+    from pathlib import Path
 
     refs = json.loads(Path("configs/frozen_refs/refs.json").read_text(encoding="utf-8"))
     for key in ("wind_ref_kw", "carbon_factor_ref"):
@@ -162,7 +162,10 @@ def test_old_and_unversioned_checkpoints_rejected(tmp_path):
     torch.save({"state": {}}, str(noversion))
     with pytest.raises(CheckpointVersionError, match="无版本"):
         VersionedCheckpoint.load(
-            noversion, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            noversion,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
@@ -180,7 +183,10 @@ def test_old_obs_dim_not_mixable(tmp_path):
     ckpt.save(path)
     with pytest.raises(CheckpointVersionError, match="obs_dim"):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
