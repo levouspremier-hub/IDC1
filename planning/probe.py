@@ -28,7 +28,7 @@ def main() -> None:
     raw: Any = env.env  # 未包装环境
     action = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
 
-    tracemalloc.start()
+    # --- pass 1：计时（**绝不启用 tracemalloc**） ---
     step_times: list[float] = []
     solve_times: list[float] = []
     stage_a_times: list[float] = []
@@ -48,6 +48,18 @@ def main() -> None:
         )
         reasons.append(str(info.get("correction_reason", "")))
         if terminated or truncated:
+            break
+
+    # --- pass 2：内存采样（**独立 memory-only pass**，结果不作耗时结论） ---
+    tracemalloc.start()
+    mem_env = CorrectorWrapper(
+        IDCPriceEnv20D(), corrector_time_limit_s=probe_corrector_time_limit_s
+    )
+    mem_env.reset(seed=0)
+    mem_horizon = int(getattr(mem_env.env, "horizon", 24))
+    for _ in range(mem_horizon):
+        _, _, term, trunc, _ = mem_env.step(action)
+        if term or trunc:
             break
     _, peak_memory = tracemalloc.get_traced_memory()
     tracemalloc.stop()
@@ -91,27 +103,35 @@ def main() -> None:
             for c, d in zip(mip_result.charge_kw, mip_result.discharge_kw, strict=True)
         ),
         "mip_backend": mip_result.backend,
-        # 以下两项在 tracemalloc 开启状态下测得，被显著膨胀（实测约 6.7×），
-        # **不得**当作真实训练吞吐结论；真实吞吐须在无 tracemalloc 口径下测量（M4.6）。
-        "tracemalloc_instrumented": True,
-        "env_step_mean_s_under_tracemalloc": float(np.mean(step_times)),
-        "env_step_p95_s_under_tracemalloc": float(np.percentile(step_times, 95)),
         "probe_corrector_time_limit_s": probe_corrector_time_limit_s,
         "probe_corrector_time_limit_is_measurement_parameter": True,
-        "corrector_solve_mean_s": float(np.mean(solve_times)),
-        "corrector_solve_p95_s": float(np.percentile(solve_times, 95)),
-        "stage_a_solve_mean_s": float(np.mean(stage_a_times)),
-        "stage_b_solve_mean_s": float(np.mean(stage_b_times)),
-        "corrector_total_mean_s": float(np.mean(total_times)),
-        "corrector_timeout_steps": int(sum(1 for r in reasons if r == "timeout")),
-        "rollout_steps_per_s_under_tracemalloc": float(
-            len(step_times) / max(sum(step_times), 1e-9)
-        ),
-        "throughput_measurement_note": (
-            "本探针启用 tracemalloc，吞吐/步耗时被显著膨胀，仅供同口径相对比较；"
-            "真实训练吞吐须在无 tracemalloc 的口径下重新测量（M4.6）。"
-        ),
-        "peak_memory_bytes": int(peak_memory),
+        # --- 计时口径（无 tracemalloc） ---
+        "timing_without_tracemalloc": {
+            "tracemalloc_active": False,
+            "timer": "time.perf_counter",
+            "env_step_mean_s": float(np.mean(step_times)),
+            "env_step_p95_s": float(np.percentile(step_times, 95)),
+            "corrector_solve_mean_s": float(np.mean(solve_times)),
+            "corrector_solve_p95_s": float(np.percentile(solve_times, 95)),
+            "stage_a_solve_mean_s": float(np.mean(stage_a_times)),
+            "stage_b_solve_mean_s": float(np.mean(stage_b_times)),
+            "corrector_total_mean_s": float(np.mean(total_times)),
+            "corrector_timeout_steps": int(sum(1 for r in reasons if r == "timeout")),
+            "rollout_steps_per_s": float(len(step_times) / max(sum(step_times), 1e-9)),
+            "note": (
+                "本区间不启用 tracemalloc；仅供同口径相对比较，"
+                "不是正式实验结论或 RL 训练吞吐结论。"
+            ),
+        },
+        # --- 内存口径（独立 memory-only pass） ---
+        "memory_with_tracemalloc": {
+            "tracemalloc_active": True,
+            "peak_memory_bytes": int(peak_memory),
+            "note": (
+                "独立 memory-only pass：tracemalloc 会显著膨胀耗时（实测约 6.7×），"
+                "**不得**把本区间的任何耗时/吞吐当作真实值。"
+            ),
+        },
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
 
