@@ -323,16 +323,15 @@ class IDCPriceEnv20D(gym.Env):
         if np.any(self.pv_t < -1e-9):
             raise ValueError("pv_t must be non-negative in kW.")
         self.pv_t = np.maximum(self.pv_t, 0.0)
-        pv_peak_kw = float(np.max(self.pv_t)) if self.pv_t.size else 0.0
-        self.pv_ref_kw = max(float(pv_ref_kw), pv_peak_kw, 1e-6)
-        carbon_factor_peak = float(np.max(self.carbon_factor_t)) if self.carbon_factor_t.size else 0.0
-        self.carbon_factor_ref = max(float(carbon_factor_ref), carbon_factor_peak, 1e-6)
+        # 归一化参考值只取**声明/冻结**尺度（M3.10c），不得与当前序列峰值比较，
+        # 否则等于按 episode 动态重算。输入超出参考值时按裁剪处理，见 forecast_clipping()。
+        self.pv_ref_kw = max(float(pv_ref_kw), 1e-6)
+        self.carbon_factor_ref = max(float(carbon_factor_ref), 1e-6)
         self.allow_pv_export = bool(allow_pv_export)
         if self.allow_pv_export:
             raise ValueError("allow_pv_export=True is not supported in this first PV integration.")
         self.wt_t = self._validate_time_series("wt_t", wt_t) if wt_t is not None else np.zeros(self.horizon)
-        wind_peak_kw = float(np.max(self.wt_t)) if self.wt_t.size else 0.0
-        self.wind_ref_kw = max(float(wind_ref_kw), wind_peak_kw, 1e-6)
+        self.wind_ref_kw = max(float(wind_ref_kw), 1e-6)
 
         # 8. 运行状态变量会在 reset() 中初始化
         self.current_step = 0
@@ -1119,6 +1118,8 @@ class IDCPriceEnv20D(gym.Env):
             "P_bus_net_kW": float(P_bus_net_kW),
             "P_grid_kW": float(P_grid_kW),
             "access_limit_kw": float(self.access_limit_kw),
+            "normalization_refs": self.normalization_refs(),
+            "forecast_clipping": self.forecast_clipping(t),
             "unserved_base_load_kW": float(unserved_base_load_kW),
             "unserved_task_power_kW": float(unserved_task_power_kW),
             "access_curtailment_work": float(access_curtailment_work),
@@ -1866,17 +1867,52 @@ class IDCPriceEnv20D(gym.Env):
 
         return np.clip(features, 0.0, 1.5).astype(np.float32)
 
+    def normalization_refs(self) -> dict:
+        """当前运行环境实际使用的归一化参考值（可审计，M3.10c）。"""
+        return {
+            "price_ref": float(self.price_ref),
+            "lambda_ref": float(self.lambda_ref),
+            "pv_ref_kw": float(self.pv_ref_kw),
+            "wind_ref_kw": float(self.wind_ref_kw),
+            "carbon_factor_ref": float(self.carbon_factor_ref),
+            "source": "declared_frozen",
+        }
+
+    def forecast_clipping(self, t: int | None = None) -> dict:
+        """可见窗口内被裁剪的特征计数（M3.10c）：输入超参考值只裁剪，不改参考值。"""
+        step = int(self.current_step if t is None else t)
+        start, end = visible_window_slice(step, self.forecast_cutoff, self.horizon)
+        eps = 1e-6
+
+        def _count(series, ref) -> int:
+            vals = np.asarray(series, dtype=np.float64)[start:end] / max(float(ref), eps)
+            return int(np.sum(np.abs(vals) > 1.5))
+
+        return {
+            "price": _count(self.price_t, self.price_ref),
+            "temperature": _count(self.T_amb, 40.0),
+            "arrival": _count(self.task_arrival_forecast, self.lambda_ref),
+            "pv": _count(self.pv_t, self.pv_ref_kw),
+            "wind": _count(self.wt_t, self.wind_ref_kw),
+            "carbon": _count(self.carbon_factor_t, self.carbon_factor_ref),
+        }
+
     def _get_forecast_features(self) -> np.ndarray:
         """
-        构造覆盖整个 horizon 的固定前瞻特征，共 6 * horizon 维。
+        构造覆盖整个 horizon 的固定前瞻特征，共 8 * horizon 维。
 
-        本版本不使用滚动窗口，而是每一步都提供同一组完整 horizon 外部时序信息：
-        1. 分时电价 price_t；
-        2. 环境温度 T_amb；
-        3. 任务到达量 forecast（与环境内部真实到达曲线隔离）；
-        4. 光伏可用出力 pv_t；
-        5. 小时时间编码 time_sin；
-        6. 小时时间编码 time_cos。
+        固定顺序（M3.10b/M3.10c）：
+        1. 分时电价 price_t / price_ref；
+        2. 环境温度 T_amb / 40；
+        3. 任务到达量 forecast（与环境内部真实到达曲线隔离）/ lambda_ref；
+        4. 光伏可用出力 pv_t / pv_ref_kw；
+        5. 风电可用出力 wt_t / wind_ref_kw；
+        6. 碳强度 carbon_factor_t / carbon_factor_ref；
+        7. 小时时间编码 time_sin；
+        8. 小时时间编码 time_cos。
+
+        可见性：仅暴露 [t, t + forecast_cutoff)（M3.10a 统一定义），其余位置置零。
+        归一化参考值只取声明/冻结尺度（M3.10c），超界只做裁剪，见 `forecast_clipping()`。
 
         这些变量属于已知/可预测的外部条件，不包含未来队列、未来任务完成状态、
         未来服务器真实负载等由 PPO 动作决定的结果，避免未来信息泄露。
@@ -1926,10 +1962,10 @@ class IDCPriceEnv20D(gym.Env):
         return np.clip(forecast_features, -1.5, 1.5).astype(np.float32)
 
     def _get_obs(self):
-        """构造底层状态向量：6 + 10 + 6*N + 6*horizon 维。
+        """构造底层状态向量：6 + 10 + 6*N + 8*horizon 维。
 
-        默认 N=20、horizon=24 时为 280 维：136 维当前特征和
-        144 维完整 horizon 前瞻特征。GridCoupledEnv 的 8 维 grid
+        默认 N=20、horizon=24 时为 328 维：136 维当前特征和
+        192 维前瞻特征（8 组 × horizon）。GridCoupledEnv 的 8 维 grid
         observation 不属于本方法，由外层 wrapper 在此向量末尾追加。
         """
         t = self.current_step

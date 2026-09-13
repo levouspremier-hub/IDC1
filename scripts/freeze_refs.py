@@ -21,6 +21,7 @@ DECLARED_REFS = {
     "peak_power_ref_kW": 10.0,
     "grid_power_limit_kW": 18.0,
     "sla_penalty_ref": 50.0,
+    "pv_ref_kw": 1.0,  # 光伏容量尺度（kW）
     "wind_ref_kw": 1.0,  # 风电容量尺度（kW），与 pv_ref_kw 同口径声明
     "carbon_factor_ref": 1.0,  # 碳强度尺度（kgCO2/kWh）
 }
@@ -37,6 +38,7 @@ REF_UNITS = {
     "peak_power_ref_kW": "kW",
     "grid_power_limit_kW": "kW",
     "sla_penalty_ref": "SGD",
+    "pv_ref_kw": "kW",
     "wind_ref_kw": "kW",
     "carbon_factor_ref": "kgCO2/kWh",
 }

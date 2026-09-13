@@ -13,11 +13,13 @@ from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from contracts import CONTRACT_VERSION_ID
+
 
 class ContractBase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = Field(default="contract-v2")
+    schema_version: str = Field(default=CONTRACT_VERSION_ID)
 
 
 class ScenarioBundle(ContractBase):

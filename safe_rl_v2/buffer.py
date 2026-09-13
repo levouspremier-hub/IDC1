@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-CONTRACT_VERSION = "contract-v2"
+from contracts import CONTRACT_VERSION_ID
+
+CONTRACT_VERSION = CONTRACT_VERSION_ID  # 唯一版本源（M3.10c）
 ACTION_DIM = 21  # 20 compute + 1 signed storage
 
 

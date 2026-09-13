@@ -12,7 +12,9 @@ from typing import Any
 
 import torch
 
-CURRENT_CONTRACT_VERSION = "contract-v2"
+from contracts import CONTRACT_VERSION_ID
+
+CURRENT_CONTRACT_VERSION = CONTRACT_VERSION_ID  # 唯一版本源（M3.10c）
 CURRENT_ACTION_DIM = 21  # 20 compute + 1 signed storage
 
 
