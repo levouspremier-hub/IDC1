@@ -86,7 +86,9 @@ def test_wrapper_regression_raw_exec_and_backend():
         corrector_time_limit_s=5.0,
     )
     env.reset(seed=0)
-    raw = np.concatenate([np.full(N_GROUP, 0.6, dtype=np.float32), np.array([0.1], dtype=np.float32)])
+    raw = np.concatenate(
+        [np.full(N_GROUP, 0.6, dtype=np.float32), np.array([0.1], dtype=np.float32)]
+    )
     _, _, _, _, info = env.step(raw)
     np.testing.assert_allclose(np.asarray(info["raw_action"]), raw, atol=0.0)
     assert np.asarray(info["exec_action"]).shape == (N_GROUP + 1,)
@@ -103,8 +105,9 @@ def test_no_legacy_module_importable_at_runtime():
     """子进程再确认一次（避免仅在进程内缓存影响）。"""
     out = subprocess.run(
         ["uv", "run", "python", "-c",
-         "import importlib,sys;"
-         "sys.exit(0 if importlib.util.find_spec('safe_rl.corrector') is None else 1)"],
+         "import importlib.util, sys;"
+         "spec = importlib.util.find_spec('safe_rl.corrector');"
+         "sys.exit(0 if spec is None else 1)"],
         capture_output=True, text=True,
     )
     assert out.returncode == 0, out.stderr
