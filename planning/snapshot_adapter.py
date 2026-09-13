@@ -10,13 +10,23 @@ from __future__ import annotations
 
 import numpy as np
 
-from contracts.models import ScenarioBundle, SystemSnapshot, TaskState
+from contracts.models import (
+    PlanningExogenousForecast,
+    ScenarioBundle,
+    SystemSnapshot,
+    TaskState,
+)
 from envs.idc_price_env import visible_window_slice
 
 PLANNING_HORIZON_CAP = 24
 POWER_APPROXIMATION_NOTE = (
     "规划近似：逐组功率由基础负载功耗与逐组 work capacity 线性化得到；"
     "执行前后必须由环境物理链复核。"
+)
+EXTENSION_POLICY = (
+    "窗口外规划假设（[t, t+forecast_cutoff) 之外，不读未来真值）："
+    "pv/wind -> 0（保守）；price/carbon/temperature -> 最后可见值持久化；"
+    "arrival -> 0（未来具体任务不进入规划）；base_idc_power -> 按持久化温度重算。"
 )
 _DEFAULT_PLANNING_HORIZON = 24
 
@@ -35,19 +45,54 @@ def _planning_horizon(env, cap: int = PLANNING_HORIZON_CAP) -> int:
     return max(min(cap, remaining), 0)
 
 
-def _base_power_forecast(env, t: int, cutoff: int, n_steps: int) -> list[float]:
-    """基础负载 IDC 功率预测（kW）：窗口内用真实温度；窗口外用最后可见温度持久化。"""
-    base_load = np.clip(env.base_load, 0.0, 1.0)
+def _planning_extension(
+    env, t: int, cutoff: int, n_steps: int
+) -> tuple[dict[str, list[float]], list[bool], list[bool]]:
+    """时域展开（M4.1c）：窗口内取可见真值，窗口外按 `EXTENSION_POLICY` 假设。
+
+    返回 (各外生量向量, visible_mask, assumed_mask)。窗口外**不读取任何真值**。
+    """
     horizon = int(env.horizon)
-    last_visible = min(t + cutoff - 1, horizon - 1) if cutoff > 0 else t
-    last_visible = max(last_visible, t)
-    out: list[float] = []
-    for k in range(n_steps):
-        idx = t + k
-        idx = idx if idx < t + cutoff and idx < horizon else last_visible
-        idx = min(max(idx, 0), horizon - 1)
-        out.append(env._idc_power_kw(base_load, env.T_amb[idx]))
-    return out
+    start, end = visible_window_slice(t, cutoff, horizon)
+    n_visible = min(end - start, n_steps)  # 尾部按实际 planning_horizon_steps 截断
+    visible_mask = [k < n_visible for k in range(n_steps)]
+    assumed_mask = [not v for v in visible_mask]
+
+    def _series(values) -> list[float]:
+        arr = np.asarray(values, dtype=np.float64)
+        return [float(arr[t + k]) for k in range(n_visible)]
+
+    price_v = _series(env.price_t)
+    pv_v = _series(env.pv_t)
+    wind_v = _series(env.wt_t)
+    temp_v = _series(env.T_amb)
+    carbon_v = _series(env.carbon_factor_t)
+    arrival_v = _series(env.task_arrival_forecast)
+
+    # 持久化基准 = 最后一个可见值；若窗口为空则由调用方在此之前拒绝（cutoff<=0）。
+    last_price = price_v[-1] if price_v else 0.0
+    last_temp = temp_v[-1] if temp_v else 0.0
+    last_carbon = carbon_v[-1] if carbon_v else 0.0
+
+    base_load = np.clip(env.base_load, 0.0, 1.0)
+    vectors: dict[str, list[float]] = {
+        "price": list(price_v),
+        "pv": list(pv_v),
+        "wind": list(wind_v),
+        "temperature": list(temp_v),
+        "carbon": list(carbon_v),
+        "arrival": list(arrival_v),
+        "base_idc_power": [env._idc_power_kw(base_load, temp) for temp in temp_v],
+    }
+    for _ in range(n_visible, n_steps):
+        vectors["price"].append(last_price)
+        vectors["pv"].append(0.0)          # 保守
+        vectors["wind"].append(0.0)        # 保守
+        vectors["temperature"].append(last_temp)
+        vectors["carbon"].append(last_carbon)
+        vectors["arrival"].append(0.0)     # 未来具体任务不进入规划
+        vectors["base_idc_power"].append(env._idc_power_kw(base_load, last_temp))
+    return vectors, visible_mask, assumed_mask
 
 
 def build_snapshot(env) -> SystemSnapshot:
@@ -55,6 +100,11 @@ def build_snapshot(env) -> SystemSnapshot:
     t = int(env.current_step)
     horizon = int(env.horizon)
     cutoff = int(getattr(env, "forecast_cutoff", 4))
+    if cutoff <= 0:
+        raise ValueError(
+            f"forecast_cutoff={cutoff} 非法：无可见窗口时拒绝构建滚动规划快照"
+            "（不得读取 t 时刻真值填补）。"
+        )
     n_steps = _planning_horizon(env)
 
     tasks = [
@@ -86,6 +136,21 @@ def build_snapshot(env) -> SystemSnapshot:
         synthetic=True,
     )
 
+    vectors, visible_mask, assumed_mask = _planning_extension(env, t, cutoff, n_steps)
+    planning_forecast = PlanningExogenousForecast(
+        horizon_steps=n_steps,
+        price=vectors["price"],
+        pv=vectors["pv"],
+        wind=vectors["wind"],
+        temperature=vectors["temperature"],
+        carbon=vectors["carbon"],
+        arrival=vectors["arrival"],
+        base_idc_power=vectors["base_idc_power"],
+        visible_mask=visible_mask,
+        assumed_mask=assumed_mask,
+        extension_policy=EXTENSION_POLICY,
+    )
+
     c_server = np.asarray(env.model.C_server, dtype=np.float64)
     p_max_kw = np.asarray(env.model.P_max, dtype=np.float64) / 1000.0
     p_idle_kw = np.asarray(env.model.P_idle, dtype=np.float64) / 1000.0
@@ -105,9 +170,10 @@ def build_snapshot(env) -> SystemSnapshot:
         bess_discharge_efficiency=float(env.bess_discharge_efficiency),
         bess_degradation_cost_per_kwh=float(env.bess_degradation_cost_per_kWh),
         access_limit_kw=float(env.access_limit_kw),
-        base_idc_power_forecast_kw=_base_power_forecast(env, t, cutoff, n_steps),
+        base_idc_power_forecast_kw=vectors["base_idc_power"],
         tasks=tasks,
         forecast=forecast,
+        planning_forecast=planning_forecast,
         group_work_capacity=[float(c) for c in c_server],
         group_power_coeff_kw_per_work=[float(c) for c in coeff],
         group_power_upper_kw=[float(p) for p in p_max_kw],

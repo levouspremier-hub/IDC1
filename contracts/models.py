@@ -71,12 +71,48 @@ class TaskState(ContractBase):
     }
 
 
-class SystemSnapshot(ContractBase):
-    """滚动规划输入契约（M4.1a 扩展）。
+class PlanningExogenousForecast(ContractBase):
+    """规划时域外生量展开（M4.1c）：长度严格等于 `planning_horizon_steps`。
 
-    注意：`group_work_capacity` 字段名历史上带 `_kw`，实际存放**逐组 work capacity**
-    （work-units）。为不破坏未授权模块（planning/model.py、planning/corrector.py、
-    safe_rl/corrector.py）其名称保持不变，但声明单位已更正为 `work-units`。
+    这不是真实未来预测：`visible_mask` 标记真实可见段（来自 `SystemSnapshot.forecast`），
+    `assumed_mask` 标记按 `extension_policy` 生成的规划假设段（窗口外）。
+    """
+
+    horizon_steps: int
+    price: list[float]
+    pv: list[float]
+    wind: list[float]
+    temperature: list[float]
+    carbon: list[float]
+    arrival: list[float]
+    base_idc_power: list[float]
+    visible_mask: list[bool]
+    assumed_mask: list[bool]
+    extension_policy: str
+
+    UNITS: ClassVar[dict[str, str]] = {
+        "horizon_steps": "steps",
+        "price": "SGD/kWh",
+        "pv": "kW",
+        "wind": "kW",
+        "temperature": "degC",
+        "carbon": "kgCO2/kWh",
+        "arrival": "work-units/step",
+        "base_idc_power": "kW",
+        "visible_mask": "bool",
+        "assumed_mask": "bool",
+    }
+
+
+class SystemSnapshot(ContractBase):
+    """滚动规划输入契约（M4.1a/M4.1b/M4.1c 扩展）。
+
+    `group_work_capacity` 为逐组 **work capacity**（work-units）；规划用的功率线性近似见
+    `group_power_coeff_kw_per_work` / `group_power_upper_kw`，二者须由环境物理链复核。
+
+    `forecast` 是**真实可见预测**（长度 `forecast_cutoff`）；
+    `planning_forecast` 是按时域展开的**规划假设**（长度 `planning_horizon_steps`），
+    其窗口外取值不是真实预测，不得当作真值使用。
     """
 
     # 1. 时间
@@ -102,6 +138,7 @@ class SystemSnapshot(ContractBase):
     # 4/5. 任务与预测
     tasks: list[TaskState]
     forecast: ScenarioBundle
+    planning_forecast: PlanningExogenousForecast
 
     # 6. 逐组容量与规划用功率线性近似
     group_work_capacity: list[float]  # 逐组 work capacity（单位见 UNITS）

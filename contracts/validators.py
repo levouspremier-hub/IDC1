@@ -8,10 +8,55 @@ from __future__ import annotations
 from contracts.models import (
     DispatchProposal,
     DispatchResult,
+    PlanningExogenousForecast,
     ScenarioBundle,
     SystemSnapshot,
     TaskAllocation,
 )
+
+_PLANNING_VECTORS = (
+    "price",
+    "pv",
+    "wind",
+    "temperature",
+    "carbon",
+    "arrival",
+    "base_idc_power",
+)
+# 窗口外必须保守为 0 的量（M4.1c）
+_ASSUMED_ZERO_VECTORS = ("pv", "wind", "arrival")
+
+
+def validate_planning_forecast(
+    planning: PlanningExogenousForecast, expected_steps: int
+) -> None:
+    """规划时域外生量校验（M4.1c）。"""
+    if planning.horizon_steps != expected_steps:
+        raise ValueError(
+            f"planning_forecast.horizon_steps {planning.horizon_steps} != {expected_steps}"
+        )
+    lengths = {name: len(getattr(planning, name)) for name in _PLANNING_VECTORS}
+    lengths["visible_mask"] = len(planning.visible_mask)
+    lengths["assumed_mask"] = len(planning.assumed_mask)
+    if set(lengths.values()) != {expected_steps}:
+        raise ValueError(f"planning_forecast 向量长度不一致或 != horizon_steps：{lengths}")
+    if not planning.extension_policy:
+        raise ValueError("planning_forecast.extension_policy 不可为空")
+    for name in _PLANNING_VECTORS:
+        if name not in PlanningExogenousForecast.UNITS:
+            raise ValueError(f"planning_forecast 缺少单位声明: {name}")
+    for idx, (visible, assumed) in enumerate(
+        zip(planning.visible_mask, planning.assumed_mask, strict=True)
+    ):
+        if visible == assumed:
+            raise ValueError(f"planning_forecast mask 非互补：index {idx}")
+    for name in _ASSUMED_ZERO_VECTORS:
+        values = getattr(planning, name)
+        for idx, assumed in enumerate(planning.assumed_mask):
+            if assumed and values[idx] != 0.0:
+                raise ValueError(
+                    f"planning_forecast.{name} 在假设段必须为 0（index {idx}），实际 {values[idx]}"
+                )
 
 _FORECAST_FIELDS = (
     "price_forecast",
@@ -96,6 +141,11 @@ def validate_snapshot(snapshot: SystemSnapshot) -> None:
         if task.remaining_work < 0:
             raise ValueError(f"任务 {task.task_id} remaining_work 为负")
     validate_scenario(snapshot.forecast)
+    validate_planning_forecast(snapshot.planning_forecast, snapshot.planning_horizon_steps)
+    if snapshot.planning_forecast.base_idc_power != snapshot.base_idc_power_forecast_kw:
+        raise ValueError(
+            "planning_forecast.base_idc_power 与 base_idc_power_forecast_kw 不一致（疑似静默分叉）"
+        )
 
 
 def validate_dispatch_proposal(proposal: DispatchProposal, snapshot: SystemSnapshot) -> None:
