@@ -78,9 +78,14 @@ def test_timeout_counted_as_zero_action_fallback(small_report):
 
 
 def test_timeout_not_counted_as_success(small_report):
+    """timeout 不计为 executable candidate；三类结果互斥且完备。"""
     for scenario in ("normal", "tight"):
         for entry in small_report["scenarios"][scenario]["budgets"].values():
-            assert entry["timeout_count"] + entry["optimal_count"] <= entry["n_steps"]
+            assert entry["n_steps"] == (
+                entry["executable_candidate_count"]
+                + entry["timeout_count"]
+                + entry["non_timeout_failure_count"]
+            )
 
 
 # --- 候选预算比较表 ---
@@ -135,7 +140,9 @@ def test_raw_baseline_uses_same_scenario_config():
 def test_scenario_config_reported(small_report):
     for scenario in ("normal", "tight"):
         cfg = small_report["scenarios"][scenario]["scenario_config"]
-        assert set(cfg) == {"access_limit_kw", "access_limit_kw_declared", "bess_soc_init", "horizon"}
+        assert set(cfg) == {
+            "access_limit_kw", "access_limit_kw_declared", "bess_soc_init", "horizon",
+        }
         assert cfg["horizon"] == 4
 
 
