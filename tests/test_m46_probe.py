@@ -114,3 +114,18 @@ def test_probe_output_has_no_legacy_fields():
     assert not any(k.startswith("legacy_single_step_milp") for k in report), report.keys()
     for key in ("lp_backend", "mip_backend", "mip_n_integer", "corrector_total_mean_s"):
         assert key in report, key
+
+
+def test_probe_throughput_is_labelled_as_tracemalloc_instrumented():
+    """吞吐与步耗时在 tracemalloc 下测得，必须显式标注口径，不得冒充真实训练吞吐。"""
+    out = subprocess.run(
+        ["uv", "run", "python", "-m", "planning.probe"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    report = json.loads(out)
+    assert report["tracemalloc_instrumented"] is True
+    assert "rollout_steps_per_s_under_tracemalloc" in report
+    assert "throughput_measurement_note" in report
+    # 不得再以未标注的名字输出吞吐/步耗时
+    assert "rollout_steps_per_s" not in report
+    assert "env_step_mean_s" not in report

@@ -91,8 +91,11 @@ def main() -> None:
             for c, d in zip(mip_result.charge_kw, mip_result.discharge_kw, strict=True)
         ),
         "mip_backend": mip_result.backend,
-        "env_step_mean_s": float(np.mean(step_times)),
-        "env_step_p95_s": float(np.percentile(step_times, 95)),
+        # 以下两项在 tracemalloc 开启状态下测得，被显著膨胀（实测约 6.7×），
+        # **不得**当作真实训练吞吐结论；真实吞吐须在无 tracemalloc 口径下测量（M4.6）。
+        "tracemalloc_instrumented": True,
+        "env_step_mean_s_under_tracemalloc": float(np.mean(step_times)),
+        "env_step_p95_s_under_tracemalloc": float(np.percentile(step_times, 95)),
         "probe_corrector_time_limit_s": probe_corrector_time_limit_s,
         "probe_corrector_time_limit_is_measurement_parameter": True,
         "corrector_solve_mean_s": float(np.mean(solve_times)),
@@ -101,7 +104,13 @@ def main() -> None:
         "stage_b_solve_mean_s": float(np.mean(stage_b_times)),
         "corrector_total_mean_s": float(np.mean(total_times)),
         "corrector_timeout_steps": int(sum(1 for r in reasons if r == "timeout")),
-        "rollout_steps_per_s": float(len(step_times) / max(sum(step_times), 1e-9)),
+        "rollout_steps_per_s_under_tracemalloc": float(
+            len(step_times) / max(sum(step_times), 1e-9)
+        ),
+        "throughput_measurement_note": (
+            "本探针启用 tracemalloc，吞吐/步耗时被显著膨胀，仅供同口径相对比较；"
+            "真实训练吞吐须在无 tracemalloc 的口径下重新测量（M4.6）。"
+        ),
         "peak_memory_bytes": int(peak_memory),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
