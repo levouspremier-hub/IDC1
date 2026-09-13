@@ -397,3 +397,56 @@ def test_resume_path_is_deterministic_across_repeats(monkeypatch):
 
     assert_rounds_equivalent(outputs[0][0], outputs[1][0])
     assert outputs[0][1] == outputs[1][1]
+
+
+# --- 5. 回归：真实持久化路径（磁盘往返）下的恢复等价性 ----------------------
+
+def test_resume_through_json_roundtrip_is_equivalent(monkeypatch):
+    """检查点经 JSON 序列化往返（真实落盘形态）后，恢复仍须与连续路径一致。
+
+    内存里直接传 dict 与「写盘再读回」在数值类型上可能不同
+    （int/float 保真、键序、NaN 等），真实 checkpoint 走的是后者。
+    """
+    lag_cont = fresh()
+    run_round(monkeypatch, lag_cont, 0)
+    on_disk = json.loads(json.dumps(lag_cont.state_dict()))
+    cont = run_round(monkeypatch, lag_cont, 1)
+
+    lag_resumed = fresh()
+    lag_resumed.load_state_dict(on_disk)
+    resumed = run_round(monkeypatch, lag_resumed, 1)
+
+    assert_rounds_equivalent(cont, resumed)
+    assert lag_resumed.state_dict() == lag_cont.state_dict()
+    # 往返后的 state 必须与连续侧逐位一致（含 updates 的整数类型）
+    assert isinstance(on_disk["updates"], int)
+    assert json.loads(json.dumps(lag_cont.state_dict())) == lag_cont.state_dict()
+
+
+def test_resume_from_a_capped_history_is_equivalent(monkeypatch):
+    """乘子被 max_multiplier 截断后的检查点，恢复语义同样必须等价。"""
+    capped_specs = (
+        ConstraintSpec(
+            name="business", budget=0.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=1.0, max_multiplier=1.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=0.0, unit=UNIT_KG_CO2E,
+            learning_rate=1.0, max_multiplier=1.0,
+        ),
+    )
+    lag_cont = Lagrangian(capped_specs)
+    for _ in range(3):
+        run_round(monkeypatch, lag_cont, 0)
+    assert lag_cont.multipliers() == {"business": 1.0, "carbon": 1.0}
+    checkpoint = json.loads(json.dumps(lag_cont.state_dict()))
+
+    cont = run_round(monkeypatch, lag_cont, 1)
+
+    lag_resumed = Lagrangian(capped_specs)
+    lag_resumed.load_state_dict(checkpoint)
+    resumed = run_round(monkeypatch, lag_resumed, 1)
+
+    assert_rounds_equivalent(cont, resumed)
+    assert lag_resumed.state_dict() == lag_cont.state_dict()
+    assert lag_resumed.multipliers() == {"business": 1.0, "carbon": 1.0}  # 仍在上限
