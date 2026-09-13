@@ -6,7 +6,6 @@ import pytest
 from envs.idc_price_env import IDCPriceEnv20D, decompose_supply
 from idc_model.task import Task
 
-
 # --- 纯分解测试 ---
 
 def test_decompose_base_insufficient():
@@ -89,8 +88,14 @@ def test_env_energy_balance_and_grid_limit():
     a = np.concatenate([np.full(20, 0.7, dtype=np.float32), np.array([0.3], dtype=np.float32)])
     for _ in range(5):
         _, _, _, _, info = env.step(a)
-        lhs = info["P_grid_kW"] + info["pv_available_kW"] + info["wind_available_kW"] + info["bess_discharge_power_kW"]
-        rhs = info["P_IDC_served_kW"] + info["bess_charge_power_kW"] + info["pv_curtail_kW"] + info["wind_curtail_kW"]
+        lhs = (
+            info["P_grid_kW"] + info["pv_available_kW"] + info["wind_available_kW"]
+            + info["bess_discharge_power_kW"]
+        )
+        rhs = (
+            info["P_IDC_served_kW"] + info["bess_charge_power_kW"]
+            + info["pv_curtail_kW"] + info["wind_curtail_kW"]
+        )
         assert lhs == pytest.approx(rhs, rel=1e-5, abs=1e-5)
         assert info["P_grid_kW"] <= 16.0 + 1e-6
 
