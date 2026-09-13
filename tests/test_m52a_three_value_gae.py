@@ -386,3 +386,98 @@ def test_masks_are_keyword_only():
     for name in ("terminated", "truncated"):
         assert sig.parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
         assert sig.parameters[name].default is inspect.Parameter.empty
+
+
+# --- 7. 回归：跨 episode 的分解不变量（独立于递推实现的交叉验证）---
+
+SIGNAL_5 = [1.0, 2.0, 3.0, 4.0]
+VALUES_5 = [0.1, 0.2, 0.3, 0.4, 0.5]
+GAMMA, LAM = 0.9, 0.8
+# 第 1 步是 episode A 的末步（终止或截断），第 2、3 步属于 episode B
+EPISODE_A = slice(0, 2)
+EPISODE_B = slice(2, 4)
+
+
+@pytest.mark.parametrize(
+    "terminated,truncated",
+    [
+        ([False, True, False, False], [False, False, False, False]),   # 中间步终止
+        ([False, False, False, False], [False, True, False, False]),   # 中间步截断
+    ],
+)
+def test_mid_rollout_boundary_decomposition(terminated, truncated):
+    """跨 episode 边界时，逐 episode 单独计算的结果必须与整段 rollout 一致。
+
+    这是对边界处理（bootstrap 掩码 + 递推中断）的**独立**交叉验证：
+    它不依赖递推实现本身，只依赖「episode 之间互不影响」这一语义。
+    """
+    term, trunc = _masks(4, terminated=terminated, truncated=truncated)
+    adv, tgt = models.compute_signal_gae(
+        SIGNAL_5, VALUES_5, terminated=term, truncated=trunc, gamma=GAMMA, lam=LAM
+    )
+
+    # episode A 单独计算（其末步的 bootstrap 来自 values[2]）
+    a_term, a_trunc = _masks(2, terminated=[False, True] if terminated[1] else [False, False],
+                             truncated=[False, True] if truncated[1] else [False, False])
+    adv_a, tgt_a = models.compute_signal_gae(
+        SIGNAL_5[EPISODE_A], VALUES_5[0:3],
+        terminated=a_term, truncated=a_trunc, gamma=GAMMA, lam=LAM,
+    )
+
+    # episode B 单独计算（非终止 run-out）
+    b_term, b_trunc = _masks(2)
+    adv_b, tgt_b = models.compute_signal_gae(
+        SIGNAL_5[EPISODE_B], VALUES_5[2:5],
+        terminated=b_term, truncated=b_trunc, gamma=GAMMA, lam=LAM,
+    )
+
+    np.testing.assert_allclose(adv[:2], adv_a)
+    np.testing.assert_allclose(tgt[:2], tgt_a)
+    np.testing.assert_allclose(adv[2:], adv_b)
+    np.testing.assert_allclose(tgt[2:], tgt_b)
+
+
+def test_mid_rollout_boundary_decomposition_has_teeth():
+    """若边界不生效（把边界步当作普通步），分解结果必须不同。"""
+    term, trunc = _masks(4, terminated=[False, True, False, False])
+    adv_boundary, _ = models.compute_signal_gae(
+        SIGNAL_5, VALUES_5, terminated=term, truncated=trunc, gamma=GAMMA, lam=LAM
+    )
+    term_f, trunc_f = _masks(4)  # 反事实：把边界步当普通步
+    no_mask, _ = models.compute_signal_gae(
+        SIGNAL_5, VALUES_5, terminated=term_f, truncated=trunc_f, gamma=GAMMA, lam=LAM
+    )
+    assert not np.allclose(adv_boundary, no_mask)
+
+
+def test_all_ones_gamma_lambda_with_zero_signal_is_zero():
+    term, trunc = _masks(3)
+    adv, tgt = models.compute_signal_gae(
+        [0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0],
+        terminated=term, truncated=trunc, gamma=1.0, lam=1.0,
+    )
+    np.testing.assert_array_equal(adv, np.zeros(3))
+    np.testing.assert_array_equal(tgt, np.zeros(3))
+
+
+def test_returns_exactly_the_three_named_heads():
+    term, trunc = _masks(2)
+    values = _values3(np.zeros(3), np.zeros(3), np.zeros(3))
+    out = models.compute_three_value_targets(
+        np.ones(2), np.ones(2), np.ones(2), values,
+        terminated=term, truncated=trunc, gamma=0.5, lam=0.5,
+    )
+    assert set(out) == set(models.SIGNAL_HEADS) == {"reward", "business", "carbon"}
+
+
+def test_module_exposes_only_the_two_mask_requiring_apis():
+    """不得再出现任何无掩码的 GAE 入口。"""
+    assert set(models.__all__) == {"compute_signal_gae", "compute_three_value_targets"}
+    for name in dir(models):
+        if name.startswith("_"):
+            continue
+        obj = getattr(models, name)
+        if not callable(obj):
+            continue
+        params = inspect.signature(obj).parameters
+        assert "terminated" in params and "truncated" in params, f"{name} 缺少终端掩码"
