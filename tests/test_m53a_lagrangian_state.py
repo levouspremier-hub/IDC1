@@ -421,3 +421,94 @@ def test_failed_load_does_not_mutate_existing_state():
         lag.load_state_dict(bad)
 
     assert lag.state_dict() == before
+
+
+# --- 6. 回归：演化是状态的纯函数，且约束间真正独立 ---
+
+def test_aggregation_is_mean_not_sum_or_count():
+    """[1,1,1,1] 与 [1] 的每 transition mean 相同；若误用 sum/count 则不同。"""
+    four = make_lagrangian()
+    one = make_lagrangian()
+    four.update({"business": [1.0, 1.0, 1.0, 1.0], "carbon": [2.0]})
+    one.update({"business": [1.0], "carbon": [2.0]})
+    assert four.constraints["business"].estimate == one.constraints["business"].estimate == 1.0
+    assert four.state_dict()["constraints"] == one.state_dict()["constraints"]
+
+
+def test_evolution_is_a_pure_function_of_state_and_batches():
+    """同一初始状态 + 同一批序列，必须产生逐位相同的最终状态。"""
+    batches = [
+        {"business": [9.0, 11.0], "carbon": [13.0, 17.0]},
+        {"business": [4.0], "carbon": [1.0]},
+        {"business": [6.0, 6.0, 6.0], "carbon": [3.0, 5.0]},
+    ]
+    a, b = make_lagrangian(), make_lagrangian()
+    for batch in batches:
+        assert a.update(batch) == b.update(batch)
+    assert a.state_dict() == b.state_dict()
+
+
+def test_recovery_then_continue_matches_uninterrupted_run():
+    """中途落盘 → 恢复 → 继续，必须与不中断的演化逐位一致。"""
+    batches = [
+        {"business": [9.0], "carbon": [13.0]},
+        {"business": [7.0, 8.0], "carbon": [2.0, 4.0]},
+        {"business": [5.0], "carbon": [3.0]},
+    ]
+    straight = make_lagrangian()
+    for batch in batches:
+        straight.update(batch)
+
+    paused = make_lagrangian()
+    paused.update(batches[0])
+    resumed = make_lagrangian()
+    resumed.load_state_dict(paused.state_dict())
+    for batch in batches[1:]:
+        resumed.update(batch)
+
+    assert resumed.state_dict() == straight.state_dict()
+
+
+def test_one_constraint_never_influences_the_other():
+    """改动 business 的批次序列，carbon 的全部轨迹必须逐位不变（反之亦然）。"""
+    carbon_batches = [[13.0], [17.0, 19.0], [1.0]]
+
+    def run(business_batches):
+        lag = make_lagrangian()
+        for biz, car in zip(business_batches, carbon_batches, strict=True):
+            lag.update({"business": biz, "carbon": car})
+        return lag
+
+    a = run([[9.0], [7.0], [5.0]])
+    b = run([[999.0], [0.0, 0.0, 0.0], [-1000.0]])
+
+    assert a.constraints["carbon"].log == b.constraints["carbon"].log
+    assert a.constraints["carbon"].estimate == b.constraints["carbon"].estimate
+    assert a.constraints["business"].log != b.constraints["business"].log
+
+    # 反向：改动 carbon 批次，business 轨迹不变
+    c = make_lagrangian()
+    for car in [[13.0], [999.0], [-1.0]]:
+        c.update({"business": [9.0], "carbon": car})
+    d = make_lagrangian()
+    for car in [[13.0], [0.0], [0.0]]:
+        d.update({"business": [9.0], "carbon": car})
+    assert c.constraints["business"].log == d.constraints["business"].log
+
+
+def test_state_dict_is_json_serializable():
+    import json
+
+    lag = make_lagrangian()
+    lag.update({"business": [9.0, 11.0], "carbon": [13.0]})
+    assert isinstance(json.dumps(lag.state_dict()), str)
+
+
+def test_load_accepts_multiplier_exactly_at_bounds():
+    """边界值必须被接受：0 与 max_multiplier 都是合法状态。"""
+    state = _valid_state()
+    state["constraints"]["business"]["multiplier"] = 0.0
+    state["constraints"]["carbon"]["multiplier"] = 20.0  # carbon 的 max_multiplier
+    restored = make_lagrangian()
+    restored.load_state_dict(state)
+    assert restored.multipliers() == {"business": 0.0, "carbon": 20.0}
