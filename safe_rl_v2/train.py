@@ -1,17 +1,21 @@
-"""M5.1c 训练入口：dry-run 更新，**唯一数据来源**是 contract-v6 `RolloutBuffer`。
+"""M5.1c / M5.2b 训练入口：dry-run 更新，**唯一数据来源**是 contract-v6 `RolloutBuffer`。
 
 定位不变：只验证「真实采集 → 一次更新」闭环可跑通，**不因短训练奖励高而宣称有效**。
 
 **本模块不是 PPO**：没有 ratio、没有 clip、没有熵项。
-GAE 与拉格朗日乘子仍是 M5.4 的占位实现，按任务卡 M5.1c §4.1 与 §5.4
-列为 **M5.2 / M5.3 待重建**内容。**不得**据此宣称训练有效、收敛或任何性能结论。
+拉格朗日乘子仍是 M5.4 的占位实现，按任务卡 M5.2b §3 列为 **M5.3 待重建**内容。
+**不得**据此宣称训练有效、收敛或任何性能改善。
 
 红线：
 - 采样只经 `collect_rollout`；raw 动作**原样**执行，**不存在** `_clip_action`；
-- 可导 likelihood 只对 buffer 的 `raw_action` 计算
-  （`evaluate_raw_actions`），**绝不对 `exec_action` 求概率**；
-- `old_raw_log_prob` 是**旧策略审计值**，不进入任何损失项；
-- 业务违规量 / 碳排放量 / 电费**分别**取自 buffer 具名字段，不混单位；
+- 三套 critic target 的**每一个输入**都来自 buffer 的具名字段
+  （`observation` / `next_observation` / `terminated` / `truncated` /
+  `reward` / `business_cost` / `carbon_cost`），不回读 env 内部数组或未来真值；
+- bootstrap **只**读 buffer 最后一条 `next_observation` 的 critic value，
+  是否使用由 `terminated` 掩码决定，调用方不自行判断；
+- critic loss 逐头对应各自 target，三个独立 MSE，不混列、不共享、不以电费顶替；
+- actor likelihood 只对 buffer 的 `raw_action` 计算（`evaluate_raw_actions`），
+  **绝不对 `exec_action` 求概率**；`old_raw_log_prob` 是**旧策略审计值**，不进入损失；
 - 不使用 `info.get(..., 0)` 之类默认值；环境字段缺失在采集期直接报错；
 - 不重新播种全局 Torch RNG：采样随机性由调用方传入的 `generator` 决定。
 """
@@ -29,6 +33,26 @@ from safe_rl_v2.rollout import collect_rollout
 
 # 可导 likelihood 的来源（供审计断言，不参与计算）
 LOG_PROB_SOURCE = "evaluate_raw_actions(raw_action)"
+# 三套 target 的唯一来源（M5.2a 的终端感知 API）
+TARGETS_SOURCE = "compute_three_value_targets(terminated=, truncated=)"
+
+GAMMA = 0.99
+LAM = 0.95
+
+# 单位口径（M5.2a §5）：业务违规量是**每步活跃逾期 SLA 违规计数**，
+# rollout 内累计为「违规任务·步」；碳排放为 kgCO2e；电费为 SGD。三者不得混算。
+METRIC_UNITS = {
+    "reward": "dimensionless",
+    "business_violations": "violation_task_steps",
+    "carbon_emissions": "kgCO2e",
+    "electricity_cost_sgd": "SGD",
+}
+
+_CLAIMS = {
+    "trained": False,
+    "performance_evaluated": False,
+    "convergence_claimed": False,
+}
 
 
 def dry_run_update(
@@ -43,11 +67,7 @@ def dry_run_update(
     seed: int = 0,
     generator: torch.Generator | None = None,
 ) -> dict:
-    """短 dry rollout + 一次更新。返回三套 value、乘子、损耗与**真实采集**的 buffer。
-
-    observation / raw_action / reward / 业务违规量 / 碳排放量 / 终止状态全部取自
-    `collect_rollout` 写入的 buffer，不再自行采集。
-    """
+    """短 dry rollout + 一次更新。返回三套 value、乘子、损耗与**真实采集**的 buffer。"""
     buffer = RolloutBuffer()
     stats = collect_rollout(
         env,
@@ -79,19 +99,21 @@ def dry_run_update(
         [t.electricity_cost_sgd for t in buffer.transitions], dtype=np.float64
     )
     terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
+    truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
 
-    # bootstrap 用最后一步的 next_observation；终止步不 bootstrap
-    bootstrap_is_terminal = bool(terminals[-1])
-    next_observation = torch.as_tensor(
+    # bootstrap：唯一来源是 buffer 最后一条 next_observation；是否使用由 terminated 掩码
+    # 在 compute_three_value_targets 内部决定（此处只在终止时置零，避免无谓的 forward）
+    bootstrap_terminal = bool(terminals[-1])
+    bootstrap_next_observation = torch.as_tensor(
         buffer.transitions[-1].next_observation, dtype=torch.float32
     )
 
     with torch.no_grad():
-        _, final_values = policy.forward(next_observation)
+        _, final_values = policy.forward(bootstrap_next_observation)
         v_reward = np.zeros(n_steps + 1)
         v_business = np.zeros(n_steps + 1)
         v_carbon = np.zeros(n_steps + 1)
-        if not bootstrap_is_terminal:
+        if not bootstrap_terminal:
             v_reward[-1] = float(final_values[0])
             v_business[-1] = float(final_values[1])
             v_carbon[-1] = float(final_values[2])
@@ -106,6 +128,10 @@ def dry_run_update(
         business_violations,
         carbon_emissions,
         {"reward": v_reward, "business": v_business, "carbon": v_carbon},
+        terminated=terminals,
+        truncated=truncations,
+        gamma=GAMMA,
+        lam=LAM,
     )
 
     adv_reward = torch.tensor(targets["reward"][0], dtype=torch.float32)
@@ -117,12 +143,20 @@ def dry_run_update(
     log_probs = policy.evaluate_raw_actions(obs, raw_actions)
     _, values = policy.forward(obs)
 
-    actor_loss = -(adv_reward * log_probs).mean()
+    # 逐头对应的 critic loss：三个独立 MSE，分别上报，不混列
+    critic_loss_by_head = {
+        "reward": (values[:, 0] - tgt_reward).pow(2).mean(),
+        "business": (values[:, 1] - tgt_business).pow(2).mean(),
+        "carbon": (values[:, 2] - tgt_carbon).pow(2).mean(),
+    }
     critic_loss = (
-        (values[:, 0] - tgt_reward).pow(2).mean()
-        + (values[:, 1] - tgt_business).pow(2).mean()
-        + (values[:, 2] - tgt_carbon).pow(2).mean()
+        critic_loss_by_head["reward"]
+        + critic_loss_by_head["business"]
+        + critic_loss_by_head["carbon"]
     )
+
+    # actor 项沿用 M5.4 占位语义（本卡不引入 ratio/clip/熵项）
+    actor_loss = -(adv_reward * log_probs).mean()
     loss = actor_loss + critic_loss
 
     optimizer.zero_grad()
@@ -136,7 +170,7 @@ def dry_run_update(
     )
 
     return {
-        # --- 既有键（M5.4 语义保持不变）---
+        # --- 既有键（M5.1c/M5.4 语义保持不变）---
         "actor_loss": float(actor_loss.item()),
         "critic_loss": float(critic_loss.item()),
         "reward_value": float(values[0, 0].item()),
@@ -144,7 +178,7 @@ def dry_run_update(
         "carbon_value": float(values[0, 2].item()),
         "multipliers": lagrangian.multipliers(),
         "corrector_on": corrector_on,
-        # --- M5.1c 采集链证据（**不是**训练结论）---
+        # --- 采集链证据（**不是**训练结论）---
         "buffer": buffer,
         "stats": stats,
         "steps_collected": n_steps,
@@ -157,5 +191,17 @@ def dry_run_update(
         "electricity_cost_sum_sgd": float(np.sum(electricity_costs)),
         "env_seed": stats["env_seed"],
         "policy_rng_source": stats["policy_rng_source"],
-        "bootstrap_is_terminal": bootstrap_is_terminal,
+        "bootstrap_is_terminal": bootstrap_terminal,
+        # --- M5.2b：三套 target 的来源与口径 ---
+        "targets_source": TARGETS_SOURCE,
+        "gae": {"gamma": GAMMA, "lam": LAM},
+        "bootstrap": {
+            "terminal": bootstrap_terminal,
+            "source": "buffer_last_next_observation",
+            "used": not bootstrap_terminal,
+        },
+        "critic_loss_by_head": {head: float(v.item()) for head, v in critic_loss_by_head.items()},
+        "critic_targets": {head: pair[1] for head, pair in targets.items()},
+        "units": dict(METRIC_UNITS),
+        "claims": dict(_CLAIMS),
     }
