@@ -3,6 +3,7 @@ import gymnasium as gym
 from gymnasium import spaces
 
 from idc_model.task_model import IDCEnergyTaskModel
+from idc_model.allocation import allocate_tasks
 from idc_model.task_forecast import (
     SYNTHETIC_FORECAST_SOURCE,
     generate_task_arrival_forecast,
@@ -1180,7 +1181,28 @@ class IDCPriceEnv20D(gym.Env):
         - continuity_preference 控制对已启动未完成任务的连续执行偏向；
         - 当两个偏好都很低时，排序退化为 FIFO。
         """
-        remaining_capacity = np.maximum(np.asarray(planned_capacity_vec, dtype=np.float64), 0.0)
+        active_tasks = [
+            task for task in self.tasks
+            if task.status in ["waiting", "running", "paused"]
+            and task.remaining_work > 1e-6
+        ]
+
+        # 显式 A[i,g] 分配（M3.2 接线）：任务摘要 + 每任务最大速率（workload/duration）
+        summaries = [
+            {
+                "task_id": str(task.task_id),
+                "remaining_work": float(task.remaining_work),
+                "max_rate": float(task.workload / max(int(task.duration), 1)),
+                "priority": float(task.priority),
+                "deadline": int(task.latest_finish_time),
+                "arrival": int(task.arrival_time),
+            }
+            for task in active_tasks
+        ]
+        allocation = allocate_tasks(
+            summaries, [float(c) for c in np.asarray(planned_capacity_vec, dtype=np.float64)]
+        )
+
         completed_by_group = np.zeros(self.model.N, dtype=np.float64)
         completed_this_hour = 0.0
         newly_finished_count = 0
@@ -1188,67 +1210,25 @@ class IDCPriceEnv20D(gym.Env):
         resume_count_this_step = 0
         executed_task_ids = set()
 
-        active_tasks = [
-            task for task in self.tasks
-            if task.status in ["waiting", "running", "paused"]
-            and task.remaining_work > 1e-6
-        ]
-
-        scored_tasks = []
-        for task in active_tasks:
-            score = self._task_selection_score(
-                task=task,
-                current_time=current_time,
-                urgent_preference=urgent_preference,
-                continuity_preference=continuity_preference,
-            )
-            scored_tasks.append((score, task))
-
-        # 得分高的优先；得分相同则按 FIFO。
-        scored_tasks.sort(
-            key=lambda item: (
-                -item[0],
-                item[1].arrival_time,
-                item[1].task_id,
-            )
-        )
-        ordered_tasks = [task for _, task in scored_tasks]
-
-        for task in ordered_tasks:
-            total_available = float(remaining_capacity.sum())
-            if total_available <= 1e-6:
-                break
+        for idx, task in enumerate(active_tasks):
+            row = allocation.matrix[idx]
+            task_work = float(sum(row))
+            for g in range(self.model.N):
+                completed_by_group[g] += row[g]
+            if task_work <= 1e-9:
+                continue
 
             before_status = task.status
-
-            # 如果任务之前被暂停，本小时重新获得算力，则记为恢复。
             if bool(getattr(task, "is_paused", False)):
                 task.resume_count = int(getattr(task, "resume_count", 0)) + 1
                 self.total_resume_count += 1
                 resume_count_this_step += 1
                 task.is_paused = False
 
-            actual_work = task.execute(
-                work_amount=total_available,
-                current_time=current_time,
-            )
-
+            actual_work = task.execute(work_amount=task_work, current_time=current_time)
             if actual_work > 1e-9:
                 executed_task_ids.add(task.task_id)
                 task.last_executed_time = int(current_time)
-
-            # 将 actual_work 按组序贪心分配到各组剩余容量（逐组记账）
-            remaining_to_allocate = float(actual_work)
-            for g in range(self.model.N):
-                if remaining_to_allocate <= 1e-9:
-                    break
-                if remaining_capacity[g] <= 1e-6:
-                    continue
-                take = min(remaining_to_allocate, float(remaining_capacity[g]))
-                remaining_capacity[g] -= take
-                completed_by_group[g] += take
-                remaining_to_allocate -= take
-
             completed_this_hour += actual_work
 
             if before_status != "finished" and task.status == "finished":
