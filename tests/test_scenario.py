@@ -25,6 +25,7 @@ def _true_arrays(horizon: int = 24) -> dict[str, np.ndarray]:
         "wind": np.clip(np.cos(t / 5.0), 0.0, None),
         "temperature": 28.0 + np.zeros(horizon),
         "carbon": 0.5 + 0.01 * t,
+        "arrival": 80.0 + 5.0 * t,
     }
 
 

@@ -29,6 +29,7 @@ def _scenario(**overrides) -> ScenarioBundle:
         pv_forecast=[0.0] * 6,
         wind_forecast=[0.0] * 6,
         temperature_forecast=[28.0] * 6,
+        arrival_forecast=[0.0] * 6,
         carbon_forecast=[0.0] * 6,
         source_hashes={"a": "x"},
     )
@@ -39,9 +40,19 @@ def _scenario(**overrides) -> ScenarioBundle:
 def _snapshot(**overrides) -> SystemSnapshot:
     kwargs = dict(
         step=0,
+        delta_t_hours=1.0,
+        planning_horizon_steps=24,
         soc_kwh=50.0,
         soc_min_kwh=10.0,
         soc_max_kwh=90.0,
+        soc_capacity_kwh=100.0,
+        bess_charge_power_max_kw=20.0,
+        bess_discharge_power_max_kw=20.0,
+        bess_charge_efficiency=0.95,
+        bess_discharge_efficiency=0.95,
+        bess_degradation_cost_per_kwh=0.02,
+        base_idc_power_forecast_kw=[14.0] * 24,
+        power_approximation_note="planning approximation; verify with env physics chain",
         group_capacity_kw=[1.0] * 20,
         access_limit_kw=18.0,
         budget_remaining_sgd=100.0,
@@ -49,6 +60,9 @@ def _snapshot(**overrides) -> SystemSnapshot:
         forecast=_scenario(),
     )
     kwargs.update(overrides)
+    n_group = len(kwargs["group_capacity_kw"])  # type: ignore[arg-type]
+    kwargs.setdefault("group_power_coeff_kw_per_work", [0.01] * n_group)
+    kwargs.setdefault("group_power_upper_kw", [0.7] * n_group)
     return SystemSnapshot(**kwargs)  # type: ignore[arg-type]
 
 

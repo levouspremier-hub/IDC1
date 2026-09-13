@@ -25,6 +25,7 @@ def _scenario(source_hashes: dict[str, str] | None = None) -> ScenarioBundle:
         pv_forecast=[0.0] * 6,
         wind_forecast=[0.0] * 6,
         temperature_forecast=[28.0] * 6,
+        arrival_forecast=[0.0] * 6,
         carbon_forecast=[0.0] * 6,
         source_hashes=source_hashes or {"a": "x", "b": "y"},
     )
@@ -82,11 +83,24 @@ def test_nested_roundtrip():
         soc_min_kwh=10.0,
         soc_max_kwh=90.0,
         group_capacity_kw=[1.0] * 20,
+        delta_t_hours=1.0,
+        planning_horizon_steps=24,
+        soc_capacity_kwh=100.0,
+        bess_charge_power_max_kw=20.0,
+        bess_discharge_power_max_kw=20.0,
+        bess_charge_efficiency=0.95,
+        bess_discharge_efficiency=0.95,
+        bess_degradation_cost_per_kwh=0.02,
+        base_idc_power_forecast_kw=[14.0] * 24,
+        group_power_coeff_kw_per_work=[0.01] * 1,
+        group_power_upper_kw=[0.7] * 1,
+        power_approximation_note="planning approximation; verify with env physics chain",
         access_limit_kw=18.0,
         budget_remaining_sgd=100.0,
         tasks=[
             TaskState(
-                task_id="t0", remaining_work=10.0, deadline=5, priority=1.0, status="backlog"
+                task_id="t0", remaining_work=10.0, deadline=5, priority=1.0,
+                status="backlog", max_rate_work_per_step=2.0,
             )
         ],
         forecast=_scenario(),

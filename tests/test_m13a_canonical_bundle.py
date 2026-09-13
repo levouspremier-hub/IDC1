@@ -32,6 +32,7 @@ def _true(horizon: int = 24) -> dict[str, np.ndarray]:
         "wind": np.clip(np.cos(t / 5.0), 0.0, None),
         "temperature": 28.0 + np.zeros(horizon),
         "carbon": 0.5 + 0.01 * t,
+        "arrival": 80.0 + 5.0 * t,
     }
 
 
@@ -79,7 +80,7 @@ def test_from_true_requires_six_series():
     b = build_scenario_from_true("train", "s", 24, 4, _true(24), synthetic=True)
     assert isinstance(b, contracts.ScenarioBundle)
     assert len(b.carbon_forecast) == 4
-    assert set(SERIES_KEYS) == {"price", "load", "pv", "wind", "temperature", "carbon"}
+    assert set(SERIES_KEYS) == {"price", "load", "pv", "wind", "temperature", "carbon", "arrival"}
 
 
 # --- 3. contracts.validators 显式拒绝 ---

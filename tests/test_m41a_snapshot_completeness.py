@@ -3,6 +3,7 @@
 import numpy as np
 import pytest
 import torch
+from pydantic import ValidationError
 
 from checkpointing import CURRENT_CONTRACT_VERSION, CheckpointVersionError, VersionedCheckpoint
 from contracts import CONTRACT_VERSION_ID
@@ -23,7 +24,7 @@ BESS_FIELDS = (
     "bess_degradation_cost_per_kwh",
 )
 ACCESS_ONLY_FIELDS = ("access_limit_kw", "base_idc_power_forecast_kw")
-GROUP_FIELDS = ("group_work_capacity", "group_power_coeff_kw_per_work", "group_power_upper_kw")
+GROUP_FIELDS = ("group_capacity_kw", "group_power_coeff_kw_per_work", "group_power_upper_kw")
 
 
 def _env(cutoff: int = CUTOFF, t: int = 0, horizon: int = HORIZON) -> IDCPriceEnv20D:
@@ -58,7 +59,7 @@ def test_units_declared_for_new_fields():
         assert field in SystemSnapshot.UNITS, f"{field} 未声明单位"
     assert SystemSnapshot.UNITS["delta_t_hours"] == "h"
     assert SystemSnapshot.UNITS["bess_charge_efficiency"] == "fraction"
-    assert SystemSnapshot.UNITS["group_work_capacity"] == "work-units"
+    assert SystemSnapshot.UNITS["group_capacity_kw"] == "work-units"
     assert SystemSnapshot.UNITS["group_power_coeff_kw_per_work"] == "kW/work-unit"
     assert SystemSnapshot.UNITS["group_power_upper_kw"] == "kW"
 
@@ -107,8 +108,9 @@ def test_validator_rejects_bad_snapshot(update, match):
 
 
 def test_validator_rejects_missing_field():
-    with pytest.raises(Exception):
-        SystemSnapshot(**{k: v for k, v in _valid_snapshot_kwargs().items() if k != "delta_t_hours"})
+    kwargs = {k: v for k, v in _valid_snapshot_kwargs().items() if k != "delta_t_hours"}
+    with pytest.raises(ValidationError):
+        SystemSnapshot(**kwargs)
 
 
 # --- 3. 基础负载预测与功耗模型一致 ---
@@ -172,7 +174,7 @@ def test_forecast_uses_visible_window_and_padding():
 def test_active_task_max_rate_matches_env_definition():
     env = _env(t=0)
     snap = build_snapshot(env)
-    by_id = {t.task_id: t for t in env.tasks if t.status != "not_arrived"}
+    by_id = {str(t.task_id): t for t in env.tasks if t.status != "not_arrived"}
     for task in snap.tasks:
         src = by_id[task.task_id]
         expected = float(src.workload / max(int(src.duration), 1))
@@ -208,7 +210,10 @@ def test_unversioned_checkpoint_rejected(tmp_path):
     torch.save({"state": {}}, str(path))
     with pytest.raises(CheckpointVersionError, match="无版本"):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
