@@ -49,7 +49,7 @@ def test_low_access_no_renewable_no_storage_limits_tasks():
     env.reset(seed=0)
     _, _, _, _, info = env.step(_full_compute(env))
     assert info["P_grid_kW"] <= 15.0 + 1e-6
-    assert info["business_gap_work"] > 0  # 业务缺口非零（任务被限缩）
+    assert info["access_curtailment_work"] > 0  # 接入投影导致的任务削减非零
     assert info["unserved_base_load_kW"] == pytest.approx(0.0, abs=1e-6)
 
 

@@ -34,4 +34,4 @@ def test_access_limit_gap_recorded():
     _, _, _, _, info = env.step(a)
     assert "unserved_base_load_kW" in info
     assert info["unserved_base_load_kW"] >= 0.0
-    assert "business_gap_work" in info
+    assert "access_curtailment_work" in info
