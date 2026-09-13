@@ -32,6 +32,11 @@ SCENARIOS = {
     "tight": {"access_limit_kw": 18.0, "soc_init": 0.25},
 }
 
+# 可执行候选的 correction_reason（其余非 timeout 者一律视为失败）
+EXECUTABLE_REASONS = {"none", "deadline_shortfall"}
+# failure_counts 必须覆盖的键（未知原因也归入 non_timeout_failure 并累加到 unknown）
+FAILURE_KEYS = ("timeout", "base_shortage", "solver_failure", "proposal_invalid", "unknown")
+
 N_GROUP = 20
 DEFAULT_SEEDS = [0, 1, 2]
 DEFAULT_EPISODES = 1
@@ -52,14 +57,34 @@ def _stats(values: list[float]) -> dict:
     }
 
 
+def make_scenario_env(scenario: str, horizon: int):
+    """按 scenario 配置构建环境——**raw baseline 与 wrapper 共用同一工厂**，保证可比。"""
+    cfg = SCENARIOS[scenario]
+    return IDCPriceEnv20D(
+        horizon=horizon,
+        access_limit_kw=cfg["access_limit_kw"],
+        bess_soc_init=cfg["soc_init"],
+    )
+
+
+def classify_outcome(reason: str) -> str:
+    """把 correction_reason 分类为三类互斥结果之一。"""
+    if reason in EXECUTABLE_REASONS:
+        return "executable_candidate"
+    if reason == "timeout":
+        return "timeout"
+    return "non_timeout_failure"
+
+
 def _action() -> np.ndarray:
     return np.concatenate(
         [np.full(N_GROUP, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)]
     )
 
 
-def _measure_raw_env(seed: int, horizon: int, warmup: int) -> list[float]:
-    env = IDCPriceEnv20D(horizon=horizon)
+def _measure_raw_env(scenario: str, seed: int, horizon: int, warmup: int) -> list[float]:
+    """raw baseline：与 wrapper **完全相同的 scenario 配置与 action**。"""
+    env = make_scenario_env(scenario, horizon)
     env.reset(seed=seed)
     a = _action()
     for _ in range(warmup):
@@ -76,25 +101,21 @@ def _measure_raw_env(seed: int, horizon: int, warmup: int) -> list[float]:
 
 def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
                     episodes: int, horizon: int, warmup: int) -> dict:
-    cfg = SCENARIOS[scenario]
+    executable_count = 0
     wrapper_times: list[float] = []
     corrector_times: list[float] = []
     stage_a: list[float] = []
     stage_b: list[float] = []
-    timeout_count = 0
-    optimal_count = 0
+    failure_counts = {k: 0 for k in FAILURE_KEYS}
     zero_action_count = 0
+    unsafe_failure_action_count = 0
     business_gap_sum = 0.0
     n_steps = 0
 
     for seed in seeds:
         for ep in range(episodes):
             env = CorrectorWrapper(
-                IDCPriceEnv20D(
-                    horizon=horizon,
-                    access_limit_kw=cfg["access_limit_kw"],
-                    bess_soc_init=cfg["soc_init"],
-                ),
+                make_scenario_env(scenario, horizon),
                 corrector_time_limit_s=float(budget_s),
             )
             env.reset(seed=seed + ep)
@@ -108,13 +129,19 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
                 n_steps += 1
 
                 reason = str(info.get("correction_reason", ""))
-                if reason == "timeout":
-                    timeout_count += 1
-                    zero_action_count += 1   # timeout 即安全零动作回退
+                outcome = classify_outcome(reason)
+                is_zero_action = bool(
+                    np.allclose(np.asarray(info.get("exec_action", [])), 0.0)
+                )
+                if outcome == "executable_candidate":
+                    executable_count += 1
                 else:
-                    optimal_count += 1
-                if np.allclose(np.asarray(info.get("exec_action", [])), 0.0):
-                    zero_action_count += 1 if reason != "timeout" else 0
+                    failure_counts[reason if reason in failure_counts else "unknown"] += 1
+                    if is_zero_action:
+                        zero_action_count += 1
+                    else:
+                        # 失败类别却发送非零动作 → 违规，必须为 0
+                        unsafe_failure_action_count += 1
                 business_gap_sum += float(info.get("business_gap", 0.0))
 
                 corrector_times.append(float(info.get("correction_solve_time_s", 0.0)))
@@ -124,6 +151,10 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
                     break
 
     total = max(sum(wrapper_times), 1e-9)
+    timeout_count = failure_counts["timeout"]
+    non_timeout_failure_count = sum(
+        v for k, v in failure_counts.items() if k != "timeout"
+    )
     return {
         "budget_s": float(budget_s),
         "n_steps": n_steps,
@@ -132,10 +163,13 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
         "stage_a": _stats(stage_a),
         "stage_b": _stats(stage_b),
         "steps_per_s": float(len(wrapper_times) / total),
+        "executable_candidate_count": executable_count,
         "timeout_count": timeout_count,
         "timeout_rate": float(timeout_count / max(n_steps, 1)),
-        "optimal_count": optimal_count,
+        "non_timeout_failure_count": non_timeout_failure_count,
+        "failure_counts": dict(failure_counts),
         "zero_action_fallback_count": zero_action_count,
+        "unsafe_failure_action_count": unsafe_failure_action_count,
         "business_gap_sum": float(business_gap_sum),
     }
 
@@ -176,8 +210,16 @@ def run_benchmark(
     for scenario in scenarios:
         raw_times: list[float] = []
         for seed in seeds:
-            raw_times.extend(_measure_raw_env(seed, horizon, warmup_steps))
+            raw_times.extend(_measure_raw_env(scenario, seed, horizon, warmup_steps))
+        cfg = SCENARIOS[scenario]
+        probe_env = make_scenario_env(scenario, horizon)
         entry = {
+            "scenario_config": {
+                "access_limit_kw": float(probe_env.access_limit_kw),
+                "access_limit_kw_declared": float(cfg["access_limit_kw"]),
+                "bess_soc_init": float(probe_env.bess_soc_init),
+                "horizon": horizon,
+            },
             "raw_env_step": _stats(raw_times),
             "budgets": {
                 f"{b:.2f}": _measure_budget(
