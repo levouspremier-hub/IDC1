@@ -589,7 +589,84 @@ class IDCPriceEnv20D(gym.Env):
         # 4. 当前小时新任务到达
         self._activate_arrivals(current_time=t)
 
-        # 5. 根据动作中的任务偏好执行任务，并记录任务暂停/恢复事件
+        # 5. 执行前物理可行性投影（M3.7a）：先由可见可再生 + SOC/功率边界修正后的储能
+        #    功率 + access_limit 算出计算负载的物理功率预算，据此限缩 planned_capacity_vec。
+        # 5a. 执行储能功率（SOC/功率边界修正，不含 no-export 限制）
+        if bess_raw_action < 0.0:
+            desired_bess_charge_power_kW = abs(bess_raw_action) * self.bess_charge_power_max_kW
+            desired_bess_discharge_power_kW = 0.0
+        else:
+            desired_bess_charge_power_kW = 0.0
+            desired_bess_discharge_power_kW = bess_raw_action * self.bess_discharge_power_max_kW
+
+        max_charge_energy_by_soc = max(
+            (self.bess_soc_max - self.bess_soc) * self.bess_capacity_kWh, 0.0
+        )
+        max_discharge_energy_by_soc = max(
+            (self.bess_soc - self.bess_soc_min) * self.bess_capacity_kWh, 0.0
+        )
+        charge_power_limit_by_soc = max_charge_energy_by_soc / max(
+            self.delta_t_hours * self.bess_charge_efficiency, 1e-6
+        )
+        discharge_power_limit_by_soc = (
+            max_discharge_energy_by_soc * self.bess_discharge_efficiency / max(self.delta_t_hours, 1e-6)
+        )
+        bess_charge_power_kW = min(
+            desired_bess_charge_power_kW, self.bess_charge_power_max_kW, charge_power_limit_by_soc
+        )
+        bess_discharge_power_kW = min(
+            desired_bess_discharge_power_kW, self.bess_discharge_power_max_kW, discharge_power_limit_by_soc
+        )
+
+        # 5b. 可再生能源可用量
+        pv_available_kW = max(pv_now, 0.0)
+        wind_available_kW = max(wt_now, 0.0)
+
+        # 5c. 基础负载功率（必须先计入，不得挪给任务）
+        P_base_kW = self._idc_power_kw(np.clip(self.base_load, 0.0, 1.0), T_amb_t)
+
+        # 5d. 充电受接入上限物理投影：charge <= access + 可再生 + 放电 - 基础负载
+        charge_headroom_kW = max(
+            self.access_limit_kw
+            + pv_available_kW
+            + wind_available_kW
+            + bess_discharge_power_kW
+            - P_base_kW,
+            0.0,
+        )
+        bess_charge_power_kW = min(bess_charge_power_kW, charge_headroom_kW)
+
+        # 5e. IDC 功率预算 = 接入上限 + 放电 - 充电(已投影) + 可再生可用（无反送电）
+        P_idc_budget_kW = max(
+            self.access_limit_kw
+            + bess_discharge_power_kW
+            - bess_charge_power_kW
+            + pv_available_kW
+            + wind_available_kW,
+            0.0,
+        )
+
+        # 5f. 任务功率预算 + 缩放（确定性可行性搜索；基础负载先计入）
+        task_power_budget_kW = max(P_idc_budget_kW - P_base_kW, 0.0)
+        if task_power_budget_kW <= 1e-9:
+            scale = 0.0
+        else:
+            lo, hi = 0.0, 1.0
+            for _ in range(40):
+                mid = (lo + hi) / 2.0
+                task_power = self._idc_power_kw(
+                    self.base_load + planned_task_loads * mid, T_amb_t
+                ) - P_base_kW
+                if task_power <= task_power_budget_kW:
+                    lo = mid
+                else:
+                    hi = mid
+            scale = lo
+
+        # 5g. 限缩逐组计划容量
+        scaled_capacity_vec = planned_capacity_vec * scale
+
+        # 6. 执行任务（真实 A[i,g] 分配，用限缩后的容量）
         (
             completed_work,
             completed_work_by_group,
@@ -600,74 +677,54 @@ class IDCPriceEnv20D(gym.Env):
             resume_count_this_step,
             non_interruptible_interruption_this_step,
         ) = self._execute_tasks_action_guided(
-            planned_capacity_vec=planned_capacity_vec,
+            planned_capacity_vec=scaled_capacity_vec,
             current_time=t,
             urgent_preference=urgent_preference,
             continuity_preference=continuity_preference,
         )
 
+        business_gap_work = max(planned_capacity - completed_work, 0.0)
         unused_capacity = max(planned_capacity - completed_work, 0.0)
 
-        # 6. 每组实际负载由完成工作/组能力导出（M3.3 废除比例回分与 α）
+        # 7. 每组实际负载由完成工作/组能力导出（完整基础负载 + 任务负载）
         actual_task_loads = self._loads_from_group_completion(completed_work_by_group)
         actual_total_loads = np.clip(self.base_load + actual_task_loads, 0.0, 1.0)
 
-        # 7. 用实际负载计算当前小时功耗
+        # 8. 用实际负载计算当前小时功耗（完整 IDC 需求），再按预算钳位为已服务部分
         L_matrix = actual_total_loads.reshape(1, -1)
         P_IDC_arr, P_IT_arr, PUE_arr, COP_arr, P_cooling_arr = self.model.calc_pue_and_total_power(
             L_matrix=L_matrix,
             T_amb=np.array([T_amb_t], dtype=np.float64),
         )
-
         P_IDC_t = float(P_IDC_arr[0])
         P_IT_t = float(P_IT_arr[0])
         PUE_t = float(PUE_arr[0])
         COP_t = float(COP_arr[0])
         P_cooling_t = float(P_cooling_arr[0])
+        P_IDC_demand_kW = P_IDC_t / 1000.0
+        P_IDC_kW = min(P_IDC_demand_kW, P_idc_budget_kW)
+        unserved_base_load_kW = max(P_IDC_demand_kW - P_idc_budget_kW, 0.0)
 
-        # 8. 当前小时购电量和用电成本
-        # P_IDC is actual IDC demand: IT + cooling + other infrastructure.
-        # P_grid is grid purchase after BESS charge/discharge; no sell-back is allowed.
-        P_IDC_kW = P_IDC_t / 1000.0
-        if bess_raw_action < 0.0:
-            desired_bess_charge_power_kW = abs(bess_raw_action) * self.bess_charge_power_max_kW
-            desired_bess_discharge_power_kW = 0.0
-        else:
-            desired_bess_charge_power_kW = 0.0
-            desired_bess_discharge_power_kW = bess_raw_action * self.bess_discharge_power_max_kW
+        # 9. 应用 no-export 放电限制（放电 <= IDC），再算可再生与购电
+        bess_discharge_power_kW = min(bess_discharge_power_kW, P_IDC_kW)
 
-        current_bess_energy_kWh = self.bess_energy_kWh
-        max_charge_energy_by_soc = max(
-            (self.bess_soc_max - self.bess_soc) * self.bess_capacity_kWh,
-            0.0,
-        )
-        max_discharge_energy_by_soc = max(
-            (self.bess_soc - self.bess_soc_min) * self.bess_capacity_kWh,
-            0.0,
-        )
-        charge_power_limit_by_soc = (
-            max_charge_energy_by_soc / max(self.delta_t_hours * self.bess_charge_efficiency, 1e-6)
-        )
-        discharge_power_limit_by_soc = (
-            max_discharge_energy_by_soc * self.bess_discharge_efficiency / max(self.delta_t_hours, 1e-6)
-        )
-        # SOC and charge/discharge power are hard-clipped in the environment.
-        bess_charge_power_kW = min(
-            desired_bess_charge_power_kW,
-            self.bess_charge_power_max_kW,
-            charge_power_limit_by_soc,
-        )
-        bess_discharge_power_kW = min(
-            desired_bess_discharge_power_kW,
-            self.bess_discharge_power_max_kW,
-            discharge_power_limit_by_soc,
-            P_IDC_kW,
-        )
+        P_local_demand_kW = P_IDC_kW + bess_charge_power_kW
+        P_local_net_before_pv_kW = P_local_demand_kW - bess_discharge_power_kW
+        pv_used_kW = min(pv_available_kW, max(P_local_net_before_pv_kW, 0.0))
+        pv_curtail_kW = max(pv_available_kW - pv_used_kW, 0.0)
+        P_after_pv_kW = P_local_net_before_pv_kW - pv_used_kW
+        wind_used_kW = min(wind_available_kW, max(P_after_pv_kW, 0.0))
+        wind_curtail_kW = max(wind_available_kW - wind_used_kW, 0.0)
+        P_bus_net_kW = P_after_pv_kW - wind_used_kW
+        # 因任务容量已前置限缩，购电应 <= access_limit；无反送电则非负钳位。
+        P_grid_kW = max(P_bus_net_kW, 0.0)
 
+        # 10. SOC 更新（按实际充/放电功率）
         bess_charge_kWh = bess_charge_power_kW * self.delta_t_hours
         bess_discharge_kWh = bess_discharge_power_kW * self.delta_t_hours
         charged_energy_to_battery = bess_charge_kWh * self.bess_charge_efficiency
         discharged_energy_from_battery = bess_discharge_kWh / max(self.bess_discharge_efficiency, 1e-6)
+        current_bess_energy_kWh = self.bess_energy_kWh
         bess_energy_next = current_bess_energy_kWh + charged_energy_to_battery - discharged_energy_from_battery
         bess_energy_next = float(np.clip(
             bess_energy_next,
@@ -688,23 +745,8 @@ class IDCPriceEnv20D(gym.Env):
             abs(desired_bess_charge_power_kW - bess_charge_power_kW)
             + abs(desired_bess_discharge_power_kW - bess_discharge_power_kW)
         )
-        # PV offsets only the local bus net load after the actual, SOC-clipped BESS action.
-        # No export is allowed in this first PV version, so grid purchase is clamped at zero.
-        P_local_demand_kW = P_IDC_kW + bess_charge_power_kW
-        P_local_net_before_pv_kW = P_local_demand_kW - bess_discharge_power_kW
-        pv_available_kW = max(pv_now, 0.0)
-        pv_used_kW = min(pv_available_kW, max(P_local_net_before_pv_kW, 0.0))
-        pv_curtail_kW = max(pv_available_kW - pv_used_kW, 0.0)
-        # 风电同样抵消本地净负荷（M3.5），与 PV 一样无反送电
-        P_after_pv_kW = P_local_net_before_pv_kW - pv_used_kW
-        wind_available_kW = max(wt_now, 0.0)
-        wind_used_kW = min(wind_available_kW, max(P_after_pv_kW, 0.0))
-        wind_curtail_kW = max(wind_available_kW - wind_used_kW, 0.0)
-        P_bus_net_kW = P_after_pv_kW - wind_used_kW
-        # 接入上限为不可违反的物理上限（M3.7），超出部分记为缺口
-        unserved_load_kW = max(P_bus_net_kW - self.access_limit_kw, 0.0)
-        P_grid_kW = min(max(P_bus_net_kW, 0.0), self.access_limit_kw)
 
+        # 11. 能量与成本
         idc_energy_kWh = P_IDC_kW * self.delta_t_hours
         grid_energy_kWh = P_grid_kW * self.delta_t_hours
         pv_available_kWh = pv_available_kW * self.delta_t_hours
@@ -1006,7 +1048,8 @@ class IDCPriceEnv20D(gym.Env):
             "P_bus_net_kW": float(P_bus_net_kW),
             "P_grid_kW": float(P_grid_kW),
             "access_limit_kw": float(self.access_limit_kw),
-            "unserved_load_kW": float(unserved_load_kW),
+            "unserved_base_load_kW": float(unserved_base_load_kW),
+            "business_gap_work": float(business_gap_work),
             "grid_power_kW": float(grid_power_kW),
             "grid_power_limit_kW": float(self.grid_power_limit_kW),
             **self._server_group_info(),
@@ -1319,6 +1362,15 @@ class IDCPriceEnv20D(gym.Env):
         c_server = np.asarray(self.model.C_server, dtype=np.float64)
         loads = np.asarray(completed_work_by_group, dtype=np.float64) / np.maximum(c_server, 1e-6)
         return np.clip(loads, 0.0, self.max_task_load_per_server)
+
+    def _idc_power_kw(self, load_vector, T_amb) -> float:
+        """把负载（标量广播到 N 组，或 N 组向量）映射为 IDC 总功率（kW）。"""
+        load = np.asarray(load_vector, dtype=np.float64)
+        if load.ndim == 0:
+            load = np.full(self.model.N, float(load))
+        L = load.reshape(1, -1)
+        P, *_ = self.model.calc_pue_and_total_power(L, np.array([T_amb], dtype=np.float64))
+        return float(P[0]) / 1000.0
 
     def _terminal_settlement(self) -> dict:
         """M3.6 尾段结算：遗留工作、违约（deadline miss）、恢复库存成本。"""
