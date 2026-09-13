@@ -13,9 +13,9 @@
   该结果**不得进入执行路径**，互斥留待 M4.3b/M4.5 的 MIP；
 - 不做窗口外真值读取（规划输入由 `planning_forecast` 提供，窗口外为声明假设）。
 
-注：文件末尾保留**遗留块**（旧单步 `build_milp`）。`planning/corrector.py` 已于 **M4.4a**
-切换到 H 步 MIP、**不再使用旧 `build_milp`**；当前仅 **`planning/solver.py` 与旧测试**
-仍保留 legacy 路径，待 **M4.4b** 退役。
+现行规划路径（唯一）：**H 步 LP**（诊断 / 松弛下界）、**H 步 MIP**（执行候选）、
+**H 步两阶段 MIP raw projection**（corrector / wrapper 活链路）。
+旧单步规划实现及其专用求解模块已于 **M4.4b** 整体退役，本文件不再导出它们。
 """
 
 from __future__ import annotations
@@ -1137,99 +1137,4 @@ def solve_time_indexed_mip_raw_projection(
         soc_kwh=[float(x[off_soc + k]) for k in range(H + 1)],
         residuals_by_constraint=residuals, max_constraint_residual=max_residual,
         power_approximation_used=True,
-    )
-
-
-# ---------------------------------------------------------------------------
-# 未接线遗留块（M4.3a 保留）：旧单步 MILP，仍被 planning/solver.py 与
-# planning/corrector.py 使用。本卡不重新接线；M4.3b/M4.5 重新接线后移除。
-# ---------------------------------------------------------------------------
-_BIG_M = 1e6
-
-
-@dataclass
-class MilpModel:
-    n_task: int
-    n_group: int
-    c: np.ndarray
-    constraints: list[LinearConstraint]
-    integrality: np.ndarray
-    bounds: Bounds
-
-
-def build_milp(snapshot: SystemSnapshot, allow_lp_relaxation: bool = False) -> MilpModel:
-    """[遗留] 单步 MILP：最大化任务完成量，受组容量/任务剩余/充放互斥/接入上限约束。"""
-    n_task = len(snapshot.tasks)
-    n_group = len(snapshot.group_work_capacity)
-    n_a = n_task * n_group
-    n_vars = n_a + 3
-    idx_charge = n_a
-    idx_discharge = n_a + 1
-    idx_z = n_a + 2
-
-    c = np.zeros(n_vars)
-    c[:n_a] = -1.0
-
-    rows: list[np.ndarray] = []
-    lbs: list[float] = []
-    ubs: list[float] = []
-
-    for g in range(n_group):
-        row = np.zeros(n_vars)
-        for i in range(n_task):
-            row[i * n_group + g] = 1.0
-        rows.append(row)
-        lbs.append(-np.inf)
-        ubs.append(max(float(snapshot.group_work_capacity[g]), 0.0))
-
-    for i, task in enumerate(snapshot.tasks):
-        row = np.zeros(n_vars)
-        for g in range(n_group):
-            row[i * n_group + g] = 1.0
-        rows.append(row)
-        lbs.append(-np.inf)
-        ubs.append(max(float(task.remaining_work), 0.0))
-
-    row_charge = np.zeros(n_vars)
-    row_charge[idx_charge] = 1.0
-    row_charge[idx_z] = -_BIG_M
-    rows.append(row_charge)
-    lbs.append(-np.inf)
-    ubs.append(0.0)
-
-    row_discharge = np.zeros(n_vars)
-    row_discharge[idx_discharge] = 1.0
-    row_discharge[idx_z] = _BIG_M
-    rows.append(row_discharge)
-    lbs.append(-np.inf)
-    ubs.append(_BIG_M)
-
-    row_access = np.zeros(n_vars)
-    row_access[:n_a] = 1.0
-    row_access[idx_charge] = 1.0
-    row_access[idx_discharge] = -1.0
-    rows.append(row_access)
-    lbs.append(-np.inf)
-    ubs.append(max(float(snapshot.access_limit_kw), 0.0))
-
-    constraints = [
-        LinearConstraint(np.vstack(rows), np.array(lbs), np.array(ubs))
-    ] if rows else []
-
-    integrality = np.zeros(n_vars)
-    if not allow_lp_relaxation:
-        integrality[idx_z] = 1
-
-    bounds = Bounds(
-        lb=np.concatenate([np.zeros(n_a), [0.0, 0.0, 0.0]]),
-        ub=np.concatenate([np.full(n_a, np.inf), [_BIG_M, _BIG_M, 1.0]]),
-    )
-
-    return MilpModel(
-        n_task=n_task,
-        n_group=n_group,
-        c=c,
-        constraints=constraints,
-        integrality=integrality,
-        bounds=bounds,
     )
