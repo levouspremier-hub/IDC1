@@ -36,6 +36,8 @@ from safe_rl_v2.rollout import collect_rollout
 LOG_PROB_SOURCE = "evaluate_raw_actions(raw_action)"
 # 三套 target 的唯一来源（M5.2a 的终端感知 API）
 TARGETS_SOURCE = "compute_three_value_targets(terminated=, truncated=)"
+# actor 有效优势的唯一形式（M5.3b；乘子为**更新前**值）
+ACTOR_OBJECTIVE_SOURCE = "A_reward - lambda_business * A_business - lambda_carbon * A_carbon"
 
 GAMMA = 0.99
 LAM = 0.95
@@ -135,6 +137,8 @@ def dry_run_update(
     )
 
     adv_reward = torch.tensor(targets["reward"][0], dtype=torch.float32)
+    adv_business = torch.tensor(targets["business"][0], dtype=torch.float32)
+    adv_carbon = torch.tensor(targets["carbon"][0], dtype=torch.float32)
     tgt_reward = torch.tensor(targets["reward"][1], dtype=torch.float32)
     tgt_business = torch.tensor(targets["business"][1], dtype=torch.float32)
     tgt_carbon = torch.tensor(targets["carbon"][1], dtype=torch.float32)
@@ -155,21 +159,31 @@ def dry_run_update(
         + critic_loss_by_head["carbon"]
     )
 
-    # actor 项沿用 M5.4 占位语义（本卡不引入 ratio/clip/熵项）
-    actor_loss = -(adv_reward * log_probs).mean()
+    # M5.3b：本轮 actor 目标使用**更新前**的乘子（两约束各自独立）
+    multipliers_pre = lagrangian.multipliers()
+    lambda_business = float(multipliers_pre["business"])
+    lambda_carbon = float(multipliers_pre["carbon"])
+
+    reward_term = adv_reward
+    business_term = -lambda_business * adv_business
+    carbon_term = -lambda_carbon * adv_carbon
+    effective_advantage = reward_term + business_term + carbon_term
+
+    actor_loss = -(effective_advantage * log_probs).mean()
     loss = actor_loss + critic_loss
 
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    # M5.3a 迁移：`Lagrangian.update` 只接受**逐 transition 序列**，
-    # 聚合口径（per-transition mean）由 lagrangian 模块内部固定，调用方不能绕过。
+    # 乘子更新发生在 optimizer.step() **之后**，且只消费逐 transition 序列
+    # （聚合口径 per-transition mean 由 lagrangian 模块内部固定）。
     lagrangian.update(
         {
             "business": business_violations,
             "carbon": carbon_emissions,
         }
     )
+    multipliers_post = lagrangian.multipliers()
 
     return {
         # --- 既有键（M5.1c/M5.4 语义保持不变）---
@@ -178,7 +192,7 @@ def dry_run_update(
         "reward_value": float(values[0, 0].item()),
         "business_value": float(values[0, 1].item()),
         "carbon_value": float(values[0, 2].item()),
-        "multipliers": lagrangian.multipliers(),
+        "multipliers": multipliers_post,
         "corrector_on": corrector_on,
         # --- 采集链证据（**不是**训练结论）---
         "buffer": buffer,
@@ -207,4 +221,31 @@ def dry_run_update(
         "critic_targets": {head: pair[1] for head, pair in targets.items()},
         "units": dict(METRIC_UNITS),
         "claims": dict(_CLAIMS),
+        # --- M5.3b：actor objective 的乘子口径与诊断（**不是**性能结论）---
+        "actor_objective_source": ACTOR_OBJECTIVE_SOURCE,
+        "multipliers_pre_update": dict(multipliers_pre),
+        "multipliers_post_update": dict(multipliers_post),
+        "constraint_means": {
+            "business": float(np.mean(business_violations)),
+            "carbon": float(np.mean(carbon_emissions)),
+        },
+        "constraint_budgets": {
+            name: float(state.budget) for name, state in lagrangian.constraints.items()
+        },
+        "constraint_units": {
+            name: state.unit for name, state in lagrangian.constraints.items()
+        },
+        "effective_advantage": {
+            "formula": ACTOR_OBJECTIVE_SOURCE,
+            "multipliers_used": "pre_update",
+            "mean": float(effective_advantage.mean().item()),
+            "std": float(effective_advantage.std(unbiased=False).item()),
+            "min": float(effective_advantage.min().item()),
+            "max": float(effective_advantage.max().item()),
+        },
+        "effective_advantage_terms": {
+            "reward_mean": float(reward_term.mean().item()),
+            "business_mean": float(business_term.mean().item()),
+            "carbon_mean": float(carbon_term.mean().item()),
+        },
     }
