@@ -1,45 +1,30 @@
-"""M1.3 场景提供器。
+"""M1.3 场景提供器（M1.3a 起统一使用 contracts.ScenarioBundle）。
 
-`build_scenario` 只返回「当前真值 + 可见预测」，杜绝未来信息泄漏：
-- 正式模式：读取 `data/manifest/` 与冻结处理数据；缺单位/来源/hash 或无数据抛异常。
-- 合成模式：`synthetic=True` 显式开启，确定性生成并在 bundle 标记 `synthetic=True`。
+本模块**不再定义**自己的 ScenarioBundle：唯一场景类型是 `contracts.ScenarioBundle`（contract-v2），
+因此场景提供、snapshot 与 `contracts.validators` 校验共享同一形状。
 
-泄漏不变量：改变 `t+k`（`k >= forecast_cutoff`）的真值，不改变时刻 `t` 的决策输入。
+可见性：预测窗口为 `[t, t + forecast_cutoff)`（与 env / snapshot adapter 同一定义），
+不暴露未来真值。
+
+数据边界：M1.2 正式数据接线**仍阻塞**（数据组合未验证）。当前只允许生成显式
+`synthetic=True` 的开发/测试场景；正式模式在无 manifest 时抛错，绝不回退到合成数据。
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
-SCHEMA_VERSION = "scenario-v1"
-SERIES_KEYS = ("price", "load", "pv", "wind", "temperature")
+from contracts import CONTRACT_VERSION_ID
+from contracts.models import ScenarioBundle
+
+# 六类预测序列（M1.3a 增补 carbon，与契约字段一一对应）。
+SERIES_KEYS = ("price", "load", "pv", "wind", "temperature", "carbon")
 _REQUIRED_MANIFEST_FIELDS = ("source", "units", "sha256")
 
-
-@dataclass(frozen=True)
-class ScenarioBundle:
-    """不可变场景切片：只含当前真值与可见预测（forecast 为不可变 tuple）。"""
-
-    split: str
-    start: str
-    horizon: int
-    forecast_cutoff: int
-    current: dict[str, float]
-    forecast: dict[str, tuple[float, ...]]
-    schema_version: str
-    synthetic: bool
-    source_hashes: dict[str, str]
-    hash: str
-
-    def decision_input(self) -> dict[str, Any]:
-        """决策输入 = 当前真值 + 可见预测（不含任何未来真值）。"""
-        return {"current": dict(self.current), "forecast": dict(self.forecast)}
+__all__ = ["SERIES_KEYS", "ScenarioBundle", "build_scenario", "build_scenario_from_true"]
 
 
 def build_scenario(
@@ -69,17 +54,29 @@ def build_scenario_from_true(
     synthetic: bool = False,
     source_hashes: dict[str, str] | None = None,
 ) -> ScenarioBundle:
-    """从真值数组构建切片（内部与测试用）；只物化当前值与可见预测（拷贝，非视图）。"""
+    """从真值数组构建切片；只物化 `[0, forecast_cutoff)` 的可见预测（拷贝，非视图）。"""
     _validate_cutoff(horizon, forecast_cutoff)
-    current = {k: float(np.asarray(true[k])[0]) for k in SERIES_KEYS}
-    forecast = {
-        k: tuple(float(x) for x in np.asarray(true[k])[:forecast_cutoff]) for k in SERIES_KEYS
-    }
+    missing = [k for k in SERIES_KEYS if k not in true]
+    if missing:
+        raise KeyError(f"缺少预测序列 {missing}（需 {list(SERIES_KEYS)}）")
+
+    def _window(key: str) -> list[float]:
+        return [float(x) for x in np.asarray(true[key])[:forecast_cutoff]]
+
     source_hashes = dict(source_hashes or {})
-    h = _hash(split, start, horizon, forecast_cutoff, current, forecast, source_hashes, synthetic)
     return ScenarioBundle(
-        split, start, horizon, forecast_cutoff, current, forecast,
-        SCHEMA_VERSION, synthetic, source_hashes, h,
+        split=split,
+        start=start,
+        horizon=horizon,
+        forecast_cutoff=forecast_cutoff,
+        price_forecast=_window("price"),
+        load_forecast=_window("load"),
+        pv_forecast=_window("pv"),
+        wind_forecast=_window("wind"),
+        temperature_forecast=_window("temperature"),
+        carbon_forecast=_window("carbon"),
+        source_hashes=source_hashes,
+        synthetic=synthetic,
     )
 
 
@@ -91,6 +88,7 @@ def _validate_cutoff(horizon: int, forecast_cutoff: int) -> None:
 def _build_synthetic(
     split: str, start: str, horizon: int, forecast_cutoff: int, seed: int
 ) -> ScenarioBundle:
+    """确定性的**合成**开发场景（`synthetic=True`），不得冒充真实数据。"""
     rng = np.random.default_rng(seed)
     t = np.arange(horizon, dtype=float)
     true = {
@@ -100,13 +98,18 @@ def _build_synthetic(
             + 100.0 * rng.normal(size=horizon)
         ),
         "pv": np.clip(0.5 * np.sin(np.pi * (t % 24.0 - 6.0) / 12.0), 0.0, None),
-        "wind": np.zeros(horizon),
+        "wind": np.clip(0.3 * np.cos(np.pi * (t % 24.0) / 12.0), 0.0, None),
         "temperature": (
             28.0 + 3.0 * np.sin(2 * np.pi * (t - 14.0) / 24.0)
             + 0.5 * rng.normal(size=horizon)
         ),
+        "carbon": 0.5 + 0.1 * np.sin(2 * np.pi * t / 24.0),
     }
-    source_hashes = {"synthetic_seed": str(seed), "generator": "scenario._build_synthetic"}
+    source_hashes = {
+        "synthetic_seed": str(seed),
+        "generator": "scenario._build_synthetic",
+        "contract_version_id": CONTRACT_VERSION_ID,
+    }
     return build_scenario_from_true(
         split, start, horizon, forecast_cutoff, true, synthetic=True, source_hashes=source_hashes
     )
@@ -118,35 +121,12 @@ def _build_from_manifest(
     manifest_path = Path(manifest_dir) / f"{split}.json"
     if not manifest_path.exists():
         raise FileNotFoundError(
-            f"正式模式无数据：缺少 manifest {manifest_path}（M1.2 阻塞，未下载真实数据）。"
+            f"正式模式无数据：缺少 manifest {manifest_path}"
+            "（M1.2 阻塞，未验证到满足许可证/匿名访问/全年粒度的数据组合）。"
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for field in _REQUIRED_MANIFEST_FIELDS:
         if field not in manifest:
             raise ValueError(f"manifest 缺少字段 {field!r}（需单位/来源/hash）")
-    # 真实数据加载 + 切片 + sha256 校验待 M1.2 解除阻塞后实现。
+    # 真实数据加载 + 切片 + sha256 校验待 M1.2 解除阻塞后实现；不得回退到合成数据。
     raise NotImplementedError("真实数据加载待 M1.2 解除阻塞后实现")
-
-
-def _hash(
-    split: str,
-    start: str,
-    horizon: int,
-    forecast_cutoff: int,
-    current: dict[str, float],
-    forecast: dict[str, tuple[float, ...]],
-    source_hashes: dict[str, str],
-    synthetic: bool,
-) -> str:
-    payload = {
-        "schema_version": SCHEMA_VERSION,
-        "split": split,
-        "start": start,
-        "horizon": horizon,
-        "forecast_cutoff": forecast_cutoff,
-        "synthetic": synthetic,
-        "source_hashes": dict(sorted(source_hashes.items())),
-        "current": dict(sorted(current.items())),
-        "forecast": {k: [round(x, 6) for x in v] for k, v in sorted(forecast.items())},
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
