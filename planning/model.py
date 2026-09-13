@@ -37,6 +37,11 @@ DEGRADATION_COST_UNIT = "SGD"
 BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK = (0.05, "SGD/work-unit")
 DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 
+SOLVER_OPTIMAL = "optimal"
+SOLVER_TIME_LIMIT = "time_limit"
+SOLVER_INFEASIBLE = "infeasible"
+SOLVER_FAILURE = "solver_failure"
+
 FAILURE_NONE = "none"
 FAILURE_BASE_SHORTAGE = "base_shortage"
 FAILURE_DEADLINE_SHORTFALL = "deadline_shortfall"
@@ -86,6 +91,10 @@ class LPPlanResult:
     storage_relaxation_active: bool
     failure_class: str
 
+    # 后端与整数规模（M4.3b）
+    backend: str
+    n_integer_variables: int
+
     # 基础负载诊断（M4.3a1）
     base_diagnostic_status: str
     base_diagnostic_solve_time_s: float
@@ -96,6 +105,7 @@ def _empty_result(
     snapshot: SystemSnapshot, H: int, n_vars: int, n_cons: int, status: str,
     solve_time_s: float, failure_class: str,
     base_diag: BaseFeasibilityDiagnostic | None = None,
+    backend: str = "lp", n_integer_variables: int = 0,
 ) -> LPPlanResult:
     n_task, n_group = len(snapshot.tasks), len(snapshot.group_work_capacity)
     zeros = [0.0] * H
@@ -128,6 +138,8 @@ def _empty_result(
         power_approximation_used=True,
         storage_relaxation_active=False,
         failure_class=failure_class,
+        backend=backend,
+        n_integer_variables=n_integer_variables,
         base_diagnostic_status=(base_diag.status if base_diag else "not_run"),
         base_diagnostic_solve_time_s=(base_diag.solve_time_s if base_diag else 0.0),
         base_shortfall_kwh=(base_diag.shortfall_kwh if base_diag else 0.0),
@@ -186,7 +198,6 @@ def _base_only_lp(
         ub[off_discharge + k] = float(snapshot.bess_discharge_power_max_kw)
     lb[off_soc:off_soc + H + 1] = float(snapshot.soc_min_kwh)
     ub[off_soc:off_soc + H + 1] = float(snapshot.soc_max_kwh)
-
     rows: list[dict[int, float]] = []
     lbs: list[float] = []
     ubs: list[float] = []
@@ -273,7 +284,51 @@ def solve_time_indexed_lp(
     business_penalty_sgd_per_work: float = BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK[0],
     deadline_penalty_sgd_per_work: float = DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK[0],
 ) -> LPPlanResult:
-    """求解 H 步时间索引 LP。不可行时显式分类并返回零分配（不伪造完成）。"""
+    """求解 H 步时间索引 **LP**（连续松弛）。
+
+    仅作为**诊断与松弛下界**：允许同一时刻同时充放电，不得作为执行候选；
+    可执行候选须用 `solve_time_indexed_mip`。
+    """
+    return _solve_time_indexed(
+        snapshot, backend="lp", mutual_exclusion=False, time_limit_s=None,
+        business_penalty_sgd_per_work=business_penalty_sgd_per_work,
+        deadline_penalty_sgd_per_work=deadline_penalty_sgd_per_work,
+    )
+
+
+def solve_time_indexed_mip(
+    snapshot: SystemSnapshot,
+    *,
+    time_limit_s: float | None = None,
+    business_penalty_sgd_per_work: float = BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK[0],
+    deadline_penalty_sgd_per_work: float = DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK[0],
+) -> LPPlanResult:
+    """求解 H 步时间索引 **MIP**：逐步强制储能充/放电互斥。
+
+    每步 k 引入二元变量 `z[k]`：`z[k]=1` 允许充电（放电=0），`z[k]=0` 允许放电（充电=0）：
+        charge[k]    <= charge_max    * z[k]
+        discharge[k] <= discharge_max * (1 - z[k])
+    因此 `charge[k] * discharge[k] == 0` 对每个 k 严格成立。
+
+    这是**唯一允许在后续接线时作为执行候选**的规划后端。
+    """
+    return _solve_time_indexed(
+        snapshot, backend="mip", mutual_exclusion=True, time_limit_s=time_limit_s,
+        business_penalty_sgd_per_work=business_penalty_sgd_per_work,
+        deadline_penalty_sgd_per_work=deadline_penalty_sgd_per_work,
+    )
+
+
+def _solve_time_indexed(
+    snapshot: SystemSnapshot,
+    *,
+    backend: str,
+    mutual_exclusion: bool,
+    time_limit_s: float | None,
+    business_penalty_sgd_per_work: float,
+    deadline_penalty_sgd_per_work: float,
+) -> LPPlanResult:
+    """LP/MIP 共用的 H 步时间索引求解器。不可行/超时显式分类并返回零分配（不伪造完成）。"""
     import time
 
     t0 = time.perf_counter()
@@ -298,7 +353,9 @@ def solve_time_indexed_lp(
     off_soc = off_discharge + H
     off_bus = off_soc + (H + 1)
     off_dls = off_bus + n_task
-    n_vars = off_dls + n_task
+    off_z = off_dls + n_task  # 储能互斥二元变量（仅 MIP 使用）
+    n_z = H if mutual_exclusion else 0
+    n_vars = off_z + n_z
 
     c = np.zeros(n_vars)
     for k in range(H):
@@ -320,6 +377,9 @@ def solve_time_indexed_lp(
         ub[off_discharge + k] = float(snapshot.bess_discharge_power_max_kw)
     lb[off_soc:off_soc + H + 1] = float(snapshot.soc_min_kwh)
     ub[off_soc:off_soc + H + 1] = float(snapshot.soc_max_kwh)
+    if mutual_exclusion:
+        lb[off_z:off_z + H] = 0.0
+        ub[off_z:off_z + H] = 1.0
 
     rows: list[dict[int, float]] = []
     lbs: list[float] = []
@@ -369,6 +429,20 @@ def solve_time_indexed_lp(
 
     # 初始 SOC
     add({off_soc: 1.0}, float(snapshot.soc_kwh), float(snapshot.soc_kwh), "soc_initial")
+
+    # 储能互斥（仅 MIP）：charge <= charge_max*z；discharge <= discharge_max*(1-z)
+    if mutual_exclusion:
+        charge_max = float(snapshot.bess_charge_power_max_kw)
+        discharge_max = float(snapshot.bess_discharge_power_max_kw)
+        for k in range(H):
+            add(
+                {off_charge + k: 1.0, off_z + k: -charge_max},
+                -np.inf, 0.0, f"storage_excl_charge[{k}]",
+            )
+            add(
+                {off_discharge + k: 1.0, off_z + k: discharge_max},
+                -np.inf, discharge_max, f"storage_excl_discharge[{k}]",
+            )
 
     # 每任务每步速率
     for i, task in enumerate(snapshot.tasks):
@@ -440,17 +514,49 @@ def solve_time_indexed_lp(
     else:
         a_ub, b_ub = None, None
 
-    res = linprog(
-        c=c, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq,
-        bounds=list(zip(lb, ub, strict=True)), method="highs",
-    )
+    if backend == "mip":
+        from scipy.optimize import milp as _milp
+
+        integrality = np.zeros(n_vars)
+        integrality[off_z:off_z + H] = 1
+        options = {} if time_limit_s is None else {"time_limit": float(time_limit_s)}
+        res = _milp(
+            c=c,
+            constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
+            integrality=integrality,
+            bounds=Bounds(lb=lb, ub=ub),
+            options=options,
+        )
+    else:
+        res = linprog(
+            c=c, A_ub=a_ub, b_ub=b_ub, A_eq=a_eq, b_eq=b_eq,
+            bounds=list(zip(lb, ub, strict=True)), method="highs",
+        )
     solve_time = time.perf_counter() - t0
 
-    if not res.success:
+    # 结构化状态：optimal / time_limit / infeasible / solver_failure（不得包装成成功）
+    status_code = int(getattr(res, "status", 4))
+    if status_code == 0:
+        solver_status = SOLVER_OPTIMAL
+    elif status_code == 1:
+        solver_status = SOLVER_TIME_LIMIT
+    elif status_code == 2:
+        solver_status = SOLVER_INFEASIBLE
+    else:
+        solver_status = SOLVER_FAILURE
+
+    n_int = n_z
+    if solver_status != SOLVER_OPTIMAL:
         base_diag = diagnose_base_feasibility(snapshot)
-        failure = FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
-        return _empty_result(snapshot, H, n_vars, len(rows), str(res.message),
-                             solve_time, failure, base_diag)
+        failure = (
+            FAILURE_BASE_SHORTAGE
+            if (solver_status == SOLVER_INFEASIBLE and not base_diag.feasible)
+            else FAILURE_SOLVER_FAILURE
+        )
+        return _empty_result(
+            snapshot, H, n_vars, len(rows), solver_status, solve_time, failure,
+            base_diag, backend=backend, n_integer_variables=n_int,
+        )
 
     x = res.x
     allocation = np.zeros((n_task, n_group, H))
@@ -503,7 +609,7 @@ def solve_time_indexed_lp(
         failure = FAILURE_NONE
 
     return LPPlanResult(
-        solver_status="optimal",
+        solver_status=SOLVER_OPTIMAL,
         solve_time_s=solve_time,
         horizon_steps=H,
         n_variables=n_vars,
@@ -529,6 +635,8 @@ def solve_time_indexed_lp(
         power_approximation_used=True,
         storage_relaxation_active=storage_relaxation,
         failure_class=failure,
+        backend=backend,
+        n_integer_variables=n_int,
         base_diagnostic_status="not_required_optimal",
         base_diagnostic_solve_time_s=0.0,
         base_shortfall_kwh=0.0,
