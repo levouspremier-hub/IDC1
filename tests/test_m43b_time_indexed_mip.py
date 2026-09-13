@@ -252,18 +252,19 @@ def test_mip_feasible_case_classified_none():
 
 # --- 7. 失败路径语义（求解器边界单元测试，不依赖真实超时） ---
 
-def _fake_milp(status: int, x=None):
-    """构造一个假的 scipy.optimize.milp 返回值（仅用于边界测试）。"""
-    class _Res:
-        pass
+class _FakeMilpResult:
+    """假的 scipy.optimize.milp 返回值（仅用于求解器边界单元测试）。"""
 
-    r = _Res()
-    r.status = status
-    r.success = status == 0
-    r.message = f"fake status {status}"
-    r.fun = 0.0
-    r.x = x
-    return r
+    def __init__(self, status: int) -> None:
+        self.status = status
+        self.success = status == 0
+        self.message = f"fake status {status}"
+        self.fun = 0.0
+        self.x: np.ndarray | None = None
+
+
+def _fake_milp(status: int) -> _FakeMilpResult:
+    return _FakeMilpResult(status)
 
 
 def test_mip_time_limit_classified_as_timeout(monkeypatch):
