@@ -283,3 +283,97 @@ def test_capped_history_is_accepted():
     assert set(state["constraints"]["business"]["log"]) == {BUSINESS_MAX}
     restored = load(copy.deepcopy(state))
     assert restored.state_dict() == state
+
+
+# --- 7. 回归：任何被接受的状态都必须是不动点 --------------------------------
+
+MUTANTS = [
+    0.0, -0.0, 1.0, -1.0, 1.0e-9, -1.0e-9, 0.4, 2.0, 9.0, 13.0,
+    BUSINESS_MAX, BUSINESS_MAX + 1.0, CARBON_MAX, CARBON_MAX + 1.0,
+    float("nan"), float("inf"), float("-inf"), None, "x", [], {}, True, 3,
+]
+
+
+def _leaf_paths(state: dict) -> list[tuple[str, ...]]:
+    paths = [("updates",)]
+    for name, entry in state["constraints"].items():
+        for field in entry:
+            paths.append(("constraints", name, field))
+    return paths
+
+
+def _get(state: dict, path: tuple[str, ...]):
+    node = state
+    for key in path:
+        node = node[key]
+    return node
+
+
+def _set(state: dict, path: tuple[str, ...], value) -> None:
+    node = state
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+
+
+def test_any_accepted_state_is_a_fixed_point_under_single_field_mutation():
+    """对每个字段做穷举单点变异：要么被明确拒绝，要么必须是 state_dict() 的不动点。
+
+    这条不变量同时覆盖了 M5.3a 的静态规则与本卡新增的自洽性规则：
+    任何「被接受但 state_dict() 与其不等」的状态都意味着存在未被拒绝的
+    不可能状态。
+    """
+    base = multi_update_state(2)
+    accepted = 0
+    rejected = 0
+
+    for path in _leaf_paths(base):
+        for mutant in MUTANTS:
+            if _get(base, path) == mutant:
+                continue  # 与合法值相同，视为未变异
+            state = copy.deepcopy(base)
+            _set(state, path, mutant)
+            try:
+                restored = load(copy.deepcopy(state))
+            except (ValueError, TypeError):
+                rejected += 1
+                continue
+            accepted += 1
+            assert restored.state_dict() == state, (
+                f"{path} = {mutant!r} 被接受但不是不动点："
+                f"state_dict() 与之不相等"
+            )
+
+    assert rejected > 0, "变异集必须至少触发一些拒绝"
+    assert accepted > 0, "变异集必须至少包含一些合法变异"
+    assert rejected + accepted == sum(
+        1 for path in _leaf_paths(base) for mutant in MUTANTS if _get(base, path) != mutant
+    )
+
+
+def test_valid_state_loads_then_reloads_identically():
+    """load → state_dict → load 必须幂等。"""
+    first = load(copy.deepcopy(valid_state()))
+    snapshot = first.state_dict()
+    second = load(copy.deepcopy(snapshot))
+    assert second.state_dict() == snapshot
+
+
+def test_multi_update_state_round_trips_exactly():
+    for rounds in (1, 2, 3, 7):
+        state = multi_update_state(rounds)
+        restored = load(copy.deepcopy(state))
+        assert restored.state_dict() == state
+        assert restored.state_dict()["updates"] == rounds
+
+
+def test_coherence_rules_do_not_reject_real_update_histories():
+    """真实 update() 产生的任意长度历史都必须被接受（不得误杀）。"""
+    lag = fresh()
+    for round_index in range(1, 8):
+        lag.update({
+            "business": [0.0, 9.0, 1.0e6][: (round_index % 3) + 1],
+            "carbon": [0.0, 13.0, 1.0e6][: (round_index % 3) + 1],
+        })
+        state = lag.state_dict()
+        assert load(copy.deepcopy(state)).state_dict() == state
