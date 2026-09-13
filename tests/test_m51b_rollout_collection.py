@@ -369,3 +369,56 @@ def test_rollout_module_exposes_no_ppo_update_api():
     ]
     assert defined, "模块必须至少定义 collect_rollout"
     assert [n for n in defined if any(f in n.lower() for f in forbidden)] == []
+
+
+# --- 9. 回归：未来真值隔离与修正器失败路径 ---
+
+@pytest.mark.leakage
+def test_rollout_does_not_read_future_truth():
+    """红线 3 回归：cutoff 之外的未来真值 mutation 不得改变同 seed 的观测/动作/概率。"""
+    cutoff = 2
+    future_step = 10
+
+    def first_transition(mutate: bool):
+        env = make_env(forecast_cutoff=cutoff)
+        # price_t / pv_t / carbon_factor_t 在 __init__ 生成、reset 不重建
+        if mutate:
+            env.price_t[future_step] = 9999.0
+            env.pv_t[future_step] = 9999.0
+            env.carbon_factor_t[future_step] = 9999.0
+        policy = _policy(env, seed=3)
+        buf = RolloutBuffer()
+        collect_rollout(env, policy, buf, steps=STEPS, seed=0, corrector_on=False)
+        return buf.transitions[0]
+
+    clean = first_transition(False)
+    mutated = first_transition(True)
+
+    np.testing.assert_array_equal(clean.observation, mutated.observation)
+    np.testing.assert_array_equal(clean.raw_action, mutated.raw_action)
+    assert clean.old_raw_log_prob == mutated.old_raw_log_prob
+    assert clean.reward == mutated.reward
+
+
+def test_corrector_failure_still_records_raw_verbatim_and_exec_boundary():
+    """修正器超时时：raw 仍逐元素原样，exec 为已验证边界动作，失败分类必须落库。"""
+    env = make_env()
+    policy = _policy(env)
+    buf = RolloutBuffer()
+    stats = collect_rollout(
+        env, policy, buf, steps=2, seed=0,
+        corrector_on=True, corrector_time_limit_s=1e-9,  # 必然超时
+    )
+
+    assert stats["raw_exec_difference_count"] == 2
+    for t in buf.transitions:
+        assert t.correction_info["correction_reason"] == "timeout"
+        # raw 仍原样（由 CorrectorWrapper 回写 info["raw_action"] 证明）
+        received = np.asarray(t.correction_info["raw_action"], dtype=np.float32)
+        np.testing.assert_array_equal(received, t.raw_action.astype(np.float32))
+        # exec 是已验证的物理边界动作（零计算、零储能），不是未经检验的 raw
+        np.testing.assert_allclose(t.exec_action, 0.0, atol=0.0)
+        assert not np.array_equal(t.raw_action, t.exec_action)
+        assert t.correction_info["planner_backend"]
+        # 超时不影响概率记录：仍是最终 raw 动作的有限 log-prob
+        assert np.isfinite(t.old_raw_log_prob)
