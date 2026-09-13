@@ -47,6 +47,7 @@ FAILURE_BASE_SHORTAGE = "base_shortage"
 FAILURE_DEADLINE_SHORTFALL = "deadline_shortfall"
 FAILURE_SOLVER_FAILURE = "solver_failure"
 FAILURE_TIMEOUT = "timeout"
+FAILURE_PROPOSAL_INVALID = "proposal_invalid"
 
 _TOL = 1e-6
 
@@ -279,6 +280,106 @@ def diagnose_base_feasibility(snapshot: SystemSnapshot) -> BaseFeasibilityDiagno
     return BaseFeasibilityDiagnostic(False, status, time.perf_counter() - t0, shortfall)
 
 
+def _add_core_constraints(
+    add, snapshot, pf, *, H, n_task, n_group, dt, a, off, mutual_exclusion
+) -> None:
+    """H 步时间索引模型的核心约束（LP/MIP/投影共用，避免模型分叉）。
+
+    含：功率定义、能量平衡、弃电定义、SOC 动力学与初值、储能互斥（可选）、
+    逐任务速率、逐组容量、任务剩余工作 + business slack、期限 slack。
+    """
+    # 功率等式：P_idc[k] - sum_g coeff[g] * sum_i A = base_idc_power[k]
+    for k in range(H):
+        row = {off["pidc"] + k: 1.0}
+        for g in range(n_group):
+            coeff = float(snapshot.group_power_coeff_kw_per_work[g])
+            if coeff:
+                for i in range(n_task):
+                    row[a(i, g, k)] = -coeff
+        base_kw = float(pf.base_idc_power[k])
+        add(row, base_kw, base_kw, f"power_definition[{k}]")
+
+    # 能量平衡（与 env M3.5 一致）：P_grid + pv_used + wind_used + discharge = P_idc + charge
+    # 注：弃电是**未被消费**的可再生，不得出现在需求侧（否则等于双重计数）。
+    for k in range(H):
+        row = {
+            off["pgrid"] + k: 1.0, off["pv"] + k: 1.0, off["wind"] + k: 1.0,
+            off["discharge"] + k: 1.0, off["pidc"] + k: -1.0, off["charge"] + k: -1.0,
+        }
+        add(row, 0.0, 0.0, f"energy_balance[{k}]")
+
+    # 弃电定义：curtail[k] + pv_used[k] + wind_used[k] = pv[k] + wind[k]
+    for k in range(H):
+        row = {off["curtail"] + k: 1.0, off["pv"] + k: 1.0, off["wind"] + k: 1.0}
+        avail = float(pf.pv[k]) + float(pf.wind[k])
+        add(row, avail, avail, f"curtailment_definition[{k}]")
+
+    # 储能动态：SOC[k+1] - SOC[k] - eta_c*dt*charge + (dt/eta_d)*discharge = 0
+    for k in range(H):
+        row = {
+            off["soc"] + k + 1: 1.0, off["soc"] + k: -1.0,
+            off["charge"] + k: -snapshot.bess_charge_efficiency * dt,
+            off["discharge"] + k: dt / max(snapshot.bess_discharge_efficiency, 1e-9),
+        }
+        add(row, 0.0, 0.0, f"soc_dynamics[{k}]")
+
+    # 初始 SOC
+    add({off["soc"]: 1.0}, float(snapshot.soc_kwh), float(snapshot.soc_kwh), "soc_initial")
+
+    # 储能互斥（仅 MIP）：charge <= charge_max*z；discharge <= discharge_max*(1-z)
+    if mutual_exclusion:
+        charge_max = float(snapshot.bess_charge_power_max_kw)
+        discharge_max = float(snapshot.bess_discharge_power_max_kw)
+        for k in range(H):
+            add(
+                {off["charge"] + k: 1.0, off["z"] + k: -charge_max},
+                -np.inf, 0.0, f"storage_excl_charge[{k}]",
+            )
+            add(
+                {off["discharge"] + k: 1.0, off["z"] + k: discharge_max},
+                -np.inf, discharge_max, f"storage_excl_discharge[{k}]",
+            )
+
+    # 每任务每步速率
+    for i, task in enumerate(snapshot.tasks):
+        rate = float(task.max_rate_work_per_step)
+        for k in range(H):
+            row = {a(i, g, k): 1.0 for g in range(n_group)}
+            add(row, -np.inf, rate, f"task_rate[{i},{k}]")
+
+    # 每组每步容量
+    for g in range(n_group):
+        cap = float(snapshot.group_work_capacity[g])
+        for k in range(H):
+            row = {a(i, g, k): 1.0 for i in range(n_task)}
+            add(row, -np.inf, cap, f"group_capacity[{g},{k}]")
+
+    # 每任务全时域剩余工作 + business slack
+    for i, task in enumerate(snapshot.tasks):
+        row = {off["bus"] + i: 1.0}
+        for g in range(n_group):
+            for k in range(H):
+                row[a(i, g, k)] = 1.0
+        remaining = float(task.remaining_work)
+        add(row, remaining, remaining, f"business_balance[{i}]")
+
+    # 期限：deadline 落在时域内的任务建 deadline slack
+    for i, task in enumerate(snapshot.tasks):
+        kd = int(task.deadline) - int(snapshot.step)
+        if kd < 0:
+            kd = 0
+        if kd > H:
+            kd = H
+        if kd >= H:
+            continue  # 期限在时域之外
+        row = {off["dls"] + i: 1.0}
+        for g in range(n_group):
+            for k in range(kd):
+                row[a(i, g, k)] = 1.0
+        remaining = float(task.remaining_work)
+        add(row, remaining, np.inf, f"deadline_balance[{i}]")
+
+
 def solve_time_indexed_lp(
     snapshot: SystemSnapshot,
     *,
@@ -393,96 +494,15 @@ def _solve_time_indexed(
         ubs.append(hi)
         names.append(name)
 
-    # 功率等式：P_idc[k] - sum_g coeff[g] * sum_i A = base_idc_power[k]
-    for k in range(H):
-        row = {off_pidc + k: 1.0}
-        for g in range(n_group):
-            coeff = float(snapshot.group_power_coeff_kw_per_work[g])
-            if coeff:
-                for i in range(n_task):
-                    row[a(i, g, k)] = -coeff
-        base_kw = float(pf.base_idc_power[k])
-        add(row, base_kw, base_kw, f"power_definition[{k}]")
-
-    # 能量平衡（与 env M3.5 一致）：P_grid + pv_used + wind_used + discharge = P_idc + charge
-    # 注：弃电是**未被消费**的可再生，不得出现在需求侧（否则等于双重计数）。
-    for k in range(H):
-        row = {
-            off_pgrid + k: 1.0, off_pv + k: 1.0, off_wind + k: 1.0,
-            off_discharge + k: 1.0, off_pidc + k: -1.0, off_charge + k: -1.0,
-        }
-        add(row, 0.0, 0.0, f"energy_balance[{k}]")
-
-    # 弃电定义：curtail[k] + pv_used[k] + wind_used[k] = pv[k] + wind[k]
-    for k in range(H):
-        row = {off_curtail + k: 1.0, off_pv + k: 1.0, off_wind + k: 1.0}
-        avail = float(pf.pv[k]) + float(pf.wind[k])
-        add(row, avail, avail, f"curtailment_definition[{k}]")
-
-    # 储能动态：SOC[k+1] - SOC[k] - eta_c*dt*charge + (dt/eta_d)*discharge = 0
-    for k in range(H):
-        row = {
-            off_soc + k + 1: 1.0, off_soc + k: -1.0,
-            off_charge + k: -snapshot.bess_charge_efficiency * dt,
-            off_discharge + k: dt / max(snapshot.bess_discharge_efficiency, 1e-9),
-        }
-        add(row, 0.0, 0.0, f"soc_dynamics[{k}]")
-
-    # 初始 SOC
-    add({off_soc: 1.0}, float(snapshot.soc_kwh), float(snapshot.soc_kwh), "soc_initial")
-
-    # 储能互斥（仅 MIP）：charge <= charge_max*z；discharge <= discharge_max*(1-z)
-    if mutual_exclusion:
-        charge_max = float(snapshot.bess_charge_power_max_kw)
-        discharge_max = float(snapshot.bess_discharge_power_max_kw)
-        for k in range(H):
-            add(
-                {off_charge + k: 1.0, off_z + k: -charge_max},
-                -np.inf, 0.0, f"storage_excl_charge[{k}]",
-            )
-            add(
-                {off_discharge + k: 1.0, off_z + k: discharge_max},
-                -np.inf, discharge_max, f"storage_excl_discharge[{k}]",
-            )
-
-    # 每任务每步速率
-    for i, task in enumerate(snapshot.tasks):
-        rate = float(task.max_rate_work_per_step)
-        for k in range(H):
-            row = {a(i, g, k): 1.0 for g in range(n_group)}
-            add(row, -np.inf, rate, f"task_rate[{i},{k}]")
-
-    # 每组每步容量
-    for g in range(n_group):
-        cap = float(snapshot.group_work_capacity[g])
-        for k in range(H):
-            row = {a(i, g, k): 1.0 for i in range(n_task)}
-            add(row, -np.inf, cap, f"group_capacity[{g},{k}]")
-
-    # 每任务全时域剩余工作 + business slack
-    for i, task in enumerate(snapshot.tasks):
-        row = {off_bus + i: 1.0}
-        for g in range(n_group):
-            for k in range(H):
-                row[a(i, g, k)] = 1.0
-        remaining = float(task.remaining_work)
-        add(row, remaining, remaining, f"business_balance[{i}]")
-
-    # 期限：deadline 落在时域内的任务建 deadline slack
-    for i, task in enumerate(snapshot.tasks):
-        kd = int(task.deadline) - int(snapshot.step)
-        if kd < 0:
-            kd = 0
-        if kd > H:
-            kd = H
-        if kd >= H:
-            continue  # 期限在时域之外
-        row = {off_dls + i: 1.0}
-        for g in range(n_group):
-            for k in range(kd):
-                row[a(i, g, k)] = 1.0
-        remaining = float(task.remaining_work)
-        add(row, remaining, np.inf, f"deadline_balance[{i}]")
+    _add_core_constraints(
+        add, snapshot, pf, H=H, n_task=n_task, n_group=n_group, dt=dt, a=a,
+        off={
+            "pidc": off_pidc, "pgrid": off_pgrid, "pv": off_pv, "wind": off_wind,
+            "curtail": off_curtail, "charge": off_charge, "discharge": off_discharge,
+            "soc": off_soc, "bus": off_bus, "dls": off_dls, "z": off_z,
+        },
+        mutual_exclusion=mutual_exclusion,
+    )
 
     A_mat = lil_matrix((len(rows), n_vars))
     for r, row in enumerate(rows):
@@ -654,6 +674,342 @@ def _solve_time_indexed(
         base_diagnostic_status="not_required_optimal",
         base_diagnostic_solve_time_s=0.0,
         base_shortfall_kwh=0.0,
+    )
+
+
+# --- M4.4a 原始动作最小偏移投影（两阶段，仅 MIP） ---
+
+RAW_STAGE_B_TOL = 1e-6  # 阶段 B 的偏移容差（无量纲）
+
+
+@dataclass
+class RawProjectionResult:
+    """第 0 步原始动作投影结果（全部单位显式、可审计）。"""
+
+    backend: str
+    solver_status: str
+    failure_class: str
+    horizon_steps: int
+    n_variables: int
+    n_integer_variables: int
+    n_constraints: int
+
+    # 两阶段审计
+    stage_a_status: str
+    stage_b_status: str
+    stage_a_solve_time_s: float
+    stage_b_solve_time_s: float
+    stage_a_objective: float
+    stage_b_objective: float
+    projection_offset: float
+
+    # 第 0 步 exec action
+    exec_compute_actions: list[float]
+    exec_storage_action: float
+
+    # 业务缺口（work-units）
+    business_gap_work: float
+    deadline_shortfall_work: float
+
+    # 逐时域解（供审计；功率为规划近似）
+    allocation: np.ndarray
+    charge_kw: list[float]
+    discharge_kw: list[float]
+    soc_kwh: list[float]
+    residuals_by_constraint: dict[str, float]
+    max_constraint_residual: float
+    power_approximation_used: bool
+
+
+def _projection_empty(snapshot: SystemSnapshot, status: str, failure: str) -> RawProjectionResult:
+    n_group = len(snapshot.group_work_capacity)
+    H = int(snapshot.planning_horizon_steps)
+    return RawProjectionResult(
+        backend="mip", solver_status=status, failure_class=failure,
+        horizon_steps=H, n_variables=0, n_integer_variables=0, n_constraints=0,
+        stage_a_status=status, stage_b_status="not_run",
+        stage_a_solve_time_s=0.0, stage_b_solve_time_s=0.0,
+        stage_a_objective=0.0, stage_b_objective=0.0, projection_offset=0.0,
+        exec_compute_actions=[0.0] * n_group, exec_storage_action=0.0,
+        business_gap_work=float(sum(t.remaining_work for t in snapshot.tasks)),
+        deadline_shortfall_work=0.0,
+        allocation=np.zeros((len(snapshot.tasks), n_group, H)),
+        charge_kw=[0.0] * H, discharge_kw=[0.0] * H,
+        soc_kwh=[float(snapshot.soc_kwh)] * (H + 1),
+        residuals_by_constraint={}, max_constraint_residual=0.0,
+        power_approximation_used=True,
+    )
+
+
+def _validate_raw(proposal, n_group: int) -> str | None:
+    """raw proposal 维度/范围验证；返回失败原因或 None（合法）。合法时不得 clip。"""
+    if len(proposal.compute_actions) != n_group:
+        return f"compute_actions 维度 {len(proposal.compute_actions)} != 组数 {n_group}"
+    if any((x < 0.0 or x > 1.0) for x in proposal.compute_actions):
+        return "compute_actions 存在超出 [0,1] 的取值"
+    if not (-1.0 <= float(proposal.storage_action) <= 1.0):
+        return f"storage_action {proposal.storage_action} 超出 [-1,1]"
+    return None
+
+
+def solve_time_indexed_mip_raw_projection(
+    snapshot: SystemSnapshot,
+    proposal,
+    *,
+    time_limit_s: float | None = None,
+    business_penalty_sgd_per_work: float = BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK[0],
+    deadline_penalty_sgd_per_work: float = DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK[0],
+    stage_b_tolerance: float = RAW_STAGE_B_TOL,
+) -> RawProjectionResult:
+    """第 0 步原始动作最小偏移投影（两阶段确定性 MIP）。
+
+    第 0 步映射（N = 组数）：
+        u_g          = sum_i A[i,g,0] / group_work_capacity[g]      （capacity<=0 时 u_g=0）
+        exec_storage = discharge[0]/discharge_max − charge[0]/charge_max   （>0 放电、<0 充电）
+
+    投影目标（无量纲 L1）：
+        offset = (1/N) * Σ_g |u_g − raw_compute_g| + |exec_storage − raw_storage|
+
+    阶段 A：最小化 offset（不混入经济目标）；
+    阶段 B：约束 offset <= 阶段A最优 + tolerance，再以规划经济/服务目标（SGD）确定性 tie-break。
+    """
+    import time
+
+    H = int(snapshot.planning_horizon_steps)
+    n_task = len(snapshot.tasks)
+    n_group = len(snapshot.group_work_capacity)
+
+    reason = _validate_raw(proposal, n_group)
+    if reason is not None:
+        return _projection_empty(snapshot, "invalid_proposal", FAILURE_PROPOSAL_INVALID)
+    if H <= 0:
+        return _projection_empty(snapshot, "optimal", FAILURE_NONE)
+
+    dt = float(snapshot.delta_t_hours)
+    pf = snapshot.planning_forecast
+    raw_compute = [float(x) for x in proposal.compute_actions]
+    raw_storage = float(proposal.storage_action)
+    cap = [float(c) for c in snapshot.group_work_capacity]
+    dmax = max(float(snapshot.bess_discharge_power_max_kw), 1e-9)
+    cmax = max(float(snapshot.bess_charge_power_max_kw), 1e-9)
+
+    n_a = n_task * n_group * H
+
+    def a(i: int, g: int, k: int) -> int:
+        return (i * n_group + g) * H + k
+
+    off_pidc = n_a
+    off_pgrid = off_pidc + H
+    off_pv = off_pgrid + H
+    off_wind = off_pv + H
+    off_curtail = off_wind + H
+    off_charge = off_curtail + H
+    off_discharge = off_charge + H
+    off_soc = off_discharge + H
+    off_bus = off_soc + (H + 1)
+    off_dls = off_bus + n_task
+    off_z = off_dls + n_task
+    off_d = off_z + H          # 逐组 |u_g - raw_compute_g|
+    off_e = off_d + n_group    # |exec_storage - raw_storage|
+    n_vars = off_e + 1
+
+    # 经济/服务目标（阶段 B 的 tie-break，单位 SGD）
+    c_econ = np.zeros(n_vars)
+    for k in range(H):
+        c_econ[off_pgrid + k] = dt * pf.price[k]
+        c_econ[off_charge + k] = dt * snapshot.bess_degradation_cost_per_kwh
+        c_econ[off_discharge + k] = dt * snapshot.bess_degradation_cost_per_kwh
+    for i in range(n_task):
+        c_econ[off_bus + i] = business_penalty_sgd_per_work
+        c_econ[off_dls + i] = deadline_penalty_sgd_per_work
+
+    # 阶段 A 目标：无量纲 L1 偏移
+    c_off = np.zeros(n_vars)
+    for g in range(n_group):
+        c_off[off_d + g] = 1.0 / max(n_group, 1)
+    c_off[off_e] = 1.0
+
+    lb = np.full(n_vars, 0.0)
+    ub = np.full(n_vars, np.inf)
+    lb[off_pidc:off_pidc + H] = -np.inf
+    ub[off_pgrid:off_pgrid + H] = max(float(snapshot.access_limit_kw), 0.0)
+    for k in range(H):
+        ub[off_pv + k] = max(float(pf.pv[k]), 0.0)
+        ub[off_wind + k] = max(float(pf.wind[k]), 0.0)
+        ub[off_charge + k] = float(snapshot.bess_charge_power_max_kw)
+        ub[off_discharge + k] = float(snapshot.bess_discharge_power_max_kw)
+    lb[off_soc:off_soc + H + 1] = float(snapshot.soc_min_kwh)
+    ub[off_soc:off_soc + H + 1] = float(snapshot.soc_max_kwh)
+    lb[off_z:off_z + H] = 0.0
+    ub[off_z:off_z + H] = 1.0
+
+    rows: list[dict[int, float]] = []
+    lbs: list[float] = []
+    ubs: list[float] = []
+    names: list[str] = []
+
+    def add(row: dict[int, float], lo: float, hi: float, name: str) -> None:
+        rows.append(row)
+        lbs.append(lo)
+        ubs.append(hi)
+        names.append(name)
+
+    _add_core_constraints(
+        add, snapshot, pf, H=H, n_task=n_task, n_group=n_group, dt=dt, a=a,
+        off={
+            "pidc": off_pidc, "pgrid": off_pgrid, "pv": off_pv, "wind": off_wind,
+            "curtail": off_curtail, "charge": off_charge, "discharge": off_discharge,
+            "soc": off_soc, "bus": off_bus, "dls": off_dls, "z": off_z,
+        },
+        mutual_exclusion=True,
+    )
+
+    # 投影绝对值线性化：d_g >= |u_g - raw_g|（cap<=0 时 u_g=0）
+    for g in range(n_group):
+        row_ge = {off_d + g: 1.0}
+        row_le = {off_d + g: 1.0}
+        if cap[g] > 0.0:
+            inv = 1.0 / cap[g]
+            for i in range(n_task):
+                row_ge[a(i, g, 0)] = -inv
+                row_le[a(i, g, 0)] = inv
+        add(row_ge, -raw_compute[g], np.inf, f"proj_ge[{g}]")
+        add(row_le, raw_compute[g], np.inf, f"proj_le[{g}]")
+
+    # e >= |exec_storage - raw_storage|
+    add(
+        {off_e: 1.0, off_discharge: -1.0 / dmax, off_charge: 1.0 / cmax},
+        -raw_storage, np.inf, "proj_ge_storage",
+    )
+    add(
+        {off_e: 1.0, off_discharge: 1.0 / dmax, off_charge: -1.0 / cmax},
+        raw_storage, np.inf, "proj_le_storage",
+    )
+
+    A_csr = csr_matrix(lil_matrix((len(rows), n_vars)))
+    row_mat = lil_matrix((len(rows), n_vars))
+    for r, row in enumerate(rows):
+        for col, val in row.items():
+            row_mat[r, col] = val
+    A_csr = csr_matrix(row_mat)
+    bounds_vec = Bounds(lb=lb, ub=ub)
+    integrality = np.zeros(n_vars)
+    integrality[off_z:off_z + H] = 1
+    options = {} if time_limit_s is None else {"time_limit": float(time_limit_s)}
+    offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
+
+    def _status(res) -> str:
+        code = int(getattr(res, "status", 4))
+        return (
+            SOLVER_OPTIMAL if code == 0
+            else SOLVER_TIME_LIMIT if code == 1
+            else SOLVER_INFEASIBLE if code == 2
+            else SOLVER_FAILURE
+        )
+
+    # --- 阶段 A：最小化原始动作偏移 ---
+    from scipy.optimize import milp as _milp
+
+    tA0 = time.perf_counter()
+    res_a = _milp(
+        c=c_off, constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
+        integrality=integrality, bounds=bounds_vec, options=options,
+    )
+    tA = time.perf_counter() - tA0
+    status_a = _status(res_a)
+    if status_a != SOLVER_OPTIMAL:
+        base_diag = (
+            diagnose_base_feasibility(snapshot) if status_a == SOLVER_INFEASIBLE else None
+        )
+        if status_a == SOLVER_TIME_LIMIT:
+            failure = FAILURE_TIMEOUT
+        elif base_diag is not None and not base_diag.feasible:
+            failure = FAILURE_BASE_SHORTAGE
+        else:
+            failure = FAILURE_SOLVER_FAILURE
+        out = _projection_empty(snapshot, status_a, failure)
+        out.stage_a_solve_time_s = tA
+        return out
+
+    offset_a = float(c_off @ res_a.x)
+
+    # --- 阶段 B：固定偏移上界，再以经济/服务目标 tie-break ---
+    rows_b = list(rows) + [offset_row]
+    lbs_b = list(lbs) + [-np.inf]
+    ubs_b = list(ubs) + [offset_a + stage_b_tolerance]
+    row_mat_b = lil_matrix((len(rows_b), n_vars))
+    for r, row in enumerate(rows_b):
+        for col, val in row.items():
+            row_mat_b[r, col] = val
+    A_b = csr_matrix(row_mat_b)
+
+    tB0 = time.perf_counter()
+    res_b = _milp(
+        c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
+        integrality=integrality, bounds=bounds_vec, options=options,
+    )
+    tB = time.perf_counter() - tB0
+    status_b = _status(res_b)
+    if status_b != SOLVER_OPTIMAL:
+        out = _projection_empty(snapshot, status_b, FAILURE_SOLVER_FAILURE)
+        out.stage_a_solve_time_s = tA
+        out.stage_b_solve_time_s = tB
+        out.stage_a_objective = offset_a
+        return out
+
+    x = res_b.x
+    allocation = np.zeros((n_task, n_group, H))
+    for i in range(n_task):
+        for g in range(n_group):
+            for k in range(H):
+                allocation[i, g, k] = max(x[a(i, g, k)], 0.0)
+
+    exec_compute = [0.0] * n_group
+    for g in range(n_group):
+        used = sum(allocation[i, g, 0] for i in range(n_task))
+        exec_compute[g] = float(used / cap[g]) if cap[g] > 0.0 else 0.0
+    exec_storage = float(x[off_discharge] / dmax - x[off_charge] / cmax)
+    exec_storage = float(np.clip(exec_storage, -1.0, 1.0))
+
+    offset_val = float(
+        sum(abs(exec_compute[g] - raw_compute[g]) for g in range(n_group)) / max(n_group, 1)
+        + abs(exec_storage - raw_storage)
+    )
+
+    charge = [float(x[off_charge + k]) for k in range(H)]
+    discharge = [float(x[off_discharge + k]) for k in range(H)]
+    business = [float(x[off_bus + i]) for i in range(n_task)]
+    deadline = [float(x[off_dls + i]) for i in range(n_task)]
+
+    ax = np.asarray(A_b.dot(x)).ravel()
+    residuals = {}
+    for r, name in enumerate(names):
+        value = float(ax[r])
+        if np.isneginf(lbs[r]):
+            residuals[name] = max(value - ubs[r], 0.0)
+        elif np.isposinf(ubs[r]):
+            residuals[name] = max(lbs[r] - value, 0.0)
+        else:
+            residuals[name] = abs(value - lbs[r])
+    max_residual = max(residuals.values()) if residuals else 0.0
+
+    total_business = float(sum(business))
+    total_deadline = float(sum(deadline))
+    failure = FAILURE_DEADLINE_SHORTFALL if total_deadline > _TOL else FAILURE_NONE
+
+    return RawProjectionResult(
+        backend="mip", solver_status=SOLVER_OPTIMAL, failure_class=failure,
+        horizon_steps=H, n_variables=n_vars, n_integer_variables=H, n_constraints=len(rows_b),
+        stage_a_status=status_a, stage_b_status=status_b,
+        stage_a_solve_time_s=tA, stage_b_solve_time_s=tB,
+        stage_a_objective=offset_a, stage_b_objective=float(c_econ @ x),
+        projection_offset=offset_val,
+        exec_compute_actions=exec_compute, exec_storage_action=exec_storage,
+        business_gap_work=total_business, deadline_shortfall_work=total_deadline,
+        allocation=allocation, charge_kw=charge, discharge_kw=discharge,
+        soc_kwh=[float(x[off_soc + k]) for k in range(H + 1)],
+        residuals_by_constraint=residuals, max_constraint_residual=max_residual,
+        power_approximation_used=True,
     )
 
 
