@@ -86,10 +86,16 @@ class LPPlanResult:
     storage_relaxation_active: bool
     failure_class: str
 
+    # 基础负载诊断（M4.3a1）
+    base_diagnostic_status: str
+    base_diagnostic_solve_time_s: float
+    base_shortfall_kwh: float
+
 
 def _empty_result(
     snapshot: SystemSnapshot, H: int, n_vars: int, n_cons: int, status: str,
     solve_time_s: float, failure_class: str,
+    base_diag: BaseFeasibilityDiagnostic | None = None,
 ) -> LPPlanResult:
     n_task, n_group = len(snapshot.tasks), len(snapshot.group_work_capacity)
     zeros = [0.0] * H
@@ -122,17 +128,143 @@ def _empty_result(
         power_approximation_used=True,
         storage_relaxation_active=False,
         failure_class=failure_class,
+        base_diagnostic_status=(base_diag.status if base_diag else "not_run"),
+        base_diagnostic_solve_time_s=(base_diag.solve_time_s if base_diag else 0.0),
+        base_shortfall_kwh=(base_diag.shortfall_kwh if base_diag else 0.0),
     )
 
 
-def _base_shortage_possible(snapshot: SystemSnapshot, H: int) -> bool:
-    """基础负载是否在接入 + 可再生 + 最大放电之下仍无法满足。"""
+@dataclass
+class BaseFeasibilityDiagnostic:
+    """基础负载专用可行性诊断结果（M4.3a1）。"""
+
+    feasible: bool
+    status: str
+    solve_time_s: float
+    shortfall_kwh: float
+
+
+@dataclass
+class _BaseOnlyModel:
+    c: np.ndarray
+    a_eq: csr_matrix
+    b_eq: np.ndarray
+    lb: np.ndarray
+    ub: np.ndarray
+    n_vars: int
+
+
+def _base_only_lp(
+    snapshot: SystemSnapshot, H: int, with_shortfall_slack: bool
+) -> _BaseOnlyModel:
+    """构建 base-only 模型：P_idc 固定为 base_idc_power，不含任何任务变量。
+
+    `with_shortfall_slack=True` 时加入非负「未服务基础功率」松弛量并最小化其总能量（kWh），
+    用于量化缺口；否则做纯可行性判定。
+    """
     pf = snapshot.planning_forecast
+    dt = float(snapshot.delta_t_hours)
+
+    off_pgrid, off_pv, off_wind = 0, H, 2 * H
+    off_curtail, off_charge, off_discharge = 3 * H, 4 * H, 5 * H
+    off_soc = 6 * H
+    off_unserved = off_soc + (H + 1)
+    n_vars = off_unserved + (H if with_shortfall_slack else 0)
+
+    c = np.zeros(n_vars)
+    if with_shortfall_slack:
+        for k in range(H):
+            c[off_unserved + k] = dt  # 最小化未服务基础能量（kWh）
+
+    lb = np.full(n_vars, 0.0)
+    ub = np.full(n_vars, np.inf)
+    ub[off_pgrid:off_pgrid + H] = max(float(snapshot.access_limit_kw), 0.0)
     for k in range(H):
-        available = snapshot.access_limit_kw + pf.pv[k] + pf.wind[k]
-        if pf.base_idc_power[k] > available + _TOL:
-            return True
-    return False
+        ub[off_pv + k] = max(float(pf.pv[k]), 0.0)
+        ub[off_wind + k] = max(float(pf.wind[k]), 0.0)
+        ub[off_charge + k] = float(snapshot.bess_charge_power_max_kw)
+        ub[off_discharge + k] = float(snapshot.bess_discharge_power_max_kw)
+    lb[off_soc:off_soc + H + 1] = float(snapshot.soc_min_kwh)
+    ub[off_soc:off_soc + H + 1] = float(snapshot.soc_max_kwh)
+
+    rows: list[dict[int, float]] = []
+    lbs: list[float] = []
+    ubs: list[float] = []
+
+    def add(row: dict[int, float], lo: float, hi: float) -> None:
+        rows.append(row)
+        lbs.append(lo)
+        ubs.append(hi)
+
+    for k in range(H):
+        # 能量平衡（与主 LP / env 一致）：
+        # P_grid + pv_used + wind_used + discharge (+ unserved) = P_idc + charge
+        row = {
+            off_pgrid + k: 1.0, off_pv + k: 1.0, off_wind + k: 1.0,
+            off_discharge + k: 1.0, off_charge + k: -1.0,
+        }
+        const = float(pf.base_idc_power[k])
+        if with_shortfall_slack:
+            row[off_unserved + k] = 1.0
+        add(row, const, const)
+        # 弃电定义：curtail + pv_used + wind_used = pv + wind
+        add(
+            {off_curtail + k: 1.0, off_pv + k: 1.0, off_wind + k: 1.0},
+            float(pf.pv[k]) + float(pf.wind[k]),
+            float(pf.pv[k]) + float(pf.wind[k]),
+        )
+        # SOC 动态
+        add(
+            {
+                off_soc + k + 1: 1.0, off_soc + k: -1.0,
+                off_charge + k: -snapshot.bess_charge_efficiency * dt,
+                off_discharge + k: dt / max(snapshot.bess_discharge_efficiency, 1e-9),
+            },
+            0.0, 0.0,
+        )
+    add({off_soc: 1.0}, float(snapshot.soc_kwh), float(snapshot.soc_kwh))
+
+    A_mat = lil_matrix((len(rows), n_vars))
+    for r, row in enumerate(rows):
+        for col, val in row.items():
+            A_mat[r, col] = val
+    return _BaseOnlyModel(
+        c=c, a_eq=csr_matrix(A_mat), b_eq=np.array(ubs), lb=lb, ub=ub, n_vars=n_vars
+    )
+
+
+def diagnose_base_feasibility(snapshot: SystemSnapshot) -> BaseFeasibilityDiagnostic:
+    """基础负载专用可行性诊断（M4.3a1）。
+
+    用与主 LP **相同的物理约束**（接入、PV/wind 使用与弃电、充放电、SOC、效率、无反送电、
+    能量平衡）判定「仅基础负载」是否可服务；不含任何任务变量、任务 slack 或未来真实任务。
+    """
+    import time
+
+    H = int(snapshot.planning_horizon_steps)
+    t0 = time.perf_counter()
+    if H <= 0:
+        return BaseFeasibilityDiagnostic(True, "trivial_empty_horizon", 0.0, 0.0)
+
+    model = _base_only_lp(snapshot, H, with_shortfall_slack=False)
+    res = linprog(
+        c=model.c, A_eq=model.a_eq, b_eq=model.b_eq,
+        bounds=list(zip(model.lb, model.ub, strict=True)), method="highs",
+    )
+    if res.success:
+        return BaseFeasibilityDiagnostic(
+            True, str(res.message), time.perf_counter() - t0, 0.0
+        )
+
+    # 不可行：用松弛量量化最小未服务基础能量（kWh）
+    model2 = _base_only_lp(snapshot, H, with_shortfall_slack=True)
+    res2 = linprog(
+        c=model2.c, A_eq=model2.a_eq, b_eq=model2.b_eq,
+        bounds=list(zip(model2.lb, model2.ub, strict=True)), method="highs",
+    )
+    shortfall = float(res2.fun) if res2.success else float("nan")
+    status = f"infeasible ({res.message})" if res2.success else str(res2.message)
+    return BaseFeasibilityDiagnostic(False, status, time.perf_counter() - t0, shortfall)
 
 
 def solve_time_indexed_lp(
@@ -211,12 +343,12 @@ def solve_time_indexed_lp(
         base_kw = float(pf.base_idc_power[k])
         add(row, base_kw, base_kw, f"power_definition[{k}]")
 
-    # 能量平衡：P_grid + pv_used + wind_used + discharge - P_idc - charge - curtail = 0
+    # 能量平衡（与 env M3.5 一致）：P_grid + pv_used + wind_used + discharge = P_idc + charge
+    # 注：弃电是**未被消费**的可再生，不得出现在需求侧（否则等于双重计数）。
     for k in range(H):
         row = {
             off_pgrid + k: 1.0, off_pv + k: 1.0, off_wind + k: 1.0,
-            off_discharge + k: 1.0, off_pidc + k: -1.0,
-            off_charge + k: -1.0, off_curtail + k: -1.0,
+            off_discharge + k: 1.0, off_pidc + k: -1.0, off_charge + k: -1.0,
         }
         add(row, 0.0, 0.0, f"energy_balance[{k}]")
 
@@ -315,10 +447,10 @@ def solve_time_indexed_lp(
     solve_time = time.perf_counter() - t0
 
     if not res.success:
-        base_short = _base_shortage_possible(snapshot, H)
-        failure = FAILURE_BASE_SHORTAGE if base_short else FAILURE_SOLVER_FAILURE
+        base_diag = diagnose_base_feasibility(snapshot)
+        failure = FAILURE_BASE_SHORTAGE if not base_diag.feasible else FAILURE_SOLVER_FAILURE
         return _empty_result(snapshot, H, n_vars, len(rows), str(res.message),
-                             solve_time, failure)
+                             solve_time, failure, base_diag)
 
     x = res.x
     allocation = np.zeros((n_task, n_group, H))
@@ -397,6 +529,9 @@ def solve_time_indexed_lp(
         power_approximation_used=True,
         storage_relaxation_active=storage_relaxation,
         failure_class=failure,
+        base_diagnostic_status="not_required_optimal",
+        base_diagnostic_solve_time_s=0.0,
+        base_shortfall_kwh=0.0,
     )
 
 
