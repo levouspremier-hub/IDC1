@@ -7,7 +7,7 @@ from safe_rl.corrector_wrapper import CorrectorWrapper
 
 
 def test_wrapper_records_raw_exec_reason():
-    env = CorrectorWrapper(IDCPriceEnv20D())
+    env = CorrectorWrapper(IDCPriceEnv20D(), corrector_time_limit_s=5.0)
     env.reset(seed=0)
     a = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.3], dtype=np.float32)])
     obs, reward, term, trunc, info = env.step(a)
@@ -24,7 +24,7 @@ def test_wrapper_records_raw_exec_reason():
 
 def test_wrapper_uses_same_corrector():
     # 训练/评估同语义：同一 wrapper 类、同一 correct 函数
-    env = CorrectorWrapper(IDCPriceEnv20D())
+    env = CorrectorWrapper(IDCPriceEnv20D(), corrector_time_limit_s=5.0)
     env.reset(seed=0)
     a = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
     _, _, _, _, info = env.step(a)

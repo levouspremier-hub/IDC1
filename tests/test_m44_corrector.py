@@ -83,7 +83,7 @@ def _snapshot(access_limit_kw=50.0, n_group=2) -> SystemSnapshot:
 def test_success_is_reviewed():
     snap = _snapshot()
     p = DispatchProposal(compute_actions=[0.5, 0.5], storage_action=0.0)
-    c = correct(snap, p)
+    c = correct(snap, p, time_limit_s=5.0)
     assert c.failure == FailureClass.NONE
     assert c.reviewed is True
 
@@ -92,7 +92,7 @@ def test_infeasible_returns_boundary_action(monkeypatch):
     """接入(12) < 基础负载(14) → base-only 不可行 → 零动作回退。"""
     snap = _snapshot(access_limit_kw=12.0)  # 接入 < 基础负载(14) → 物理不可行
     p = DispatchProposal(compute_actions=[0.5, 0.5], storage_action=0.0)
-    c = correct(snap, p)
+    c = correct(snap, p, time_limit_s=5.0)
     assert c.failure in (FailureClass.BASE_SHORTAGE, FailureClass.SOLVER_FAILURE)
     assert c.exec_compute_actions == [0.0, 0.0]
     assert c.exec_storage_action == 0.0
@@ -102,7 +102,7 @@ def test_infeasible_returns_boundary_action(monkeypatch):
 def test_proposal_dimension_mismatch_returns_boundary_action():
     snap = _snapshot()
     p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=0.0)  # 维度不符
-    c = correct(snap, p)
+    c = correct(snap, p, time_limit_s=5.0)
     assert c.failure == FailureClass.PROPOSAL_INVALID
     assert c.exec_compute_actions == [0.0, 0.0]
     assert c.reviewed is True
@@ -111,6 +111,6 @@ def test_proposal_dimension_mismatch_returns_boundary_action():
 def test_proposal_out_of_range_returns_boundary_action():
     snap = _snapshot()
     p = DispatchProposal(compute_actions=[0.5, 1.5], storage_action=0.0)  # 超出 [0,1]
-    c = correct(snap, p)
+    c = correct(snap, p, time_limit_s=5.0)
     assert c.failure == FailureClass.PROPOSAL_INVALID
     assert c.exec_compute_actions == [0.0, 0.0]

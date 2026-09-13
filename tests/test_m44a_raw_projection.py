@@ -85,8 +85,8 @@ def test_feasible_raw_proposal_offset_is_near_zero():
 
 def test_corrector_no_longer_ignores_proposal():
     snap = build_snapshot(_env(access_limit_kw=1000.0))
-    a = correct(snap, _proposal([0.15] * N_GROUP, 0.0))
-    b = correct(snap, _proposal([0.75] * N_GROUP, 0.0))
+    a = correct(snap, _proposal([0.15] * N_GROUP, 0.0), time_limit_s=5.0)
+    b = correct(snap, _proposal([0.75] * N_GROUP, 0.0), time_limit_s=5.0)
     assert a.failure == FailureClass.NONE and b.failure == FailureClass.NONE
     assert a.exec_compute_actions != b.exec_compute_actions
 
@@ -154,7 +154,7 @@ def test_infeasible_raw_is_projectable_and_low_offset():
 def test_invalid_proposal_returns_zero_action_with_reason():
     snap = build_snapshot(_env())
     bad = DispatchProposal(compute_actions=[0.5] * (N_GROUP - 1), storage_action=0.0)
-    c = correct(snap, bad)
+    c = correct(snap, bad, time_limit_s=5.0)
     assert c.failure == FailureClass.PROPOSAL_INVALID
     assert all(v == 0.0 for v in c.exec_compute_actions)
     assert c.exec_storage_action == 0.0
@@ -209,7 +209,7 @@ def test_corrector_does_not_call_legacy_solver(monkeypatch):
     monkeypatch.setattr(legacy_solver, "solve", _boom)
     monkeypatch.setattr(corrector_mod, "solve", _boom, raising=False)
     snap = build_snapshot(_env(access_limit_kw=1000.0))
-    c = correct(snap, _proposal([0.5] * N_GROUP, 0.0))
+    c = correct(snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=5.0)
     assert c.failure == FailureClass.NONE
 
 
@@ -239,7 +239,8 @@ def test_two_stage_audit_fields_present():
 
 def test_wrapper_exec_is_corrector_output_and_raw_preserved():
     env = CorrectorWrapper(
-        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0)
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0),
+        corrector_time_limit_s=5.0,
     )
     env.reset(seed=0)
     raw = np.concatenate(
@@ -256,7 +257,8 @@ def test_wrapper_exec_is_corrector_output_and_raw_preserved():
 
 def test_wrapper_env_constraints_hold_after_exec():
     env = CorrectorWrapper(
-        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=18.0)
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=18.0),
+        corrector_time_limit_s=5.0,
     )
     env.reset(seed=0)
     raw = np.concatenate(
@@ -294,7 +296,9 @@ class _FakeMilp:
         r.success = r.status == 0
         r.message = f"fake {r.status}"
         r.fun = 0.0
-        r.x = None
+        cons = kw.get("constraints") or []
+        n_vars = cons[0].A.shape[1] if cons else 0
+        r.x = np.zeros(n_vars) if r.status == 0 else None
         return r
 
 
@@ -436,7 +440,9 @@ def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
         corrector_time_limit_s=5.0,
     )
     env.reset(seed=0)
-    raw = np.concatenate([np.full(N_GROUP, 0.7, dtype=np.float32), np.array([0.3], dtype=np.float32)])
+    raw = np.concatenate(
+        [np.full(N_GROUP, 0.7, dtype=np.float32), np.array([0.3], dtype=np.float32)]
+    )
     _, _, _, _, info = env.step(raw)
     # 向环境发送完整 21 维零动作
     assert np.asarray(info["exec_action"]).shape == (N_GROUP + 1,)
