@@ -85,7 +85,10 @@ def test_old_checkpoints_rejected(tmp_path, meta):
     torch.save({"metadata": meta, "state": {}}, str(path))
     with pytest.raises(CheckpointVersionError):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
@@ -94,7 +97,10 @@ def test_unversioned_checkpoint_rejected(tmp_path):
     torch.save({"state": {}}, str(path))
     with pytest.raises(CheckpointVersionError, match="无版本"):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 

@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from envs.idc_price_env import IDCPriceEnv20D
+from idc_model.task import Task
 
 
 def _env(access_limit_kw=18.0, wt=None, pv=None, soc_init=0.5) -> IDCPriceEnv20D:
@@ -47,6 +48,16 @@ def _energy_balance(env, info) -> None:
 def test_low_access_no_renewable_no_storage_limits_tasks():
     env = _env(access_limit_kw=15.0, soc_init=0.1)  # 无可再生、SOC 底、接入仅略高于基础负载
     env.reset(seed=0)
+    # 注入确定性任务，避免依赖随机生成的默认任务集（reset 不控制任务生成 RNG）
+    env.tasks = [
+        Task(
+            task_id=1, profile_key="k", name="t", arrival_time=0, duration=1,
+            load_profile=np.array([0.5]), workload=1000.0, deadline=10,
+            priority=1.0, interruptible=True, parallelizable=False,
+        )
+    ]
+    env.tasks[0].status = "waiting"
+    env.Q_t = 1000.0
     _, _, _, _, info = env.step(_full_compute(env))
     assert info["P_grid_kW"] <= 15.0 + 1e-6
     assert info["access_curtailment_work"] > 0  # 接入投影导致的任务削减非零
