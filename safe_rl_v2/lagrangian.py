@@ -340,6 +340,46 @@ class Lagrangian:
                     f"({entry_updates})，got {len(values)}"
                 )
 
+            # --- M5.3c：状态内部自洽性（update() 恒等式；拒绝不可能的历史）---
+            # R3：逐约束 updates 必须与顶层严格同步（两者在同一次 update() 中各加 1）
+            if entry_updates != outer_updates:
+                raise ValueError(
+                    f"constraints[{name!r}].updates 必须等于顶层 updates "
+                    f"({outer_updates})，got {entry_updates}"
+                )
+            # R1：log 的每个值都必须有限且落在 [0, max_multiplier]
+            #     （update() 写入 log 的就是被 clamp 过的 multiplier）
+            for index, value in enumerate(values):
+                if value < 0.0 or value > max_multiplier:
+                    raise ValueError(
+                        f"constraints[{name!r}].log[{index}] 越界："
+                        f"{value!r} 不在 [0, {max_multiplier!r}]"
+                        "（update() 只会写入被截断到该区间的乘子）"
+                    )
+            # R2：有更新时 log 最后一项必须严格等于当前 multiplier
+            if entry_updates > 0 and values[-1] != multiplier:
+                raise ValueError(
+                    f"constraints[{name!r}].log 最后一项必须等于当前 multiplier："
+                    f"{values[-1]!r} != {multiplier!r}"
+                )
+            # R4：零更新状态必须与构造后的零状态逐位一致
+            if outer_updates == 0:
+                if multiplier != 0.0:
+                    raise ValueError(
+                        f"constraints[{name!r}].multiplier 在零更新状态下必须为 0，"
+                        f"got {multiplier!r}"
+                    )
+                if estimate != 0.0:
+                    raise ValueError(
+                        f"constraints[{name!r}].estimate 在零更新状态下必须为 0，"
+                        f"got {estimate!r}"
+                    )
+                if values:
+                    raise ValueError(
+                        f"constraints[{name!r}].log 在零更新状态下必须为空，"
+                        f"got {len(values)} 项"
+                    )
+
             rebuilt[name] = ConstraintState(
                 name=name,
                 budget=budget,

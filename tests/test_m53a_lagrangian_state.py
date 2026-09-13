@@ -505,10 +505,16 @@ def test_state_dict_is_json_serializable():
 
 
 def test_load_accepts_multiplier_exactly_at_bounds():
-    """边界值必须被接受：0 与 max_multiplier 都是合法状态。"""
+    """边界值必须被接受：0 与 max_multiplier 都是合法状态。
+
+    M5.3c 迁移：状态必须自洽（`log[-1] == multiplier`），故改 multiplier 时
+    同步改 log 的最后一项。**断言本身未变**。
+    """
     state = _valid_state()
     state["constraints"]["business"]["multiplier"] = 0.0
+    state["constraints"]["business"]["log"][-1] = 0.0
     state["constraints"]["carbon"]["multiplier"] = 20.0  # carbon 的 max_multiplier
+    state["constraints"]["carbon"]["log"][-1] = 20.0
     restored = make_lagrangian()
     restored.load_state_dict(state)
     assert restored.multipliers() == {"business": 0.0, "carbon": 20.0}
