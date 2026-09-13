@@ -5,11 +5,16 @@
 """
 
 import json
+from typing import Any
 
 import gymnasium as gym
 import numpy as np
 import pytest
 import torch
+
+from envs.idc_price_env import IDCPriceEnv20D
+from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, RolloutBuffer
+from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.rollout import (
     BUSINESS_VIOLATION_INFO_KEY,
     CARBON_EMISSION_INFO_KEY,
@@ -18,13 +23,19 @@ from safe_rl_v2.rollout import (
     collect_rollout,
 )
 
-from envs.idc_price_env import IDCPriceEnv20D
-from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, RolloutBuffer
-from safe_rl_v2.policy import SafePPOPolicy
-
 CORRECTOR_TIME_LIMIT_S = 0.05
 STEPS = 3
 N_COMPUTE = ACTION_DIM - 1
+
+# 环境必须显式给定三类种子：`make_env()` 对 server/task/forecast 三者中任一
+# 为 None 时使用 `default_rng(None)` 熵源，跨实例不可复现（**既有环境行为，本卡不改 env**）。
+ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
+
+
+def make_env(**over):
+    kwargs = dict(ENV_SEED_KWARGS)
+    kwargs.update(over)
+    return IDCPriceEnv20D(**kwargs)
 
 
 def _policy(env, seed: int = 0) -> SafePPOPolicy:
@@ -37,7 +48,22 @@ def _obs_tensor(env) -> torch.Tensor:
     return torch.zeros(env.obs_dim, dtype=torch.float32)
 
 
-class _DroppingEnv(gym.Wrapper):
+class _ForwardingWrapper(gym.Wrapper):
+    """把 `obs_dim` / `model` 等底层属性透传给上层（CorrectorWrapper 需要 `env.model`）。"""
+
+    def __getattr__(self, name: str):
+        # 只拦截 `env`/dunder，避免初始化期递归；其余（含 `_idc_power_kw`）一律透传
+        if name == "env" or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(self.env, name)
+
+    @property
+    def obs_dim(self) -> int:
+        env: Any = self.env
+        return int(env.obs_dim)
+
+
+class _DroppingEnv(_ForwardingWrapper):
     """把某个 info 键删掉，模拟环境信息缺失。"""
 
     def __init__(self, env, key: str):
@@ -50,10 +76,22 @@ class _DroppingEnv(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
+class _RecordingEnv(_ForwardingWrapper):
+    """记录**实际收到**的动作，用于证明采集器原样透传、未做任何 clip。"""
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.received: list[np.ndarray] = []
+
+    def step(self, action):
+        self.received.append(np.asarray(action, dtype=np.float32).copy())
+        return self.env.step(action)
+
+
 # --- 1. 有界 raw 动作采样 ---
 
 def test_act_returns_bounded_raw_action():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     obs = _obs_tensor(env)
     for _ in range(25):
@@ -68,7 +106,7 @@ def test_act_returns_bounded_raw_action():
 
 
 def test_act_returns_float32_compatible_with_env_action_space():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     raw, _, _ = policy.act(_obs_tensor(env))
     arr = raw.detach().numpy().astype(np.float32)
@@ -79,7 +117,7 @@ def test_act_returns_float32_compatible_with_env_action_space():
 
 def test_evaluate_raw_actions_reproduces_act_log_prob():
     """`evaluate_raw_actions` 必须复现 `act()` 对同一 raw 样本的 log-prob。"""
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     obs = _obs_tensor(env)
     for _ in range(10):
@@ -89,7 +127,7 @@ def test_evaluate_raw_actions_reproduces_act_log_prob():
 
 
 def test_evaluate_raw_actions_is_pure():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     obs = _obs_tensor(env)
     raw, _, _ = policy.act(obs)
@@ -100,7 +138,7 @@ def test_evaluate_raw_actions_is_pure():
 
 def test_stored_log_prob_corresponds_to_stored_raw_action():
     """落库的 old_raw_log_prob 必须对应落库的 raw_action（禁止 clip 后沿用旧概率）。"""
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     collect_rollout(env, policy, buf, steps=STEPS, seed=0, corrector_on=False)
@@ -111,29 +149,24 @@ def test_stored_log_prob_corresponds_to_stored_raw_action():
         assert float(recomputed.detach()) == pytest.approx(t.old_raw_log_prob, abs=1e-5)
 
 
-def test_raw_action_is_stored_verbatim_without_clipping():
-    env = IDCPriceEnv20D()
-    policy = _policy(env)
-    obs = torch.zeros(env.obs_dim, dtype=torch.float32)
-
-    # 固定 torch RNG 状态，使手工采样与采集器内首次采样是同一样本
-    rng_state = torch.get_rng_state()
-    raw, log_prob, _ = policy.act(obs)
-    expected = raw.detach().numpy().astype(np.float64)
-
-    torch.set_rng_state(rng_state)
+def test_env_receives_raw_action_verbatim_when_corrector_off():
+    """corrector 关闭时，基础 env 收到的必须是采样 raw 动作的逐元素原样副本。"""
+    rec = _RecordingEnv(make_env())
+    policy = _policy(rec)
     buf = RolloutBuffer()
-    collect_rollout(env, policy, buf, steps=1, seed=0, corrector_on=False)
-    stored = buf.transitions[0].raw_action
+    collect_rollout(rec, policy, buf, steps=STEPS, seed=0, corrector_on=False)
 
-    np.testing.assert_allclose(stored, expected, atol=0.0)
-    assert buf.transitions[0].old_raw_log_prob == pytest.approx(float(log_prob.detach()), abs=1e-6)
+    assert len(rec.received) == STEPS
+    for sent, t in zip(rec.received, buf.transitions, strict=True):
+        np.testing.assert_array_equal(sent, t.raw_action.astype(np.float32))
+        # 未做 clip：落库动作与 env 实际收到的完全一致，不存在「clip 后再记录」的窗口
+        assert sent.dtype == np.float32
 
 
 # --- 3. corrector 关闭：完整 transition ---
 
 def test_collect_rollout_off_writes_complete_transition():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     stats = collect_rollout(env, policy, buf, steps=STEPS, seed=0, corrector_on=False)
@@ -155,7 +188,7 @@ def test_collect_rollout_off_writes_complete_transition():
 
 
 def test_collect_rollout_off_records_named_quantities():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     collect_rollout(env, policy, buf, steps=STEPS, seed=0, corrector_on=False)
@@ -170,7 +203,7 @@ def test_collect_rollout_off_records_named_quantities():
 # --- 4. corrector 开启：raw 原样送入修正器 ---
 
 def test_collect_rollout_on_sends_raw_action_verbatim_to_corrector():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     stats = collect_rollout(
@@ -192,14 +225,14 @@ def test_collect_rollout_on_sends_raw_action_verbatim_to_corrector():
 
 
 def test_collect_rollout_on_requires_explicit_time_limit():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     with pytest.raises(ValueError, match="corrector_time_limit_s"):
         collect_rollout(env, policy, RolloutBuffer(), steps=1, seed=0, corrector_on=True)
 
 
 def test_collect_rollout_off_rejects_unused_time_limit():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     with pytest.raises(ValueError, match="corrector_time_limit_s"):
         collect_rollout(
@@ -215,17 +248,33 @@ def test_collect_rollout_off_rejects_unused_time_limit():
     [BUSINESS_VIOLATION_INFO_KEY, CARBON_EMISSION_INFO_KEY, ELECTRICITY_COST_INFO_KEY],
 )
 def test_missing_env_info_raises_instead_of_faking_zero(key):
-    env = _DroppingEnv(IDCPriceEnv20D(), key)
+    env = _DroppingEnv(make_env(), key)
     policy = _policy(env)
     with pytest.raises(MissingEnvInfoError, match=key):
         collect_rollout(env, policy, RolloutBuffer(), steps=1, seed=0, corrector_on=False)
 
 
-def test_missing_correction_audit_field_raises():
-    """corrector 开启时审计字段缺失也必须报错，不得用默认值补齐。"""
-    env = _DroppingEnv(IDCPriceEnv20D(), "correction_reason")
+@pytest.mark.parametrize("key", ["correction_reason", "exec_action", "business_gap"])
+def test_missing_correction_audit_field_raises(key, monkeypatch):
+    """corrector 开启时审计字段缺失也必须报错，不得用默认值补齐。
+
+    审计字段由 `CorrectorWrapper.step` 在底层 env 之后写入，故只能在 wrapper **之上**
+    删除（测试专用 spy，不改 wrapper 源码）。
+    """
+    import safe_rl.corrector_wrapper as corrector_wrapper
+
+    real_step = corrector_wrapper.CorrectorWrapper.step
+
+    def step_then_drop(self, action):
+        obs, reward, terminated, truncated, info = real_step(self, action)
+        info.pop(key, None)
+        return obs, reward, terminated, truncated, info
+
+    monkeypatch.setattr(corrector_wrapper.CorrectorWrapper, "step", step_then_drop)
+
+    env = make_env()
     policy = _policy(env)
-    with pytest.raises(MissingEnvInfoError, match="correction_reason"):
+    with pytest.raises(MissingEnvInfoError, match=key):
         collect_rollout(
             env, policy, RolloutBuffer(), steps=1, seed=0,
             corrector_on=True, corrector_time_limit_s=CORRECTOR_TIME_LIMIT_S,
@@ -236,7 +285,7 @@ def test_missing_correction_audit_field_raises():
 
 @pytest.mark.parametrize("corrector_on", [False, True])
 def test_correction_info_is_json_safe(corrector_on):
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     collect_rollout(
@@ -250,7 +299,7 @@ def test_correction_info_is_json_safe(corrector_on):
 
 
 def test_buffer_payload_from_rollout_roundtrips():
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     buf = RolloutBuffer()
     collect_rollout(env, policy, buf, steps=STEPS, seed=0, corrector_on=False)
@@ -264,7 +313,7 @@ def test_buffer_payload_from_rollout_roundtrips():
 # --- 7. 终止语义与确定性 ---
 
 def test_rollout_stops_at_terminal_step():
-    env = IDCPriceEnv20D(horizon=4)
+    env = make_env(horizon=4)
     policy = _policy(env)
     buf = RolloutBuffer()
     stats = collect_rollout(env, policy, buf, steps=50, seed=0, corrector_on=False)
@@ -276,7 +325,7 @@ def test_rollout_stops_at_terminal_step():
 
 def test_rollout_is_deterministic_given_seed():
     def raws(corrector_on: bool) -> np.ndarray:
-        env = IDCPriceEnv20D()
+        env = make_env()
         policy = _policy(env, seed=7)
         buf = RolloutBuffer()
         collect_rollout(
@@ -294,7 +343,7 @@ def test_rollout_is_deterministic_given_seed():
 
 @pytest.mark.parametrize("corrector_on", [False, True])
 def test_collect_rollout_does_not_touch_policy_parameters(corrector_on):
-    env = IDCPriceEnv20D()
+    env = make_env()
     policy = _policy(env)
     before = [p.detach().clone() for p in policy.parameters()]
     collect_rollout(
@@ -311,5 +360,12 @@ def test_rollout_module_exposes_no_ppo_update_api():
     from safe_rl_v2 import rollout as mod
 
     forbidden = ("ppo", "ratio", "clip", "gae", "advantage", "actor_loss", "lagrang")
-    public = [n for n in dir(mod) if not n.startswith("_")]
-    assert [n for n in public if any(f in n.lower() for f in forbidden)] == []
+    # 只看本模块**定义**的对象；`SafePPOPolicy` 等导入名不算本模块提供的入口
+    defined = [
+        name
+        for name in dir(mod)
+        if not name.startswith("_")
+        and getattr(getattr(mod, name), "__module__", None) == mod.__name__
+    ]
+    assert defined, "模块必须至少定义 collect_rollout"
+    assert [n for n in defined if any(f in n.lower() for f in forbidden)] == []
