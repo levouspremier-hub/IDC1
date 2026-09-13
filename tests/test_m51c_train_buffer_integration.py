@@ -1,4 +1,4 @@
-"""M5.1c 测试：dry_run_update 真实消费 contract-v6 RolloutBuffer，采样 RNG 显式可注入。
+"""M5.1c 测试：dry_run_update 真实消费 contract-v7 RolloutBuffer，采样 RNG 显式可注入。
 
 本卡不测 PPO 数学，也不声称训练有效：dry-run 仍只是「闭环可更新」的冒烟验证。
 """
@@ -15,7 +15,12 @@ import torch
 from envs.idc_price_env import IDCPriceEnv20D
 from safe_rl_v2 import train as train_mod
 from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, RolloutBuffer
-from safe_rl_v2.lagrangian import Lagrangian
+from safe_rl_v2.lagrangian import (
+    UNIT_KG_CO2E,
+    UNIT_VIOLATION_TASK_STEPS,
+    ConstraintSpec,
+    Lagrangian,
+)
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.rollout import collect_rollout
 from safe_rl_v2.train import dry_run_update
@@ -25,6 +30,20 @@ ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
 CORRECTOR_TIME_LIMIT_S = 0.05
 STEPS = 4
 
+
+
+def make_default_lagrangian() -> Lagrangian:
+    """M5.3a 迁移夹具：显式约束定义（替换 `Lagrangian({"business":5.0,"carbon":3.0})`）。"""
+    return Lagrangian((
+        ConstraintSpec(
+            name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+    ))
 
 def make_env(**over):
     kwargs = dict(ENV_SEED_KWARGS)
@@ -44,7 +63,7 @@ def make_policy(env, seed: int = 0) -> SafePPOPolicy:
 
 
 def make_lagrangian() -> Lagrangian:
-    return Lagrangian({"business": 5.0, "carbon": 3.0})
+    return make_default_lagrangian()
 
 
 def make_optimizer(policy) -> torch.optim.Optimizer:

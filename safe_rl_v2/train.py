@@ -1,4 +1,4 @@
-"""M5.1c / M5.2b 训练入口：dry-run 更新，**唯一数据来源**是 contract-v6 `RolloutBuffer`。
+"""M5.1c / M5.2b 训练入口：dry-run 更新，**唯一数据来源**是 contract-v7 `RolloutBuffer`。
 
 定位不变：只验证「真实采集 → 一次更新」闭环可跑通，**不因短训练奖励高而宣称有效**。
 
@@ -11,7 +11,8 @@
 - 三套 critic target 的**每一个输入**都来自 buffer 的具名字段
   （`observation` / `next_observation` / `terminated` / `truncated` /
   `reward` / `business_cost` / `carbon_cost`），不回读 env 内部数组或未来真值；
-- bootstrap **只**读 buffer 最后一条 `next_observation` 的 critic value，
+- bootstrap **逐 transition** 取各自 `next_observation` 的 critic value
+  （M5.2c 勘误：不得用下标 `t+1`，也不得只读最后一条）；
   是否使用由 `terminated` 掩码决定，调用方不自行判断；
 - critic loss 逐头对应各自 target，三个独立 MSE，不混列、不共享、不以电费顶替；
 - actor likelihood 只对 buffer 的 `raw_action` 计算（`evaluate_raw_actions`），
@@ -161,10 +162,12 @@ def dry_run_update(
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    # M5.3a 迁移：`Lagrangian.update` 只接受**逐 transition 序列**，
+    # 聚合口径（per-transition mean）由 lagrangian 模块内部固定，调用方不能绕过。
     lagrangian.update(
         {
-            "business": float(np.mean(business_violations)),
-            "carbon": float(np.mean(carbon_emissions)),
+            "business": business_violations,
+            "carbon": carbon_emissions,
         }
     )
 

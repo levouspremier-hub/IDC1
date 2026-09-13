@@ -1,7 +1,7 @@
 """M5.1 测试（M5.1a 迁移）：buffer 同存 raw/exec、21 维、严格序列化往返。
 
 M5.1a 起 `Transition` 新增 next_observation / terminated / truncated / electricity_cost_sgd，
-契约版本升至 contract-v6；本文件只保留与新契约一致的断言，
+契约版本升至 contract-v7；本文件只保留与新契约一致的断言，
 严格契约细节由 `tests/test_m51a_rollout_contract.py` 覆盖。
 """
 
@@ -39,7 +39,7 @@ def test_buffer_stores_raw_exec_separately():
     assert not np.allclose(t.raw_action, t.exec_action)  # exec 不覆盖 raw
     assert t.raw_action.shape == (ACTION_DIM,)
     assert t.exec_action.shape == (ACTION_DIM,)
-    assert t.contract_version == "contract-v6"
+    assert t.contract_version == "contract-v7"
 
 
 def test_buffer_rejects_wrong_dim():

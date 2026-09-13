@@ -210,10 +210,10 @@ def test_validator_rejects_assumed_pv_nonzero():
         validate_snapshot(SystemSnapshot(**kwargs))
 
 
-# --- 7. contract-v6 与旧版本拒绝 ---
+# --- 7. contract-v7 与旧版本拒绝 ---
 
 def test_contract_version_is_v5():
-    assert CONTRACT_VERSION_ID == "contract-v6"
+    assert CONTRACT_VERSION_ID == "contract-v7"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 

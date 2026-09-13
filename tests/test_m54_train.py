@@ -4,15 +4,33 @@ import numpy as np
 import torch
 
 from envs.idc_price_env import IDCPriceEnv20D
-from safe_rl_v2.lagrangian import Lagrangian
+from safe_rl_v2.lagrangian import (
+    UNIT_KG_CO2E,
+    UNIT_VIOLATION_TASK_STEPS,
+    ConstraintSpec,
+    Lagrangian,
+)
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.train import dry_run_update
 
 
+def make_default_lagrangian() -> Lagrangian:
+    """M5.3a 迁移夹具：显式约束定义（替换 `Lagrangian({"business":5.0,"carbon":3.0})`）。"""
+    return Lagrangian((
+        ConstraintSpec(
+            name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+    ))
+
 def test_dry_run_updates_once():
     env = IDCPriceEnv20D()
     policy = SafePPOPolicy(obs_dim=env.obs_dim)
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     metrics = dry_run_update(env, policy, lagrangian, optimizer, corrector_on=False, steps=6)

@@ -1,55 +1,356 @@
-"""M5.3 多约束乘子：每种约束有独立预算/估计/乘子/更新日志。
+"""M5.3a 多约束乘子状态：每约束独立、带单位、可验证、可恢复。
 
-不共享一个无标签乘子；状态往返保留全部约束状态（可嵌入 VersionedCheckpoint.state）。
+本模块是**纯状态机**：`update()` 只消费每 transition 的量并维护乘子，
+**不把 multiplier 接入任何损失**（λ 加权优势属 M5.3b）。
+
+单位（每 transition）：
+- `business` → `violation_task_steps`（每步活跃逾期 SLA 违规计数，见
+  `envs/idc_price_env.py::_compute_sla_metrics`；**不是唯一违约任务数**，
+  同一任务在持续逾期的每一步都计 1，故 rollout 内累计为「违规任务·步」）；
+- `carbon`   → `kgCO2e`（每步电网购电的排放质量）。
+**电费（SGD）不是约束**，既不能作为新约束加入，也不能顶替上述任一单位。
+
+聚合口径固定为**每 transition mean**，由本模块内部计算：
+调用方只能传入逐 transition 的序列，**不能**绕过聚合直接塞标量。
+
+持久化 schema（`state_dict`）包含版本、聚合口径、全局更新序号与每约束的
+完整定义与历史，`load_state_dict` 对**全部字段**做严格校验，缺字段、单位不符、
+约束集合不符、版本不符（含旧 `contract-v6`）一律显式拒绝，且拒绝是原子的。
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+from numpy.typing import ArrayLike
+
+from contracts import CONTRACT_VERSION_ID
+
+CONTRACT_VERSION = CONTRACT_VERSION_ID  # 唯一版本源（M3.10c）
+
+UNIT_VIOLATION_TASK_STEPS = "violation_task_steps"
+UNIT_KG_CO2E = "kgCO2e"
+
+AGGREGATION_PER_TRANSITION_MEAN = "per_transition_mean"
+
+REQUIRED_CONSTRAINTS = ("business", "carbon")
+REQUIRED_UNITS: dict[str, str] = {
+    "business": UNIT_VIOLATION_TASK_STEPS,
+    "carbon": UNIT_KG_CO2E,
+}
+
+# state_dict 中每个约束条目必须出现的字段（缺任一即拒绝）
+_CONSTRAINT_FIELDS = (
+    "name",
+    "budget",
+    "unit",
+    "learning_rate",
+    "max_multiplier",
+    "estimate",
+    "multiplier",
+    "updates",
+    "log",
+)
+_REQUIRED_TOP_FIELDS = ("contract_version", "aggregation", "updates", "constraints")
+
+
+def _as_finite_float(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.integer, np.floating)):
+        raise TypeError(f"{name} 必须为实数，got {type(value).__name__}={value!r}")
+    out = float(value)
+    if not np.isfinite(out):
+        raise ValueError(f"{name} 必须有限，got {out!r}")
+    return out
+
+
+def _as_positive_float(value: Any, name: str) -> float:
+    out = _as_finite_float(value, name)
+    if out <= 0.0:
+        raise ValueError(f"{name} 必须为正数，got {out!r}")
+    return out
+
+
+def _as_non_negative_float(value: Any, name: str) -> float:
+    out = _as_finite_float(value, name)
+    if out < 0.0:
+        raise ValueError(f"{name} 必须非负，got {out!r}")
+    return out
+
+
+def _as_non_negative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(f"{name} 必须为整数，got {type(value).__name__}={value!r}")
+    if value < 0:
+        raise ValueError(f"{name} 必须非负，got {value!r}")
+    return int(value)
+
+
+@dataclass(frozen=True)
+class ConstraintSpec:
+    """单个约束的显式定义：五个字段缺一不可。"""
+
+    name: str
+    budget: float
+    unit: str
+    learning_rate: float
+    max_multiplier: float
+
+    def __post_init__(self) -> None:
+        if self.name not in REQUIRED_CONSTRAINTS:
+            raise ValueError(
+                f"未知 constraint {self.name!r}；必须恰为 {list(REQUIRED_CONSTRAINTS)}"
+                "（电费不是约束）"
+            )
+        expected_unit = REQUIRED_UNITS[self.name]
+        if self.unit != expected_unit:
+            raise ValueError(
+                f"constraint {self.name!r} 的 unit 必须为 {expected_unit!r}，got {self.unit!r}"
+            )
+        object.__setattr__(self, "budget", _as_non_negative_float(self.budget, "budget"))
+        object.__setattr__(
+            self, "learning_rate", _as_positive_float(self.learning_rate, "learning_rate")
+        )
+        object.__setattr__(
+            self, "max_multiplier", _as_positive_float(self.max_multiplier, "max_multiplier")
+        )
 
 
 @dataclass
 class ConstraintState:
+    """单约束的运行状态（含定义副本与历史，供持久化与审阅）。"""
+
+    name: str
     budget: float
+    unit: str
+    learning_rate: float
+    max_multiplier: float
     estimate: float = 0.0
     multiplier: float = 0.0
+    updates: int = 0
     log: list[float] = field(default_factory=list)
 
 
 class Lagrangian:
-    def __init__(self, budgets: dict[str, float], lr: float = 0.01) -> None:
-        self.lr = float(lr)
+    """多约束乘子状态机；约束之间**完全独立**。"""
+
+    def __init__(
+        self,
+        specs: Sequence[ConstraintSpec],
+        *,
+        aggregation: str = AGGREGATION_PER_TRANSITION_MEAN,
+    ) -> None:
+        if aggregation != AGGREGATION_PER_TRANSITION_MEAN:
+            raise ValueError(
+                f"aggregation 必须为 {AGGREGATION_PER_TRANSITION_MEAN!r}，got {aggregation!r}"
+            )
+        if isinstance(specs, (str, bytes)) or not isinstance(specs, Sequence):
+            raise TypeError(f"specs 必须为 ConstraintSpec 序列，got {type(specs).__name__}")
+        if not specs:
+            raise ValueError("specs 不得为空")
+
+        names = [spec.name for spec in specs]
+        if len(set(names)) != len(names):
+            raise ValueError(f"constraint 名不得重复：{names}")
+        if set(names) != set(REQUIRED_CONSTRAINTS):
+            raise ValueError(
+                f"constraints 集合必须恰为 {list(REQUIRED_CONSTRAINTS)}，got {sorted(names)}"
+            )
+
+        self.aggregation = aggregation
+        self._updates = 0
         self.constraints: dict[str, ConstraintState] = {
-            name: ConstraintState(budget=float(b)) for name, b in budgets.items()
+            spec.name: ConstraintState(
+                name=spec.name,
+                budget=spec.budget,
+                unit=spec.unit,
+                learning_rate=spec.learning_rate,
+                max_multiplier=spec.max_multiplier,
+            )
+            for spec in specs
         }
 
-    def update(self, costs: dict[str, float]) -> None:
-        """用每约束成本更新估计与乘子（乘子非负）。"""
-        for name, cost in costs.items():
-            c = self.constraints[name]
-            c.estimate = float(cost)
-            c.multiplier = max(0.0, c.multiplier + self.lr * (c.estimate - c.budget))
-            c.log.append(float(c.multiplier))
+    # --- 更新 ---------------------------------------------------------------
+
+    def update(self, batch_signals: Mapping[str, ArrayLike]) -> dict[str, float]:
+        """按**每 transition mean** 聚合 `batch_signals` 并更新各约束乘子。
+
+        返回更新后的乘子。传入标量、空序列、非有限值或键集不符一律报错。
+        """
+        if not isinstance(batch_signals, Mapping):
+            raise TypeError(
+                f"batch_signals 必须为 Mapping（每约束一个逐 transition 序列），"
+                f"got {type(batch_signals).__name__}"
+            )
+        if set(batch_signals) != set(self.constraints):
+            raise ValueError(
+                f"batch_signals 的 constraints 集合必须恰为 {sorted(self.constraints)}，"
+                f"got {sorted(batch_signals)}"
+            )
+
+        estimates: dict[str, float] = {}
+        for name in sorted(self.constraints):
+            raw = batch_signals[name]
+            if isinstance(raw, (str, bytes)) or np.isscalar(raw):
+                raise TypeError(
+                    f"batch_signals[{name!r}] 必须是逐 transition 的序列，"
+                    "不得直接传标量（聚合口径固定为 per-transition mean）"
+                )
+            values = np.asarray(raw, dtype=np.float64)
+            if values.ndim != 1:
+                raise ValueError(f"batch_signals[{name!r}] 必须为一维，got ndim={values.ndim}")
+            if values.size == 0:
+                raise ValueError(f"batch_signals[{name!r}] 不得为空")
+            if not np.all(np.isfinite(values)):
+                raise ValueError(f"batch_signals[{name!r}] 含非有限数值")
+            estimates[name] = float(np.mean(values))
+
+        updated: dict[str, float] = {}
+        for name in sorted(self.constraints):
+            state = self.constraints[name]
+            candidate = state.multiplier + state.learning_rate * (
+                estimates[name] - state.budget
+            )
+            state.estimate = estimates[name]
+            state.multiplier = float(min(max(candidate, 0.0), state.max_multiplier))
+            state.updates += 1
+            state.log.append(state.multiplier)
+            updated[name] = state.multiplier
+
+        self._updates += 1
+        return updated
 
     def multipliers(self) -> dict[str, float]:
-        return {name: c.multiplier for name, c in self.constraints.items()}
+        return {name: state.multiplier for name, state in self.constraints.items()}
+
+    # --- 持久化 -------------------------------------------------------------
 
     def state_dict(self) -> dict:
         return {
-            name: {
-                "budget": c.budget,
-                "estimate": c.estimate,
-                "multiplier": c.multiplier,
-                "log": list(c.log),
-            }
-            for name, c in self.constraints.items()
+            "contract_version": CONTRACT_VERSION,
+            "aggregation": self.aggregation,
+            "updates": self._updates,
+            "constraints": {
+                name: {
+                    "name": state.name,
+                    "budget": state.budget,
+                    "unit": state.unit,
+                    "learning_rate": state.learning_rate,
+                    "max_multiplier": state.max_multiplier,
+                    "estimate": state.estimate,
+                    "multiplier": state.multiplier,
+                    "updates": state.updates,
+                    "log": list(state.log),
+                }
+                for name, state in self.constraints.items()
+            },
         }
 
     def load_state_dict(self, state: dict) -> None:
-        for name, c in state.items():
-            self.constraints[name] = ConstraintState(
-                budget=c["budget"],
-                estimate=c["estimate"],
-                multiplier=c["multiplier"],
-                log=list(c["log"]),
+        """严格反序列化；任何不符都在**写入前**拒绝（拒绝是原子的）。"""
+        if not isinstance(state, dict):
+            raise TypeError(f"state 必须为 dict，got {type(state).__name__}")
+        if "contract_version" not in state:
+            raise ValueError("state 缺少顶层字段 'contract_version'（不接受无版本状态）")
+        if state["contract_version"] != CONTRACT_VERSION:
+            raise ValueError(
+                "contract_version 与当前契约不匹配（旧版本乘子状态不得静默读取）："
+                f"{state['contract_version']!r} != {CONTRACT_VERSION!r}"
             )
+        for key in _REQUIRED_TOP_FIELDS:
+            if key not in state:
+                raise ValueError(f"state 缺少顶层字段 {key!r}")
+        if state["aggregation"] != self.aggregation:
+            raise ValueError(
+                f"state aggregation 与当前实例不一致："
+                f"{state['aggregation']!r} != {self.aggregation!r}"
+            )
+        outer_updates = _as_non_negative_int(state["updates"], "updates")
+
+        entries = state["constraints"]
+        if not isinstance(entries, dict):
+            raise TypeError(f"state['constraints'] 必须为 dict，got {type(entries).__name__}")
+        if set(entries) != set(self.constraints):
+            raise ValueError(
+                "state constraints 集合与当前实例不一致："
+                f"{sorted(entries)} != {sorted(self.constraints)}"
+            )
+
+        # 先在临时结构里完成全部校验，再原子写入
+        rebuilt: dict[str, ConstraintState] = {}
+        for name in sorted(self.constraints):
+            entry = entries[name]
+            if not isinstance(entry, dict):
+                raise TypeError(f"constraints[{name!r}] 必须为 dict")
+            for key in _CONSTRAINT_FIELDS:
+                if key not in entry:
+                    raise ValueError(f"constraints[{name!r}] 缺少字段 {key!r}")
+
+            current = self.constraints[name]
+            if entry["name"] != name:
+                raise ValueError(f"constraints[{name!r}].name 不符：{entry['name']!r}")
+            if entry["unit"] != current.unit:
+                raise ValueError(
+                    f"constraints[{name!r}] 的 unit 不符：{entry['unit']!r} != {current.unit!r}"
+                )
+            budget = _as_finite_float(entry["budget"], f"constraints[{name!r}].budget")
+            if budget != current.budget:
+                raise ValueError(
+                    f"constraints[{name!r}] budget 与当前 spec 不符："
+                    f"{budget!r} != {current.budget!r}"
+                )
+            learning_rate = _as_finite_float(
+                entry["learning_rate"], f"constraints[{name!r}].learning_rate"
+            )
+            if learning_rate != current.learning_rate:
+                raise ValueError(
+                    f"constraints[{name!r}] learning_rate 与当前 spec 不符："
+                    f"{learning_rate!r} != {current.learning_rate!r}"
+                )
+            max_multiplier = _as_finite_float(
+                entry["max_multiplier"], f"constraints[{name!r}].max_multiplier"
+            )
+            if max_multiplier != current.max_multiplier:
+                raise ValueError(
+                    f"constraints[{name!r}] max_multiplier 与当前 spec 不符："
+                    f"{max_multiplier!r} != {current.max_multiplier!r}"
+                )
+
+            estimate = _as_finite_float(entry["estimate"], f"constraints[{name!r}].estimate")
+            multiplier = _as_finite_float(
+                entry["multiplier"], f"constraints[{name!r}].multiplier"
+            )
+            if multiplier < 0.0 or multiplier > max_multiplier:
+                raise ValueError(
+                    f"constraints[{name!r}] multiplier 越界："
+                    f"{multiplier!r} 不在 [0, {max_multiplier!r}]"
+                )
+            entry_updates = _as_non_negative_int(
+                entry["updates"], f"constraints[{name!r}].updates"
+            )
+            log = entry["log"]
+            if not isinstance(log, list):
+                raise TypeError(f"constraints[{name!r}].log 必须为 list")
+            values = [_as_finite_float(v, f"constraints[{name!r}].log") for v in log]
+            if len(values) != entry_updates:
+                raise ValueError(
+                    f"constraints[{name!r}].log 长度必须等于 updates "
+                    f"({entry_updates})，got {len(values)}"
+                )
+
+            rebuilt[name] = ConstraintState(
+                name=name,
+                budget=budget,
+                unit=entry["unit"],
+                learning_rate=learning_rate,
+                max_multiplier=max_multiplier,
+                estimate=estimate,
+                multiplier=multiplier,
+                updates=entry_updates,
+                log=values,
+            )
+
+        self.constraints = rebuilt
+        self._updates = outer_updates

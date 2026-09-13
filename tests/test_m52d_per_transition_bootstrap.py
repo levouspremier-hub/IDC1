@@ -14,7 +14,12 @@ import torch
 
 from safe_rl_v2 import train as train_mod
 from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, Transition
-from safe_rl_v2.lagrangian import Lagrangian
+from safe_rl_v2.lagrangian import (
+    UNIT_KG_CO2E,
+    UNIT_VIOLATION_TASK_STEPS,
+    ConstraintSpec,
+    Lagrangian,
+)
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.train import dry_run_update
 
@@ -27,6 +32,20 @@ NEXT_OBS_0 = 0.90  # t=0 的 next_observation
 OBS_1 = 0.20  # t=1 的 observation（下一条 episode 的首步）
 NEXT_OBS_1 = 0.30
 
+
+
+def make_default_lagrangian() -> Lagrangian:
+    """M5.3a 迁移夹具：显式约束定义（替换 `Lagrangian({"business":5.0,"carbon":3.0})`）。"""
+    return Lagrangian((
+        ConstraintSpec(
+            name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+    ))
 
 def make_policy(seed: int = 0, obs_dim: int = OBS_DIM) -> SafePPOPolicy:
     torch.manual_seed(seed)
@@ -122,7 +141,7 @@ def test_target_api_receives_per_transition_next_values(monkeypatch):
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
     snapshot = copy.deepcopy(policy)
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = capture_target_call(monkeypatch, policy, lagrangian, optimizer)
@@ -154,7 +173,7 @@ def test_target_api_receives_per_transition_next_values(monkeypatch):
 def test_bootstrap_metric_source_is_per_transition(monkeypatch):
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = run_dry(policy, lagrangian, optimizer)
@@ -170,7 +189,7 @@ def test_train_forwards_both_batches(monkeypatch):
     """critic 必须对 observation batch 与 next_observation batch 分别前向。"""
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     forwards: list[np.ndarray] = []
@@ -203,7 +222,7 @@ def test_second_episode_observation_does_not_pollute_first_episode_bootstrap(mon
             # 每次都用**全新且同权重**的策略：dry_run_update 会 optimizer.step()，
             # 复用同一实例会让第二次比较落在不同的 critic 上。
             policy = make_policy(seed=0)
-            lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+            lagrangian = make_default_lagrangian()
             optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
             return capture_target_call(ctx, policy, lagrangian, optimizer)
 
@@ -242,7 +261,7 @@ def test_truncated_step_target_uses_its_own_next_value_end_to_end(monkeypatch):
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
     snapshot = copy.deepcopy(policy)
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = run_dry(policy, lagrangian, optimizer)
@@ -270,7 +289,7 @@ def test_exec_action_never_enters_targets(monkeypatch):
             install_fake_collector(ctx, transitions)
             # 每次全新同权重策略（dry_run_update 会更新参数）
             policy = make_policy(seed=0)
-            lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+            lagrangian = make_default_lagrangian()
             optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
             return run_dry(policy, lagrangian, optimizer)
 
@@ -286,7 +305,7 @@ def test_exec_action_never_enters_targets(monkeypatch):
 def test_units_and_claims_unchanged(monkeypatch):
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = run_dry(policy, lagrangian, optimizer)
@@ -304,7 +323,7 @@ def test_rollout_buffer_helper_is_unused_by_train(monkeypatch):
     """train 不得再构造 T+1 数组：target API 收到的必须是两个长度 T 的 dict。"""
     install_fake_collector(monkeypatch, two_episode_transitions())
     policy = make_policy()
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = capture_target_call(monkeypatch, policy, lagrangian, optimizer)

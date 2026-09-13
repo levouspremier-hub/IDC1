@@ -16,7 +16,12 @@ import torch
 from envs.idc_price_env import IDCPriceEnv20D
 from safe_rl_v2 import models as models_mod
 from safe_rl_v2 import train as train_mod
-from safe_rl_v2.lagrangian import Lagrangian
+from safe_rl_v2.lagrangian import (
+    UNIT_KG_CO2E,
+    UNIT_VIOLATION_TASK_STEPS,
+    ConstraintSpec,
+    Lagrangian,
+)
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.train import dry_run_update
 
@@ -25,6 +30,20 @@ CORRECTOR_TIME_LIMIT_S = 0.05
 STEPS = 4
 HEADS = ("reward", "business", "carbon")
 
+
+
+def make_default_lagrangian() -> Lagrangian:
+    """M5.3a 迁移夹具：显式约束定义（替换 `Lagrangian({"business":5.0,"carbon":3.0})`）。"""
+    return Lagrangian((
+        ConstraintSpec(
+            name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+    ))
 
 def make_env(**over):
     kwargs = dict(ENV_SEED_KWARGS)
@@ -46,7 +65,7 @@ def make_policy(env, seed: int = 0) -> SafePPOPolicy:
 def make_setup(**over):
     env = make_env(**over)
     policy = make_policy(env)
-    lagrangian = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lagrangian = make_default_lagrangian()
     return env, policy, lagrangian, torch.optim.Adam(policy.parameters(), lr=1e-3)
 
 
@@ -242,7 +261,7 @@ def test_terminal_buffer_does_not_bootstrap():
 def test_truncated_buffer_bootstraps_without_being_terminal():
     env = _TruncatingEnv(make_env(), at_step=1)
     policy = make_policy(env)
-    lag = Lagrangian({"business": 5.0, "carbon": 3.0})
+    lag = make_default_lagrangian()
     opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
 
     result = run_dry(env, policy, lag, opt, steps=10)
@@ -344,7 +363,7 @@ def test_targets_unaffected_by_future_truth_mutation():
             env.pv_t[20] = 9999.0
             env.carbon_factor_t[20] = 9999.0
         policy = make_policy(env, seed=3)
-        lag = Lagrangian({"business": 5.0, "carbon": 3.0})
+        lag = make_default_lagrangian()
         opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
         return run_dry(env, policy, lag, opt, steps=4)
 
