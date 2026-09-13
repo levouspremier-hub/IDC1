@@ -87,6 +87,9 @@ def dry_run_update(
     obs = torch.as_tensor(
         np.stack([t.observation for t in buffer.transitions]), dtype=torch.float32
     )
+    next_obs = torch.as_tensor(
+        np.stack([t.next_observation for t in buffer.transitions]), dtype=torch.float32
+    )
     raw_actions = torch.as_tensor(
         np.stack([t.raw_action for t in buffer.transitions]), dtype=torch.float32
     )
@@ -101,33 +104,29 @@ def dry_run_update(
     terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
     truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
 
-    # bootstrap：唯一来源是 buffer 最后一条 next_observation；是否使用由 terminated 掩码
-    # 在 compute_three_value_targets 内部决定（此处只在终止时置零，避免无谓的 forward）
-    bootstrap_terminal = bool(terminals[-1])
-    bootstrap_next_observation = torch.as_tensor(
-        buffer.transitions[-1].next_observation, dtype=torch.float32
-    )
-
+    # bootstrap：**逐 transition** 取各自 next_observation 的 critic 估计
+    # （M5.2c：不得用下标 t+1，也不得只读最后一条）
     with torch.no_grad():
-        _, final_values = policy.forward(bootstrap_next_observation)
-        v_reward = np.zeros(n_steps + 1)
-        v_business = np.zeros(n_steps + 1)
-        v_carbon = np.zeros(n_steps + 1)
-        if not bootstrap_terminal:
-            v_reward[-1] = float(final_values[0])
-            v_business[-1] = float(final_values[1])
-            v_carbon[-1] = float(final_values[2])
-        # 用 critic 对已收集 obs 重新估值
-        _, values = policy.forward(obs)
-        v_reward[:n_steps] = values[:, 0].numpy()
-        v_business[:n_steps] = values[:, 1].numpy()
-        v_carbon[:n_steps] = values[:, 2].numpy()
+        _, current_v = policy.forward(obs)
+        _, next_v = policy.forward(next_obs)
+
+    current_values = {
+        "reward": current_v[:, 0].numpy(),
+        "business": current_v[:, 1].numpy(),
+        "carbon": current_v[:, 2].numpy(),
+    }
+    next_values = {
+        "reward": next_v[:, 0].numpy(),
+        "business": next_v[:, 1].numpy(),
+        "carbon": next_v[:, 2].numpy(),
+    }
 
     targets = compute_three_value_targets(
         rewards,
         business_violations,
         carbon_emissions,
-        {"reward": v_reward, "business": v_business, "carbon": v_carbon},
+        current_values,
+        next_values,
         terminated=terminals,
         truncated=truncations,
         gamma=GAMMA,
@@ -191,14 +190,15 @@ def dry_run_update(
         "electricity_cost_sum_sgd": float(np.sum(electricity_costs)),
         "env_seed": stats["env_seed"],
         "policy_rng_source": stats["policy_rng_source"],
-        "bootstrap_is_terminal": bootstrap_terminal,
-        # --- M5.2b：三套 target 的来源与口径 ---
+        "bootstrap_is_terminal": bool(terminals[-1]),
+        # --- M5.2b/M5.2d：三套 target 的来源与口径 ---
         "targets_source": TARGETS_SOURCE,
         "gae": {"gamma": GAMMA, "lam": LAM},
         "bootstrap": {
-            "terminal": bootstrap_terminal,
-            "source": "buffer_last_next_observation",
-            "used": not bootstrap_terminal,
+            "source": "buffer_transition_next_observations",
+            "terminated_count": int(terminals.sum()),
+            "truncated_count": int(truncations.sum()),
+            "bootstrapped_count": int((~terminals).sum()),
         },
         "critic_loss_by_head": {head: float(v.item()) for head, v in critic_loss_by_head.items()},
         "critic_targets": {head: pair[1] for head, pair in targets.items()},

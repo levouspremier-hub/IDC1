@@ -152,7 +152,8 @@ def test_actor_likelihood_still_uses_m52a_independent_path(monkeypatch):
 
 # --- 2. target 输入只来自 buffer ---
 
-def test_bootstrap_reads_only_last_next_observation(monkeypatch):
+def test_bootstrap_reads_every_transition_next_observation(monkeypatch):
+    """M5.2d 迁移：不再是「只读最后一条」，而是整批 next_observation。"""
     env, policy, lag, opt = make_setup()
     forwards: list[np.ndarray] = []
     real_forward = SafePPOPolicy.forward
@@ -164,11 +165,16 @@ def test_bootstrap_reads_only_last_next_observation(monkeypatch):
     monkeypatch.setattr(SafePPOPolicy, "forward", spy)
     result = run_dry(env, policy, lag, opt)
 
-    expected = np.asarray(result["buffer"].transitions[-1].next_observation, dtype=np.float32)
+    buffer = result["buffer"]
+    expected_batch = np.stack(
+        [np.asarray(t.next_observation, dtype=np.float32) for t in buffer.transitions]
+    )
     assert any(
-        arr.dtype == np.float32 and arr.shape == expected.shape and np.array_equal(arr, expected)
+        arr.dtype == np.float32
+        and arr.shape == expected_batch.shape
+        and np.array_equal(arr, expected_batch)
         for arr in forwards
-    ), "必须有一次 forward 的输入恰为 buffer 最后一条 next_observation"
+    ), "必须有且整批 next_observation 的前向（逐 transition bootstrap）"
 
 
 @pytest.mark.parametrize("corrector_on", [False, True])
@@ -226,9 +232,11 @@ def test_terminal_buffer_does_not_bootstrap():
     buffer = result["buffer"]
 
     assert buffer.transitions[-1].terminated is True
-    assert result["bootstrap"]["terminal"] is True
-    assert result["bootstrap"]["used"] is False
-    assert result["bootstrap"]["source"] == "buffer_last_next_observation"
+    assert result["bootstrap_is_terminal"] is True
+    assert result["bootstrap"]["source"] == "buffer_transition_next_observations"
+    assert result["bootstrap"]["terminated_count"] == 1
+    assert result["bootstrap"]["truncated_count"] == 0
+    assert result["bootstrap"]["bootstrapped_count"] == 2  # 末步终止，不 bootstrap
 
 
 def test_truncated_buffer_bootstraps_without_being_terminal():
@@ -243,8 +251,9 @@ def test_truncated_buffer_bootstraps_without_being_terminal():
     assert len(buffer) == 2, "第 1 步被截断后采集必须停止"
     assert buffer.transitions[-1].truncated is True
     assert buffer.transitions[-1].terminated is False
-    assert result["bootstrap"]["terminal"] is False
-    assert result["bootstrap"]["used"] is True, "截断步仍允许 bootstrap"
+    assert result["bootstrap_is_terminal"] is False
+    assert result["bootstrap"]["truncated_count"] == 1
+    assert result["bootstrap"]["bootstrapped_count"] == 2, "截断步仍允许 bootstrap"
 
 
 def test_non_terminal_runout_bootstraps():
@@ -252,9 +261,10 @@ def test_non_terminal_runout_bootstraps():
     result = run_dry(env, policy, lag, opt, steps=3)
     assert len(result["buffer"]) == 3
     assert result["bootstrap"] == {
-        "terminal": False,
-        "source": "buffer_last_next_observation",
-        "used": True,
+        "source": "buffer_transition_next_observations",
+        "terminated_count": 0,
+        "truncated_count": 0,
+        "bootstrapped_count": 3,
     }
 
 
@@ -393,7 +403,7 @@ def test_metrics_make_no_performance_claim_by_key_name():
 def test_returned_targets_match_independent_recomputation(corrector_on):
     """用更新**前**的策略快照独立重算三套 target，必须与 train 上报的一致。
 
-    这是对整条接线的端到端校验：它只依赖 v6 buffer 的具名字段与 M5.2a 的数学，
+    这是对整条接线的端到端校验：它只依赖 v6 buffer 的具名字段与 M5.2c 的数学，
     不依赖 train.py 的任何内部变量。
     """
     import copy
@@ -405,34 +415,29 @@ def test_returned_targets_match_independent_recomputation(corrector_on):
         corrector_time_limit_s=CORRECTOR_TIME_LIMIT_S if corrector_on else None,
     )
     buffer = result["buffer"]
-    n_steps = len(buffer)
 
     obs = torch.as_tensor(
         np.stack([t.observation for t in buffer.transitions]), dtype=torch.float32
+    )
+    next_obs = torch.as_tensor(
+        np.stack([t.next_observation for t in buffer.transitions]), dtype=torch.float32
     )
     terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
     truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
 
     with torch.no_grad():
-        next_observation = torch.as_tensor(
-            buffer.transitions[-1].next_observation, dtype=torch.float32
-        )
-        _, final_values = snapshot.forward(next_observation)
-        _, values = snapshot.forward(obs)
+        _, current_v = snapshot.forward(obs)
+        _, next_v = snapshot.forward(next_obs)
 
-    critic = {}
-    for index, head in enumerate(HEADS):
-        arr = np.zeros(n_steps + 1)
-        arr[:n_steps] = values[:, index].numpy()
-        if not terminals[-1]:
-            arr[-1] = float(final_values[index])
-        critic[head] = arr
+    current = {head: current_v[:, index].numpy() for index, head in enumerate(HEADS)}
+    nxt = {head: next_v[:, index].numpy() for index, head in enumerate(HEADS)}
 
     expected = models_mod.compute_three_value_targets(
         np.array([t.reward for t in buffer.transitions]),
         np.array([t.business_cost for t in buffer.transitions]),
         np.array([t.carbon_cost for t in buffer.transitions]),
-        critic,
+        current,
+        nxt,
         terminated=terminals,
         truncated=truncations,
         gamma=result["gae"]["gamma"],
@@ -441,7 +446,7 @@ def test_returned_targets_match_independent_recomputation(corrector_on):
     for head in HEADS:
         np.testing.assert_allclose(result["critic_targets"][head], expected[head][1])
         np.testing.assert_allclose(
-            result["critic_targets"][head], expected[head][0] + critic[head][:n_steps]
+            result["critic_targets"][head], expected[head][0] + current[head]
         )
 
 
