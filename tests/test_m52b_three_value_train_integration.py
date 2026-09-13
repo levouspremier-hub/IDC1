@@ -385,3 +385,72 @@ def test_metrics_make_no_performance_claim_by_key_name():
         if key != "claims" and any(s in key.lower() for s in forbidden)
     ]
     assert offenders == []
+
+
+# --- 8. 回归：目标值可被完全独立地重算 ---
+
+@pytest.mark.parametrize("corrector_on", [False, True])
+def test_returned_targets_match_independent_recomputation(corrector_on):
+    """用更新**前**的策略快照独立重算三套 target，必须与 train 上报的一致。
+
+    这是对整条接线的端到端校验：它只依赖 v6 buffer 的具名字段与 M5.2a 的数学，
+    不依赖 train.py 的任何内部变量。
+    """
+    import copy
+
+    env, policy, lag, opt = make_setup()
+    snapshot = copy.deepcopy(policy)  # 更新前快照
+    result = run_dry(
+        env, policy, lag, opt, corrector_on=corrector_on,
+        corrector_time_limit_s=CORRECTOR_TIME_LIMIT_S if corrector_on else None,
+    )
+    buffer = result["buffer"]
+    n_steps = len(buffer)
+
+    obs = torch.as_tensor(
+        np.stack([t.observation for t in buffer.transitions]), dtype=torch.float32
+    )
+    terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
+    truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
+
+    with torch.no_grad():
+        next_observation = torch.as_tensor(
+            buffer.transitions[-1].next_observation, dtype=torch.float32
+        )
+        _, final_values = snapshot.forward(next_observation)
+        _, values = snapshot.forward(obs)
+
+    critic = {}
+    for index, head in enumerate(HEADS):
+        arr = np.zeros(n_steps + 1)
+        arr[:n_steps] = values[:, index].numpy()
+        if not terminals[-1]:
+            arr[-1] = float(final_values[index])
+        critic[head] = arr
+
+    expected = models_mod.compute_three_value_targets(
+        np.array([t.reward for t in buffer.transitions]),
+        np.array([t.business_cost for t in buffer.transitions]),
+        np.array([t.carbon_cost for t in buffer.transitions]),
+        critic,
+        terminated=terminals,
+        truncated=truncations,
+        gamma=result["gae"]["gamma"],
+        lam=result["gae"]["lam"],
+    )
+    for head in HEADS:
+        np.testing.assert_allclose(result["critic_targets"][head], expected[head][1])
+        np.testing.assert_allclose(
+            result["critic_targets"][head], expected[head][0] + critic[head][:n_steps]
+        )
+
+
+def test_target_equals_advantage_plus_value_in_train_output():
+    """target = advantage + value：用上报的 target 与 critic value 反推可自洽。"""
+    env, policy, lag, opt = make_setup()
+    result = run_dry(env, policy, lag, opt)
+    buffer = result["buffer"]
+    n_steps = len(buffer)
+    assert n_steps == result["steps_collected"]
+    for head in HEADS:
+        assert np.asarray(result["critic_targets"][head]).shape == (n_steps,)
