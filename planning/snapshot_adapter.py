@@ -108,7 +108,7 @@ def build_snapshot(env) -> SystemSnapshot:
         base_idc_power_forecast_kw=_base_power_forecast(env, t, cutoff, n_steps),
         tasks=tasks,
         forecast=forecast,
-        group_capacity_kw=[float(c) for c in c_server],
+        group_work_capacity=[float(c) for c in c_server],
         group_power_coeff_kw_per_work=[float(c) for c in coeff],
         group_power_upper_kw=[float(p) for p in p_max_kw],
         power_approximation_note=POWER_APPROXIMATION_NOTE,

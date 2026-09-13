@@ -35,7 +35,7 @@ def correct(snapshot: SystemSnapshot, proposal: DispatchProposal) -> DispatchRes
 
     # 3. 接入上限：估算电网功率并等比缩减 compute，记录缺口
     business_gap = 0.0
-    capacity = [max(float(c), 1e-6) for c in snapshot.group_capacity_kw]
+    capacity = [max(float(c), 1e-6) for c in snapshot.group_work_capacity]
     idc_power = sum(c * cap for c, cap in zip(exec_compute, capacity, strict=False))
     charge_power = max(exec_storage, 0.0) * snapshot.soc_max_kwh
     grid_power = idc_power + charge_power

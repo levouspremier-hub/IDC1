@@ -42,10 +42,20 @@ def validate_scenario(scenario: ScenarioBundle) -> None:
 
 
 def validate_snapshot(snapshot: SystemSnapshot) -> None:
-    """规划输入契约校验（M4.1a）：SOC 范围、效率、功率上限、逐组容量与近似系数。"""
+    """规划输入契约校验（M4.1a/M4.1b）：时间、SOC、效率、功率上限、逐组向量与近似系数。"""
+    if snapshot.delta_t_hours <= 0:
+        raise ValueError(f"delta_t_hours 必须 > 0，实际 {snapshot.delta_t_hours}")
+    if snapshot.planning_horizon_steps <= 0:
+        raise ValueError(f"planning_horizon_steps 必须 > 0，实际 {snapshot.planning_horizon_steps}")
+    if not snapshot.power_approximation_note:
+        raise ValueError("power_approximation_note 不可为空（需声明规划近似与复核要求）")
     if not (snapshot.soc_min_kwh <= snapshot.soc_kwh <= snapshot.soc_max_kwh):
         raise ValueError(
             f"soc_kwh {snapshot.soc_kwh} 超出 [{snapshot.soc_min_kwh}, {snapshot.soc_max_kwh}]"
+        )
+    if snapshot.soc_max_kwh > snapshot.soc_capacity_kwh + 1e-9:
+        raise ValueError(
+            f"soc_max_kwh {snapshot.soc_max_kwh} 超过 soc_capacity_kwh {snapshot.soc_capacity_kwh}"
         )
     if snapshot.soc_min_kwh < 0 or snapshot.soc_capacity_kwh <= 0:
         raise ValueError("soc_min_kwh / soc_capacity_kwh 非法（soc_min_kwh 需 >=0，容量需 >0）")
@@ -59,14 +69,19 @@ def validate_snapshot(snapshot: SystemSnapshot) -> None:
             raise ValueError(f"{name} power 上限为负：{value}")
     if snapshot.bess_degradation_cost_per_kwh < 0:
         raise ValueError("bess_degradation_cost_per_kwh 为负")
-    if any(c < 0 for c in snapshot.group_capacity_kw):
-        raise ValueError("group_capacity_kw 含负值")
+    if any(c < 0 for c in snapshot.group_work_capacity):
+        raise ValueError("group_work_capacity 含负值")
     if any(c < 0 for c in snapshot.group_power_coeff_kw_per_work):
         raise ValueError("group_power_coeff_kw_per_work coeff 含负值")
     if any(c < 0 for c in snapshot.group_power_upper_kw):
         raise ValueError("group_power_upper_kw 含负值")
-    if len(snapshot.group_power_coeff_kw_per_work) != len(snapshot.group_capacity_kw):
-        raise ValueError("group_power_coeff_kw_per_work 长度 != 组数")
+    group_lengths = {
+        "group_work_capacity": len(snapshot.group_work_capacity),
+        "group_power_coeff_kw_per_work": len(snapshot.group_power_coeff_kw_per_work),
+        "group_power_upper_kw": len(snapshot.group_power_upper_kw),
+    }
+    if len(set(group_lengths.values())) != 1:
+        raise ValueError(f"逐组向量长度不一致：{group_lengths}")
     if len(snapshot.base_idc_power_forecast_kw) != snapshot.planning_horizon_steps:
         raise ValueError("base_idc_power_forecast_kw 长度 != planning_horizon_steps")
     if snapshot.access_limit_kw < 0:
@@ -78,11 +93,14 @@ def validate_snapshot(snapshot: SystemSnapshot) -> None:
             raise ValueError(f"未来任务 {task.task_id} 不得进入规划快照")
         if task.max_rate_work_per_step < 0:
             raise ValueError(f"任务 {task.task_id} max_rate_work_per_step 为负")
+        if task.remaining_work < 0:
+            raise ValueError(f"任务 {task.task_id} remaining_work 为负")
+    validate_scenario(snapshot.forecast)
 
 
 def validate_dispatch_proposal(proposal: DispatchProposal, snapshot: SystemSnapshot) -> None:
     """动作维度与组数一致 + 储能/计算动作范围。"""
-    n_group = len(snapshot.group_capacity_kw)
+    n_group = len(snapshot.group_work_capacity)
     if len(proposal.compute_actions) != n_group:
         raise ValueError(f"compute_actions 长度 {len(proposal.compute_actions)} != 组数 {n_group}")
     if not (-1.0 <= proposal.storage_action <= 1.0):
@@ -95,7 +113,7 @@ def validate_task_allocation(
     allocation: TaskAllocation, snapshot: SystemSnapshot, max_rate: dict[str, float]
 ) -> None:
     """任务×组矩阵列数与组数一致 + 逐任务不超 max_rate + 逐组不超容量。"""
-    n_group = len(snapshot.group_capacity_kw)
+    n_group = len(snapshot.group_work_capacity)
     if len(allocation.group_ids) != n_group:
         raise ValueError(f"group_ids 数 {len(allocation.group_ids)} != 组数 {n_group}")
     for i, task_id in enumerate(allocation.task_ids):
@@ -107,8 +125,8 @@ def validate_task_allocation(
             raise ValueError(f"任务 {task_id} 分配 {row_sum} 超 max_rate {rate}")
     for g in range(n_group):
         col_sum = sum(allocation.matrix[i][g] for i in range(len(allocation.task_ids)))
-        if col_sum > snapshot.group_capacity_kw[g] + 1e-9:
-            cap = snapshot.group_capacity_kw[g]
+        if col_sum > snapshot.group_work_capacity[g] + 1e-9:
+            cap = snapshot.group_work_capacity[g]
             raise ValueError(f"组 {allocation.group_ids[g]} 分配 {col_sum} 超容量 {cap}")
 
 

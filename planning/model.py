@@ -29,7 +29,7 @@ class MilpModel:
 def build_milp(snapshot: SystemSnapshot, allow_lp_relaxation: bool = False) -> MilpModel:
     """构建单步 MILP：最大化任务完成量，受组容量/任务剩余/充放互斥/接入上限约束。"""
     n_task = len(snapshot.tasks)
-    n_group = len(snapshot.group_capacity_kw)
+    n_group = len(snapshot.group_work_capacity)
     n_a = n_task * n_group
     # 变量：[A (n_a), charge, discharge, z]
     n_vars = n_a + 3
@@ -52,7 +52,7 @@ def build_milp(snapshot: SystemSnapshot, allow_lp_relaxation: bool = False) -> M
             row[i * n_group + g] = 1.0
         rows.append(row)
         lbs.append(-np.inf)
-        ubs.append(max(float(snapshot.group_capacity_kw[g]), 0.0))
+        ubs.append(max(float(snapshot.group_work_capacity[g]), 0.0))
 
     # 任务剩余：sum_g A[i,g] <= remaining_work[i]
     for i, task in enumerate(snapshot.tasks):

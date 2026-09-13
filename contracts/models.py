@@ -74,7 +74,7 @@ class TaskState(ContractBase):
 class SystemSnapshot(ContractBase):
     """滚动规划输入契约（M4.1a 扩展）。
 
-    注意：`group_capacity_kw` 字段名历史上带 `_kw`，实际存放**逐组 work capacity**
+    注意：`group_work_capacity` 字段名历史上带 `_kw`，实际存放**逐组 work capacity**
     （work-units）。为不破坏未授权模块（planning/model.py、planning/corrector.py、
     safe_rl/corrector.py）其名称保持不变，但声明单位已更正为 `work-units`。
     """
@@ -104,7 +104,7 @@ class SystemSnapshot(ContractBase):
     forecast: ScenarioBundle
 
     # 6. 逐组容量与规划用功率线性近似
-    group_capacity_kw: list[float]  # 逐组 work capacity（单位见 UNITS）
+    group_work_capacity: list[float]  # 逐组 work capacity（单位见 UNITS）
     group_power_coeff_kw_per_work: list[float]
     group_power_upper_kw: list[float]
     power_approximation_note: str
@@ -126,7 +126,7 @@ class SystemSnapshot(ContractBase):
         "bess_degradation_cost_per_kwh": "SGD/kWh",
         "access_limit_kw": "kW",
         "base_idc_power_forecast_kw": "kW",
-        "group_capacity_kw": "work-units",
+        "group_work_capacity": "work-units",
         "group_power_coeff_kw_per_work": "kW/work-unit",
         "group_power_upper_kw": "kW",
         "budget_remaining_sgd": "SGD",
