@@ -1,7 +1,7 @@
 """M4.1 从环境构建受限 SystemSnapshot。
 
-红线：adapter 不访问 policy、value 或未来真值；可见预测仅取 [0, t+forecast_cutoff] 窗口，
-其余置 0；缺失预测段（系统负荷）使用预先声明的边界假设（全 0）。
+红线：adapter 不访问 policy、value 或未来真值；可见预测仅取 [t, t+forecast_cutoff) 窗口，
+长度 == forecast_cutoff（与 contracts.validators 一致）；缺失预测段（系统负荷）用声明边界假设。
 """
 
 from __future__ import annotations
@@ -11,10 +11,11 @@ import numpy as np
 from contracts.models import ScenarioBundle, SystemSnapshot, TaskState
 
 
-def _visible_mask(horizon: int, t: int, cutoff: int) -> np.ndarray:
-    mask = np.zeros(horizon, dtype=np.float64)
-    mask[: min(t + cutoff + 1, horizon)] = 1.0
-    return mask
+def _visible_window(series: np.ndarray, t: int, cutoff: int, horizon: int) -> list[float]:
+    window = np.zeros(cutoff, dtype=np.float64)
+    seg = np.asarray(series, dtype=np.float64)[t : min(t + cutoff, horizon)]
+    window[: len(seg)] = seg
+    return window.tolist()
 
 
 def build_snapshot(env) -> SystemSnapshot:
@@ -22,7 +23,6 @@ def build_snapshot(env) -> SystemSnapshot:
     t = int(env.current_step)
     horizon = int(env.horizon)
     cutoff = int(getattr(env, "forecast_cutoff", 4))
-    visible = _visible_mask(horizon, t, cutoff)
 
     tasks = [
         TaskState(
@@ -41,11 +41,11 @@ def build_snapshot(env) -> SystemSnapshot:
         start=str(t),
         horizon=horizon,
         forecast_cutoff=cutoff,
-        price_forecast=(np.asarray(env.price_t, dtype=np.float64) * visible).tolist(),
-        load_forecast=[0.0] * horizon,  # 系统负荷未建模，声明边界假设
-        pv_forecast=(np.asarray(env.pv_t, dtype=np.float64) * visible).tolist(),
-        wind_forecast=(np.asarray(env.wt_t, dtype=np.float64) * visible).tolist(),
-        temperature_forecast=(np.asarray(env.T_amb, dtype=np.float64) * visible).tolist(),
+        price_forecast=_visible_window(env.price_t, t, cutoff, horizon),
+        load_forecast=[0.0] * cutoff,  # 系统负荷未建模，声明边界假设
+        pv_forecast=_visible_window(env.pv_t, t, cutoff, horizon),
+        wind_forecast=_visible_window(env.wt_t, t, cutoff, horizon),
+        temperature_forecast=_visible_window(env.T_amb, t, cutoff, horizon),
         source_hashes={"adapter": "planning.snapshot_adapter"},
         synthetic=True,
     )

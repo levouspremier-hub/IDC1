@@ -44,7 +44,7 @@ def test_compute_clip():
 
 def test_soc_full_blocks_charge():
     snap = _snapshot(soc_kwh=90.0)
-    p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=1.0)
+    p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=-1.0)  # 负值=充电
     r = correct(snap, p)
     assert r.exec_storage_action == 0.0
     assert "soc_full" in r.correction_reason
@@ -52,7 +52,7 @@ def test_soc_full_blocks_charge():
 
 def test_soc_empty_blocks_discharge():
     snap = _snapshot(soc_kwh=10.0)
-    p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=-1.0)
+    p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=1.0)  # 正值=放电
     r = correct(snap, p)
     assert r.exec_storage_action == 0.0
     assert "soc_empty" in r.correction_reason

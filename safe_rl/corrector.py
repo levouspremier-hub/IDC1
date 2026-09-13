@@ -23,12 +23,13 @@ def correct(snapshot: SystemSnapshot, proposal: DispatchProposal) -> DispatchRes
 
     # 2. 储能范围 [-1,1] + SOC 上下限（充放互斥由符号编码）
     exec_storage = float(np.clip(raw_storage, -1.0, 1.0))
-    if exec_storage > 0.0 and snapshot.soc_kwh >= snapshot.soc_max_kwh - 1e-6:
-        exec_storage = 0.0
-        reasons.append("soc_full")
-    elif exec_storage < 0.0 and snapshot.soc_kwh <= snapshot.soc_min_kwh + 1e-6:
+    # 符号约定与环境一致：>0 放电、<0 充电
+    if exec_storage > 0.0 and snapshot.soc_kwh <= snapshot.soc_min_kwh + 1e-6:
         exec_storage = 0.0
         reasons.append("soc_empty")
+    elif exec_storage < 0.0 and snapshot.soc_kwh >= snapshot.soc_max_kwh - 1e-6:
+        exec_storage = 0.0
+        reasons.append("soc_full")
     if exec_storage != raw_storage:
         reasons.append("storage_clip")
 
