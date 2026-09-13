@@ -27,7 +27,7 @@ def _forecast() -> ScenarioBundle:
     )
 
 
-def _snapshot(access_limit_kw=12.0, n_group=2) -> SystemSnapshot:
+def _snapshot(access_limit_kw=50.0, n_group=2) -> SystemSnapshot:
     tasks = [
         TaskState(
             task_id="t0",
@@ -70,8 +70,8 @@ def _snapshot(access_limit_kw=12.0, n_group=2) -> SystemSnapshot:
             extension_policy="test fixture policy",
         ),
 
-        group_power_coeff_kw_per_work=[0.01] * 1,
-        group_power_upper_kw=[0.7] * 1,
+        group_power_coeff_kw_per_work=[0.01] * n_group,
+        group_power_upper_kw=[0.7] * n_group,
         power_approximation_note="planning approximation; verify with env physics chain",
         access_limit_kw=access_limit_kw,
         budget_remaining_sgd=1000.0,
@@ -89,21 +89,28 @@ def test_success_is_reviewed():
 
 
 def test_infeasible_returns_boundary_action(monkeypatch):
-    snap = _snapshot()
+    """接入(12) < 基础负载(14) → base-only 不可行 → 零动作回退。"""
+    snap = _snapshot(access_limit_kw=12.0)  # 接入 < 基础负载(14) → 物理不可行
     p = DispatchProposal(compute_actions=[0.5, 0.5], storage_action=0.0)
-    # 模拟求解器返回不可行
-    stub = type("R", (), {"success": False})
-    monkeypatch.setattr("planning.corrector.solve_milp", lambda s: stub())
     c = correct(snap, p)
-    assert c.failure == FailureClass.INFEASIBLE
+    assert c.failure in (FailureClass.BASE_SHORTAGE, FailureClass.SOLVER_FAILURE)
     assert c.exec_compute_actions == [0.0, 0.0]
+    assert c.exec_storage_action == 0.0
     assert c.business_gap == 8.0
 
 
-def test_forecast_oob_returns_boundary_action():
+def test_proposal_dimension_mismatch_returns_boundary_action():
     snap = _snapshot()
     p = DispatchProposal(compute_actions=[0.5, 0.5, 0.5], storage_action=0.0)  # 维度不符
     c = correct(snap, p)
-    assert c.failure == FailureClass.FORECAST_OOB
+    assert c.failure == FailureClass.PROPOSAL_INVALID
     assert c.exec_compute_actions == [0.0, 0.0]
     assert c.reviewed is True
+
+
+def test_proposal_out_of_range_returns_boundary_action():
+    snap = _snapshot()
+    p = DispatchProposal(compute_actions=[0.5, 1.5], storage_action=0.0)  # 超出 [0,1]
+    c = correct(snap, p)
+    assert c.failure == FailureClass.PROPOSAL_INVALID
+    assert c.exec_compute_actions == [0.0, 0.0]

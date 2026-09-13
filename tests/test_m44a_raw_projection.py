@@ -57,12 +57,29 @@ def test_two_feasible_raw_proposals_give_different_exec():
     assert sum(res_b.exec_compute_actions) > sum(res_a.exec_compute_actions)
 
 
+def _with_big_task(env, workload: float = 5000.0, duration: int = 1):
+    """注入速率与剩余工作都充裕的任务，使中等 raw 强度确实可达。"""
+    from idc_model.task import Task
+
+    task = Task(
+        task_id=999, profile_key="k", name="t", arrival_time=0, duration=duration,
+        load_profile=np.array([0.5]), workload=workload, deadline=HORIZON + 10,
+        priority=1.0, interruptible=True, parallelizable=False,
+    )
+    task.status = "waiting"
+    env.tasks = [task]
+    env.Q_t = workload
+    return env
+
+
 def test_feasible_raw_proposal_offset_is_near_zero():
-    snap = build_snapshot(_env(access_limit_kw=1000.0))
-    raw = _proposal([0.35] * N_GROUP, -0.2)
+    """raw 确实物理可达时，投影偏移应 ≈ 0（投影不扭曲可行 raw）。"""
+    snap = build_snapshot(_with_big_task(_env(access_limit_kw=1000.0)))
+    raw = _proposal([0.35] * N_GROUP, 0.0)
     res = solve_time_indexed_mip_raw_projection(snap, raw)
     assert res.solver_status == "optimal"
     assert res.projection_offset <= 1e-3
+    assert res.exec_compute_actions == pytest.approx([0.35] * N_GROUP, abs=1e-3)
 
 
 def test_corrector_no_longer_ignores_proposal():
@@ -220,9 +237,13 @@ def test_two_stage_audit_fields_present():
 # --- 7. wrapper 接线 ---
 
 def test_wrapper_exec_is_corrector_output_and_raw_preserved():
-    env = CorrectorWrapper(IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0))
+    env = CorrectorWrapper(
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0)
+    )
     env.reset(seed=0)
-    raw = np.concatenate([np.full(N_GROUP, 0.6, dtype=np.float32), np.array([0.2], dtype=np.float32)])
+    raw = np.concatenate(
+        [np.full(N_GROUP, 0.6, dtype=np.float32), np.array([0.2], dtype=np.float32)]
+    )
     _, _, _, _, info = env.step(raw)
     np.testing.assert_allclose(np.asarray(info["raw_action"]), raw, atol=0.0)
     assert np.asarray(info["exec_action"]).shape == (N_GROUP + 1,)
@@ -233,9 +254,13 @@ def test_wrapper_exec_is_corrector_output_and_raw_preserved():
 
 
 def test_wrapper_env_constraints_hold_after_exec():
-    env = CorrectorWrapper(IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=18.0))
+    env = CorrectorWrapper(
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=18.0)
+    )
     env.reset(seed=0)
-    raw = np.concatenate([np.full(N_GROUP, 0.9, dtype=np.float32), np.array([0.5], dtype=np.float32)])
+    raw = np.concatenate(
+        [np.full(N_GROUP, 0.9, dtype=np.float32), np.array([0.5], dtype=np.float32)]
+    )
     _, _, _, _, info = env.step(raw)
     snap_access = info["access_limit_kw"]
     assert -TOL <= info["P_grid_kW"] <= snap_access + TOL
