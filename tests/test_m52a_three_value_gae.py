@@ -674,3 +674,81 @@ def test_three_value_api_requires_both_value_dicts():
             np.ones(3), np.ones(3), np.ones(3), zeros,
             terminated=term, truncated=trunc, gamma=0.5, lam=0.5,
         )
+
+
+# --- 9. M5.2c 回归：独立 next-values 下的逐 episode 分解不变量 ---
+
+ADV_C = [0.3, -1.1, 0.7, 2.4]
+NEXT_V = [0.9, 5.5, -2.2, 0.1]  # 与 ADV_C 无滑动窗口关系
+SIG_4 = [1.0, -0.5, 2.0, 0.25]
+
+
+@pytest.mark.parametrize(
+    "terminated,truncated",
+    [
+        ([False, True, False, False], [False, False, False, False]),
+        ([False, False, False, False], [False, True, False, False]),
+    ],
+)
+def test_episode_decomposition_with_independent_next_values(terminated, truncated):
+    """边界两侧的 episode 必须互不影响——用**任意独立** next_values 校验。
+
+    该不变量只依赖「episode 之间不传播优势」这一语义，不依赖递推实现，
+    且 next_values 与 current_values 之间没有任何滑动窗口关系。
+    """
+    term, trunc = _masks(4, terminated=terminated, truncated=truncated)
+    adv, tgt = models.compute_signal_gae(
+        SIG_4, ADV_C, NEXT_V, terminated=term, truncated=trunc, gamma=0.9, lam=0.8
+    )
+
+    first_is_terminated = bool(terminated[1])
+    a_term = np.array([False, first_is_terminated])
+    a_trunc = np.array([False, bool(truncated[1])])
+    adv_a, tgt_a = models.compute_signal_gae(
+        SIG_4[:2], ADV_C[:2], NEXT_V[:2],
+        terminated=a_term, truncated=a_trunc, gamma=0.9, lam=0.8,
+    )
+
+    b_term, b_trunc = _masks(2)
+    adv_b, tgt_b = models.compute_signal_gae(
+        SIG_4[2:], ADV_C[2:], NEXT_V[2:],
+        terminated=b_term, truncated=b_trunc, gamma=0.9, lam=0.8,
+    )
+
+    np.testing.assert_allclose(adv[:2], adv_a)
+    np.testing.assert_allclose(tgt[:2], tgt_a)
+    np.testing.assert_allclose(adv[2:], adv_b)
+    np.testing.assert_allclose(tgt[2:], tgt_b)
+
+
+def test_episode_decomposition_has_teeth_against_sliding_window():
+    """若把跨边界的 next value 用错（取了下一条 episode 的），分解不变量必然被破坏。"""
+    term, trunc = _masks(4, terminated=[False, True, False, False])
+    correct, _ = models.compute_signal_gae(
+        SIG_4, ADV_C, NEXT_V, terminated=term, truncated=trunc, gamma=0.9, lam=0.8
+    )
+    # 反事实：next_values 换成「下一条 observation 的 value」（旧下标 t+1 语义）
+    shifted = np.concatenate([ADV_C[1:], NEXT_V[-1:]])
+    wrong, _ = models.compute_signal_gae(
+        SIG_4, ADV_C, shifted, terminated=term, truncated=trunc, gamma=0.9, lam=0.8
+    )
+    assert not np.allclose(correct, wrong), "本测试必须有齿：错误 bootstrap 必须被检出"
+    # 差异必须出现在终止步**之前**的 episode 内（跨界传播被切断，t=1 自身不受影响）
+    assert correct[1] == pytest.approx(wrong[1])
+    assert correct[0] != pytest.approx(wrong[0])
+
+
+def test_reference_gae_matches_when_all_next_values_are_sliding_window():
+    """全非终止且 next_values 恰为滑动窗口时，必须与朴素参考实现一致。"""
+    rng = np.random.default_rng(7)
+    signal = rng.normal(size=6)
+    current = rng.normal(size=6)
+    nxt = np.concatenate([current[1:], [rng.normal()]])
+    term, trunc = _masks(6)
+
+    adv, tgt = models.compute_signal_gae(
+        signal, current, nxt, terminated=term, truncated=trunc, gamma=0.97, lam=0.9
+    )
+    ref_adv, ref_tgt = _reference_gae(signal, np.concatenate([current, nxt[-1:]]), 0.97, 0.9)
+    np.testing.assert_allclose(adv, ref_adv)
+    np.testing.assert_allclose(tgt, ref_tgt)
