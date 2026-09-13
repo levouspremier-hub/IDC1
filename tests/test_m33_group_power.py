@@ -1,4 +1,4 @@
-"""M3.3 测试：逐组功耗由完成工作/组能力导出，α 不影响正式负载，能量平衡成立。"""
+"""M3.3 测试：逐组功耗由完成工作/组能力导出，能量平衡成立。"""
 
 import numpy as np
 import pytest
@@ -9,18 +9,6 @@ from envs.idc_price_env import IDCPriceEnv20D
 @pytest.fixture()
 def env() -> IDCPriceEnv20D:
     return IDCPriceEnv20D()
-
-
-def test_alpha_does_not_affect_actual_load(env):
-    """废除 α：不同 planned_load_reserve_alpha 下实际负载应相同（改造前失败）。"""
-    a = np.full(env.action_dim, 0.5, dtype=np.float32)
-    env.reset(seed=0)
-    env.planned_load_reserve_alpha = 0.0
-    _, _, _, _, i1 = env.step(a)
-    env.reset(seed=0)
-    env.planned_load_reserve_alpha = 0.9
-    _, _, _, _, i2 = env.step(a)
-    assert i1["actual_total_load_mean"] == pytest.approx(i2["actual_total_load_mean"])
 
 
 def test_loads_from_group_completion_uses_capacity(env):

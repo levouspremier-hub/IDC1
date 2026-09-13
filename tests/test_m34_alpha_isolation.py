@@ -1,20 +1,14 @@
-"""M3.4 测试：旧 α（0.40）在正式主链（_loads_from_group_completion）中不产生影响。"""
+"""M3.4a 收尾：α 已退役，_loads_from_group_completion 仅由完成工作/组能力导出。"""
 
 import numpy as np
 
 from envs.idc_price_env import IDCPriceEnv20D
 
-OLD_ALPHA = 0.40  # 旧设定值
 
-
-def test_loads_from_group_completion_ignores_alpha():
+def test_loads_from_group_completion_is_pure_capacity_ratio():
     env = IDCPriceEnv20D()
     cg = np.full(env.model.N, 100.0, dtype=np.float64)
-
-    env.planned_load_reserve_alpha = 0.0
-    r0 = env._loads_from_group_completion(cg)
-
-    env.planned_load_reserve_alpha = OLD_ALPHA
-    r1 = env._loads_from_group_completion(cg)
-
-    assert np.allclose(r0, r1)
+    loads = env._loads_from_group_completion(cg)
+    c_server = np.asarray(env.model.C_server, dtype=np.float64)
+    expected = np.clip(100.0 / np.maximum(c_server, 1e-6), 0.0, env.max_task_load_per_server)
+    assert np.allclose(loads, expected)

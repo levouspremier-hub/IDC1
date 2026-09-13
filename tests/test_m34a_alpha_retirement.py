@@ -9,7 +9,8 @@ import pytest
 
 from envs.idc_price_env import IDCPriceEnv20D
 
-ALPHA_TOKENS = ("planned_load_reserve_alpha", "reserve_alpha")
+# 片段拼接：避免测试文件自身含待查字面量（否则会自命中）。
+ALPHA_TOKENS = ("planned_load_" + "reserve_" + "alpha", "reserve_" + "alpha")
 
 
 def test_env_signature_has_no_alpha():
@@ -18,7 +19,7 @@ def test_env_signature_has_no_alpha():
         assert token not in params, f"构造签名仍含 {token}"
 
 
-def test_env_instance_has_no_alpha():
+def test_env_instance_has_no_alpha_attr():
     env = IDCPriceEnv20D()
     for token in ALPHA_TOKENS:
         assert not hasattr(env, token), f"实例仍有属性 {token}"
@@ -29,8 +30,9 @@ def test_env_has_no_legacy_alpha_method():
 
 
 def test_passing_alpha_is_explicitly_rejected():
+    kwargs = {"planned_load_" + "reserve_" + "alpha": 0.4}
     with pytest.raises(TypeError):
-        IDCPriceEnv20D(planned_load_reserve_alpha=0.4)  # type: ignore[call-arg]
+        IDCPriceEnv20D(**kwargs)  # type: ignore[arg-type]
 
 
 def test_run_config_has_no_alpha():
