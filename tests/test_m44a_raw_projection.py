@@ -12,6 +12,7 @@ from envs.idc_price_env import IDCPriceEnv20D
 from planning.corrector import FailureClass, correct
 from planning.model import (
     FAILURE_BASE_SHORTAGE,
+    FAILURE_SOLVER_FAILURE,
     FAILURE_TIMEOUT,
     solve_time_indexed_mip_raw_projection,
 )
@@ -266,3 +267,181 @@ def test_wrapper_env_constraints_hold_after_exec():
     assert -TOL <= info["P_grid_kW"] <= snap_access + TOL
     assert info["bess_soc"] <= env.env.bess_soc_max + TOL
     assert info["bess_soc"] >= env.env.bess_soc_min - TOL
+
+
+# --- 8. 全局时间预算与 timeout 保真（M4.4a1） ---
+
+import planning.model as model_mod  # noqa: E402
+
+
+class _FakeMilp:
+    """记录每次调用收到的 options.time_limit，并按脚本返回状态。"""
+
+    def __init__(self, statuses, clock):
+        self.statuses = list(statuses)
+        self.clock = clock
+        self.calls: list[float | None] = []
+
+    def __call__(self, **kw):
+        opts = kw.get("options") or {}
+        self.calls.append(opts.get("time_limit"))
+
+        class _R:
+            pass
+
+        r = _R()
+        r.status = self.statuses.pop(0) if self.statuses else 0
+        r.success = r.status == 0
+        r.message = f"fake {r.status}"
+        r.fun = 0.0
+        r.x = None
+        return r
+
+
+def _fixed_clock(values):
+    """返回一个每次调用推进既定步长的单调时钟。"""
+    state = {"i": 0}
+
+    def _now():
+        i = min(state["i"], len(values) - 1)
+        state["i"] += 1
+        return values[i]
+
+    return _now
+
+
+def test_stage_b_timeout_is_faithfully_reported(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 1], None))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.stage_a_status == "optimal"
+    assert res.stage_b_status == "time_limit"
+    assert res.solver_status == "time_limit"
+    assert res.failure_class == FAILURE_TIMEOUT      # 不得被改写为 solver_failure
+    assert all(v == 0.0 for v in res.exec_compute_actions)
+    assert res.exec_storage_action == 0.0
+    assert res.business_gap_work > 0.0
+
+
+def test_timeout_does_not_run_base_diagnostic(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    called = {"n": 0}
+    real = model_mod.diagnose_base_feasibility
+
+    def _spy(s):
+        called["n"] += 1
+        return real(s)
+
+    monkeypatch.setattr(model_mod, "diagnose_base_feasibility", _spy)
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 1], None))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.failure_class == FAILURE_TIMEOUT
+    assert called["n"] == 0
+
+
+def test_stage_b_budget_leq_remaining_after_stage_a(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    clock = _fixed_clock([0.0, 2.0, 2.0, 2.0, 2.0, 3.0])
+    monkeypatch.setattr(model_mod, "_monotonic", clock)
+    fake = _FakeMilp([0, 0], None)
+    monkeypatch.setattr("scipy.optimize.milp", fake)
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.solver_status == "optimal"
+    assert len(fake.calls) == 2
+    a_budget, b_budget = fake.calls
+    assert a_budget is not None and b_budget is not None
+    assert a_budget <= 10.0 + 1e-9
+    assert b_budget <= a_budget + 1e-9          # 阶段 B 只能用剩余预算
+
+
+def test_stage_b_not_started_when_budget_exhausted(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    # deadline=1.0；阶段 A 结束时已 5.0 → 预算耗尽
+    clock = _fixed_clock([0.0, 5.0, 5.0])
+    monkeypatch.setattr(model_mod, "_monotonic", clock)
+    fake = _FakeMilp([0, 0], None)
+    monkeypatch.setattr("scipy.optimize.milp", fake)
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=1.0
+    )
+    assert len(fake.calls) == 1                  # 阶段 B 根本未被调用
+    assert res.solver_status == "time_limit"
+    assert res.failure_class == FAILURE_TIMEOUT
+    assert res.stage_b_status == "not_run"
+
+
+def test_stage_b_solver_error_is_not_timeout(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 4], None))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.failure_class == FAILURE_SOLVER_FAILURE
+    assert res.failure_class != FAILURE_TIMEOUT
+    assert all(v == 0.0 for v in res.exec_compute_actions)
+
+
+def test_failure_keeps_structural_audit(monkeypatch):
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 1], None))
+    res = solve_time_indexed_mip_raw_projection(
+        snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
+    )
+    assert res.backend == "mip"
+    assert res.horizon_steps == snap.planning_horizon_steps
+    assert res.n_variables > 0
+    assert res.n_integer_variables == snap.planning_horizon_steps
+    assert res.stage_a_solve_time_s >= 0.0
+    assert res.stage_b_solve_time_s >= 0.0
+
+
+def test_corrector_requires_positive_time_budget():
+    snap = build_snapshot(_env(access_limit_kw=1000.0))
+    p = _proposal([0.5] * N_GROUP, 0.0)
+    for bad in (0.0, -1.0):
+        with pytest.raises(ValueError, match="time_limit"):
+            correct(snap, p, time_limit_s=bad)
+
+
+def test_wrapper_passes_explicit_budget(monkeypatch):
+    seen = {}
+    import safe_rl.corrector_wrapper as wrap_mod
+    real = wrap_mod.correct
+
+    def _spy(snapshot, proposal, *, time_limit_s):
+        seen["budget"] = time_limit_s
+        return real(snapshot, proposal, time_limit_s=time_limit_s)
+
+    monkeypatch.setattr(wrap_mod, "correct", _spy)
+    env = CorrectorWrapper(
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0),
+        corrector_time_limit_s=2.5,
+    )
+    env.reset(seed=0)
+    a = np.concatenate([np.full(N_GROUP, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
+    env.step(a)
+    assert seen["budget"] == 2.5
+
+
+def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
+    monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 1], None))
+    env = CorrectorWrapper(
+        IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0),
+        corrector_time_limit_s=5.0,
+    )
+    env.reset(seed=0)
+    raw = np.concatenate([np.full(N_GROUP, 0.7, dtype=np.float32), np.array([0.3], dtype=np.float32)])
+    _, _, _, _, info = env.step(raw)
+    # 向环境发送完整 21 维零动作
+    assert np.asarray(info["exec_action"]).shape == (N_GROUP + 1,)
+    assert np.allclose(np.asarray(info["exec_action"]), 0.0)
+    # raw 不被改写
+    np.testing.assert_allclose(np.asarray(info["raw_action"]), raw, atol=0.0)
+    assert info["correction_reason"] == "timeout"
+    assert info["business_gap"] > 0.0
