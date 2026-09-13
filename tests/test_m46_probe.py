@@ -112,8 +112,9 @@ def test_probe_output_has_no_legacy_fields():
     ).stdout
     report = json.loads(out)
     assert not any(k.startswith("legacy_single_step_milp") for k in report), report.keys()
-    for key in ("lp_backend", "mip_backend", "mip_n_integer", "corrector_total_mean_s"):
+    for key in ("lp_backend", "mip_backend", "mip_n_integer"):
         assert key in report, key
+    assert "corrector_total_mean_s" in report["timing_without_tracemalloc"]
 
 
 def test_probe_timing_and_memory_are_separated():
