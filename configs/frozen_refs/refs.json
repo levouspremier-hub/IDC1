@@ -13,7 +13,6 @@
     "peak_power_threshold_kW": 18.0,
     "peak_power_ref_kW": 10.0,
     "grid_power_limit_kW": 18.0,
-    "sla_penalty_ref": 50.0,
-    "planned_load_reserve_alpha": 0.4
+    "sla_penalty_ref": 50.0
   }
 }

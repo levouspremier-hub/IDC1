@@ -21,7 +21,6 @@ DECLARED_REFS = {
     "peak_power_ref_kW": 10.0,
     "grid_power_limit_kW": 18.0,
     "sla_penalty_ref": 50.0,
-    "planned_load_reserve_alpha": 0.40,
 }
 
 OUT_PATH = Path("configs/frozen_refs/refs.json")

@@ -59,9 +59,6 @@ ENV_CONFIG = {
     "bess_degradation_cost_per_kWh": 0.02,
     # None means derive once from max BESS power * degradation coefficient * timestep.
     "bess_degradation_cost_ref": None,
-    # 计划负载预留损耗系数：未被实际使用的计划负载中，有多少比例计入实际功耗。
-    # 用于模拟资源预留、空转和调度开销，避免全一策略无成本地长期满负载。
-    "planned_load_reserve_alpha": 0.40,
 }
 
 IDC_SCALE_CONFIG = {

@@ -85,7 +85,6 @@ class IDCPriceEnv20D(gym.Env):
         bess_discharge_efficiency: float = 0.95,
         bess_degradation_cost_per_kWh: float = 0.02,
         bess_degradation_cost_ref: float | None = None,
-        planned_load_reserve_alpha: float = 0.25,
         reward_done_weight: float = 3.0,
         reward_cost_weight: float = 0.5,
         reward_carbon_weight: float = 0.3,
@@ -228,7 +227,6 @@ class IDCPriceEnv20D(gym.Env):
         )
         if self.bess_degradation_cost_ref <= 0.0:
             raise ValueError("bess_degradation_cost_ref must be positive.")
-        self.planned_load_reserve_alpha = float(planned_load_reserve_alpha)
 
         # 4. reward 权重
         self.reward_done_weight = float(reward_done_weight)
@@ -1522,42 +1520,6 @@ class IDCPriceEnv20D(gym.Env):
 
         self.__dict__.clear()
         self.__dict__.update(copy.deepcopy(state))
-
-    def _actual_loads_from_completed_work(
-        self,
-        planned_task_loads: np.ndarray,
-        planned_capacity: float,
-        completed_work: float,
-    ) -> np.ndarray:
-        """
-        根据实际完成任务量反推实际任务负载，并加入计划负载预留损耗。
-
-        旧逻辑：
-            actual_task_loads = planned_task_loads * usage_ratio
-
-        新逻辑：
-            实际负载 = 实际使用负载 + alpha * 未使用计划负载
-
-        含义：
-            即使计划能力没有完全转化为任务完成量，被调度到高负载的服务器
-            仍然会产生一部分资源预留、空转或调度开销。
-        """
-        planned_task_loads = np.asarray(planned_task_loads, dtype=np.float64)
-
-        if planned_capacity <= 1e-9:
-            return np.zeros_like(planned_task_loads, dtype=np.float64)
-
-        if completed_work <= 1e-9:
-            used_task_loads = np.zeros_like(planned_task_loads, dtype=np.float64)
-        else:
-            usage_ratio = float(np.clip(completed_work / planned_capacity, 0.0, 1.0))
-            used_task_loads = planned_task_loads * usage_ratio
-
-        reserve_alpha = float(np.clip(self.planned_load_reserve_alpha, 0.0, 1.0))
-        unused_planned_loads = np.maximum(planned_task_loads - used_task_loads, 0.0)
-        actual_task_loads = used_task_loads + reserve_alpha * unused_planned_loads
-
-        return np.clip(actual_task_loads, 0.0, self.max_task_load_per_server)
 
     def _compute_backlog_work(self) -> float:
         """由 Task 列表统计当前已到达但未完成任务的剩余工作量。"""
