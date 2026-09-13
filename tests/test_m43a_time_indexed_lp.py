@@ -9,8 +9,8 @@ from envs.idc_price_env import IDCPriceEnv20D
 from idc_model.task import Task
 from planning.model import (
     BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK,
-    DEGRADATION_COST_UNIT,
     DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK,
+    DEGRADATION_COST_UNIT,
     ELECTRICITY_COST_UNIT,
     FAILURE_BASE_SHORTAGE,
     FAILURE_DEADLINE_SHORTFALL,
@@ -64,6 +64,8 @@ def test_cost_units_declared_and_distinct():
     assert ELECTRICITY_COST_UNIT == "SGD"
     assert DEGRADATION_COST_UNIT == "SGD"
     assert "work-unit" in BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK[1]
+    assert "work-unit" in DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK[1]
+    assert DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK[0] > 0.0
     res = solve_time_indexed_lp(build_snapshot(_env()))
     for name in ("electricity_cost_sgd", "degradation_cost_sgd",
                  "business_shortfall_cost_sgd", "deadline_shortfall_cost_sgd"):
@@ -161,7 +163,9 @@ def test_max_constraint_residuals_reported():
     assert res.max_constraint_residual >= 0.0
     assert res.max_constraint_residual < 1e-6
     assert isinstance(res.residuals_by_constraint, dict)
-    assert "energy_balance" in res.residuals_by_constraint
+    assert any(k.startswith("energy_balance") for k in res.residuals_by_constraint)
+    assert any(k.startswith("soc_dynamics") for k in res.residuals_by_constraint)
+    assert all(v >= 0.0 for v in res.residuals_by_constraint.values())
 
 
 # --- 3. 失败分类 ---
