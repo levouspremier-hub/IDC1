@@ -455,8 +455,6 @@ def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
 
 # --- 9. 诊断纳入全局 deadline（M4.4a2） ---
 
-import scipy.optimize as _sopt  # noqa: E402
-
 
 class _FakeLinprog:
     """模拟诊断用的 linprog：记录 options.time_limit，按脚本返回状态。"""
@@ -498,6 +496,7 @@ def test_projection_main_infeasible_budget_exhausted_no_diagnostic(monkeypatch):
         snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=1.0
     )
     assert called["n"] == 0                     # 诊断未被启动
+    assert res.diagnostic_status == "not_started"
     assert res.solver_status == "time_limit"
     assert res.failure_class == FAILURE_TIMEOUT # 不得误报 base_shortage
 
@@ -506,7 +505,7 @@ def test_projection_diagnostic_timeout_is_overall_timeout(monkeypatch):
     """诊断 LP timeout → 整体 timeout、零动作、业务缺口显式。"""
     snap = build_snapshot(_env(access_limit_kw=1000.0))
     monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
-    monkeypatch.setattr("scipy.optimize.linprog", _FakeLinprog([1]))
+    monkeypatch.setattr(model_mod, "linprog", _FakeLinprog([1]))
     res = solve_time_indexed_mip_raw_projection(
         snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
     )
@@ -515,7 +514,7 @@ def test_projection_diagnostic_timeout_is_overall_timeout(monkeypatch):
     assert all(v == 0.0 for v in res.exec_compute_actions)
     assert res.exec_storage_action == 0.0
     assert res.business_gap_work > 0.0
-    assert "diagnos" in res.stage_b_status.lower() or "diagnos" in str(res.residuals_by_constraint)
+    assert "time_limit" in res.diagnostic_status   # 诊断自身 timeout 被如实记录
 
 
 def test_projection_in_budget_diagnostic_confirms_base_shortage(monkeypatch):
@@ -542,7 +541,7 @@ def test_diagnostic_budget_within_global_deadline(monkeypatch):
     snap = build_snapshot(_env(access_limit_kw=1.0, soc_init=0.1))
     fake_lp = _FakeLinprog([2, 0])
     monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([2], None))
-    monkeypatch.setattr("scipy.optimize.linprog", fake_lp)
+    monkeypatch.setattr(model_mod, "linprog", fake_lp)
     # deadline = 0 + 10 = 10；主 milp 前后时钟推进到 3
     clock = _fixed_clock([0.0, 3.0, 3.0, 4.0, 4.0, 5.0])
     monkeypatch.setattr(model_mod, "_monotonic", clock)

@@ -358,7 +358,7 @@ def test_mip_diagnostic_timeout_is_overall_timeout(monkeypatch):
 
     snap = build_snapshot(_E(horizon=HORIZON, forecast_cutoff=CUTOFF, access_limit_kw=1000.0))
     monkeypatch.setattr("scipy.optimize.milp", _FakeMilpStatus(2))
-    monkeypatch.setattr("scipy.optimize.linprog", _FakeLpDiag([1]))
+    monkeypatch.setattr(_model_mod, "linprog", _FakeLpDiag([1]))
     res = solve_time_indexed_mip(snap, time_limit_s=10.0)
     assert res.solver_status != "optimal"
     assert res.failure_class != FAILURE_BASE_SHORTAGE   # 不得误报
