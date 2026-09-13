@@ -108,8 +108,12 @@ def collect_rollout(
     seed: int = 0,
     corrector_on: bool = False,
     corrector_time_limit_s: float | None = None,
+    generator: torch.Generator | None = None,
 ) -> dict:
     """采集 `steps` 步真实 rollout 并写入 `buffer`；遇 terminated/truncated 提前停止。
+
+    `generator` 为采样 RNG：给定时策略采样只消耗该 generator，**不得**由本函数
+    重新播种全局 Torch RNG（调用方的随机性归调用方所有）。
 
     返回本次采集的统计（供 probe 与验收记录使用），**不包含任何训练结果**。
     """
@@ -153,13 +157,18 @@ def collect_rollout(
         "truncated_count": 0,
         "contract_version": CONTRACT_VERSION,
         "action_dim": action_dim,
+        # RNG 溯源：环境种子 + 策略采样 RNG 来源（供训练入口与 probe 记录）
+        "env_seed": int(seed),
+        "policy_rng_source": (
+            "explicit_generator" if generator is not None else "global_torch_rng"
+        ),
     }
 
     for _ in range(steps):
         obs_arr = np.asarray(obs, dtype=np.float32)
         obs_t = torch.as_tensor(obs_arr)
 
-        raw_t, act_log_prob, _ = policy.act(obs_t)
+        raw_t, act_log_prob, _ = policy.act(obs_t, generator=generator)
         raw_action = raw_t.detach().numpy().astype(np.float32).copy()  # 原样，不 clip
 
         if raw_action.shape != (action_dim,):

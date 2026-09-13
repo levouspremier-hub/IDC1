@@ -16,6 +16,8 @@ transition 数、raw/exec 差异数、terminated/truncated 数、contract 版本
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -40,6 +42,13 @@ DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
 # 环境三类种子必须同时显式给定，否则 default_rng(None) 使用熵源
 ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
 
+# 纯墙钟计时审计字段：不参与任何决策或损失，跨进程不可复现，比较确定性时剔除
+WALL_CLOCK_ONLY_KEYS = (
+    "correction_solve_time_s",
+    "stage_a_solve_time_s",
+    "stage_b_solve_time_s",
+)
+
 
 def build_env(**over) -> IDCPriceEnv20D:
     kwargs = dict(ENV_SEED_KWARGS)
@@ -47,14 +56,45 @@ def build_env(**over) -> IDCPriceEnv20D:
     return IDCPriceEnv20D(**kwargs)
 
 
+def payload_fingerprint(buffer: RolloutBuffer) -> str:
+    """完整 payload 的 sha256：跨进程确定性证据，而不只是计数相同。"""
+    canonical = json.dumps(buffer.to_dict(), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def decision_payload_fingerprint(buffer: RolloutBuffer) -> str:
+    """**决策相关** payload 的 sha256：剔除纯墙钟计时字段后的指纹。
+
+    `corrector_solve_time_s` / `stage_a_solve_time_s` / `stage_b_solve_time_s` 是
+    墙钟测量值，天然跨进程不可复现；它们不参与任何决策或损失。
+    剔除后再比对，才能区分「MILP 求解路径真的不同」与「只差计时读数」。
+    """
+    payload = copy.deepcopy(buffer.to_dict())
+    for entry in payload["transitions"]:
+        for key in WALL_CLOCK_ONLY_KEYS:
+            entry["correction_info"].pop(key, None)
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def run_arm(*, corrector_on: bool, steps: int, seed: int, corrector_time_limit_s: float) -> dict:
-    """单条采集臂；返回可 JSON 序列化的统计（不含任何训练量）。"""
-    torch.manual_seed(seed)
+    """单条采集臂；返回可 JSON 序列化的统计（不含任何训练量）。
+
+    策略权重用一个**独立** generator 初始化，采样再换另一个显式 generator，
+    全程不依赖 `torch.manual_seed`（全局 RNG 状态属于调用方）。
+    """
     env = build_env()
-    policy = SafePPOPolicy(obs_dim=env.obs_dim)
+    # 权重初始化借用全局 RNG，但用 fork_rng 还原，不改变调用方状态
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(seed)
+        policy = SafePPOPolicy(obs_dim=env.obs_dim)
     policy.eval()  # 推理模式；本 probe 不训练
 
+    sampler = torch.Generator()
+    sampler.manual_seed(seed)
+
     before = [p.detach().clone() for p in policy.parameters()]
+    global_before = torch.get_rng_state().clone()
     buffer = RolloutBuffer()
     stats = collect_rollout(
         env,
@@ -64,6 +104,7 @@ def run_arm(*, corrector_on: bool, steps: int, seed: int, corrector_time_limit_s
         seed=seed,
         corrector_on=corrector_on,
         corrector_time_limit_s=corrector_time_limit_s if corrector_on else None,
+        generator=sampler,
     )
     unchanged = all(
         torch.equal(old, new.detach()) for old, new in zip(before, policy.parameters(), strict=True)
@@ -71,11 +112,20 @@ def run_arm(*, corrector_on: bool, steps: int, seed: int, corrector_time_limit_s
 
     payload = dict(stats)
     payload["arm"] = "corrector_on" if corrector_on else "corrector_off"
+    payload["policy_weights_seed"] = seed
+    payload["policy_sampler_generator_seed"] = seed
+    payload["global_torch_rng_untouched"] = bool(
+        torch.equal(global_before, torch.get_rng_state())
+    )
     payload["policy_parameters_unchanged"] = bool(unchanged)
     payload["old_raw_log_prob_finite"] = bool(
         np.all(np.isfinite([t.old_raw_log_prob for t in buffer.transitions]))
     )
     payload["buffer_to_dict_json_ok"] = bool(json.dumps(buffer.to_dict()))
+    payload["payload_sha256"] = payload_fingerprint(buffer)
+    payload["decision_payload_sha256"] = decision_payload_fingerprint(buffer)
+    payload["wall_clock_only_keys"] = list(WALL_CLOCK_ONLY_KEYS)
+    payload["payload_field_count"] = len(buffer.to_dict()["transitions"][0]) if len(buffer) else 0
     return payload
 
 
@@ -98,29 +148,31 @@ def main() -> None:
         for corrector_on in (False, True)
     ]
 
-    # 确定性自检：同一配置重复运行必须逐元素一致
+    # 确定性自检：同一配置重复运行，**完整 payload 指纹**必须一致（不只是计数）
     repeat = run_arm(
         corrector_on=False,
         steps=args.steps,
         seed=args.seed,
         corrector_time_limit_s=args.corrector_time_limit_s,
     )
-    deterministic = (
-        repeat["transitions"] == arms[0]["transitions"]
-        and repeat["raw_exec_difference_count"] == arms[0]["raw_exec_difference_count"]
-    )
+    deterministic = repeat["decision_payload_sha256"] == arms[0]["decision_payload_sha256"]
 
     report = {
-        "probe": "m51b_deterministic_rollout",
+        "probe": "m51c_deterministic_rollout",
         "trained": False,
         "note": (
             "本 probe 不训练：无 PPO ratio/clip、无 GAE/advantage、无 actor loss、"
             "无乘子更新、无 optimizer.step()；数值不代表训练或性能结论。"
         ),
         "steps_requested": args.steps,
-        "seed": args.seed,
+        "env_seed": args.seed,
+        "env_seed_kwargs": ENV_SEED_KWARGS,
+        "policy_weights_seed": args.seed,
+        "policy_sampler_rng": "explicit torch.Generator（不使用 torch.manual_seed 采样）",
         "corrector_time_limit_s": args.corrector_time_limit_s,
-        "deterministic_repeat_match": bool(deterministic),
+        "deterministic_repeat_decision_payload_match": bool(deterministic),
+        "repeat_decision_payload_sha256": repeat["decision_payload_sha256"],
+        "wall_clock_only_keys": list(WALL_CLOCK_ONLY_KEYS),
         "arms": arms,
     }
 
@@ -137,20 +189,25 @@ def main() -> None:
                     "truncated_count": a["truncated_count"],
                     "contract_version": a["contract_version"],
                     "corrector_on": a["corrector_on"],
+                    "env_seed": a["env_seed"],
+                    "policy_rng_source": a["policy_rng_source"],
+                    "payload_sha256": a["payload_sha256"],
                 }
                 for a in arms
             ]
         )
-        run_id = f"m51b_rollout_probe_s{args.seed}_n{args.steps}"
+        run_id = f"m51c_rollout_probe_s{args.seed}_n{args.steps}"
         run_dir = write_run(
             run_id,
             config={
-                "probe": "m51b_deterministic_rollout",
+                "probe": "m51c_deterministic_rollout",
                 "trained": False,
                 "steps": args.steps,
-                "seed": args.seed,
-                "corrector_time_limit_s": args.corrector_time_limit_s,
+                "env_seed": args.seed,
                 "env_seed_kwargs": ENV_SEED_KWARGS,
+                "policy_weights_seed": args.seed,
+                "policy_sampler_rng": "explicit torch.Generator",
+                "corrector_time_limit_s": args.corrector_time_limit_s,
                 "units": UNIT_METADATA,
             },
             metrics=metrics,

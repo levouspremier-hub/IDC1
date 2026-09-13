@@ -31,6 +31,19 @@ def raw_action_bounds(action_dim: int = 21) -> tuple[np.ndarray, np.ndarray]:
     return low, high
 
 
+def _sample_pre_squash(
+    mean: torch.Tensor, std: torch.Tensor, generator: torch.Generator | None = None
+) -> torch.Tensor:
+    """从 N(mean, std) 采样。给定 `generator` 时**只**消耗该 generator。
+
+    不使用 `torch.manual_seed`：全局 RNG 状态属于调用方，本模块不得改动。
+    """
+    expanded = std.expand_as(mean)
+    if generator is None:
+        return torch.normal(mean, expanded)
+    return torch.normal(mean, expanded, generator=generator)
+
+
 def _squash(u: torch.Tensor, action_dim: int) -> torch.Tensor:
     """无界样本 → 有界 raw 动作：计算维 0.5*(tanh+1) ∈ (0,1)，储能维 tanh ∈ (-1,1)。"""
     compute = 0.5 * (torch.tanh(u[..., : action_dim - 1]) + 1.0)
@@ -79,10 +92,15 @@ class SafePPOPolicy(nn.Module):
     def forward(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return self.actor(obs), self.critic(obs)
 
-    def act(self, obs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """采样**有界** raw 动作，并返回与**该最终动作**严格对应的 log-prob。"""
+    def act(
+        self, obs: torch.Tensor, generator: torch.Generator | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """采样**有界** raw 动作，并返回与**该最终动作**严格对应的 log-prob。
+
+        `generator` 给定时采样只消耗该 generator，全局 Torch RNG 不受影响。
+        """
         mean, values = self.forward(obs)
-        u = Normal(mean, self.log_std.exp()).sample()
+        u = _sample_pre_squash(mean, self.log_std.exp(), generator)
         raw_action = _squash(u, self.action_dim)
         # 概率从最终 raw 动作重算：与 evaluate_raw_actions 同路径，故二者恒等
         log_prob = self.evaluate_raw_actions(obs, raw_action)
