@@ -12,7 +12,7 @@ from typing import Any
 
 import torch
 
-CURRENT_CONTRACT_VERSION = "contract-v1"
+CURRENT_CONTRACT_VERSION = "contract-v2"
 CURRENT_ACTION_DIM = 21  # 20 compute + 1 signed storage
 
 

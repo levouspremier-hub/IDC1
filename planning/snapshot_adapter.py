@@ -50,6 +50,7 @@ def build_snapshot(env) -> SystemSnapshot:
         pv_forecast=_visible_window(env.pv_t, t, cutoff, horizon),
         wind_forecast=_visible_window(env.wt_t, t, cutoff, horizon),
         temperature_forecast=_visible_window(env.T_amb, t, cutoff, horizon),
+        carbon_forecast=_visible_window(env.carbon_factor_t, t, cutoff, horizon),
         source_hashes={"adapter": "planning.snapshot_adapter"},
         synthetic=True,
     )

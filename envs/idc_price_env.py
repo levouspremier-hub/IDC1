@@ -50,7 +50,8 @@ class IDCPriceEnv20D(gym.Env):
     3. Q_t 只作为由 Task.remaining_work 统计得到的积压量；
     4. step() 内部按小时激活到达任务，并按优先级/期限约束执行任务；
     5. PPO 动作由 N 个 server-group 计算强度 + 1 个有符号储能动作组成（21 维，默认 N=20）；
-    6. observation 维度按 6 + 10 + 6*N + 6*horizon 计算；默认 N=20、horizon=24 时为 280；
+    6. observation 维度按 6 + 10 + 6*N + 8*horizon 计算；默认 N=20、horizon=24 时为 328；
+       （预测特征顺序：price, temperature, arrival, pv, wind, carbon, sin, cos）
     7. 功耗按逐组完成工作/组能力导出实际负载（不再有 α 预留损耗）；
     8. reward 扩展为任务类综合奖励：完成量、完整任务完成、高优先级任务完成、成本、积压、紧急积压、等待、超时、未使用能力、高电价高负载、暂停/恢复和不可暂停中断；
     9. 新增任务启停跟踪：记录任务启动、暂停、恢复与不可暂停任务中断。
@@ -124,6 +125,8 @@ class IDCPriceEnv20D(gym.Env):
         T_amb=None,
         pv_t=None,
         pv_ref_kw: float = 1.0,
+        wind_ref_kw: float = 1.0,
+        carbon_factor_ref: float = 1.0,
         allow_pv_export: bool = False,
         wt_t=None,
         server_seed=None,
@@ -277,9 +280,10 @@ class IDCPriceEnv20D(gym.Env):
 
         # 6. 底层 observation 的维度随 N 和 horizon 变化：
         #    current_obs_dim = 6 个全局特征 + 10 个任务池特征 + 6 组 server-group 特征 × N；
-        #    forecast_obs_dim = 6 组前瞻特征 × horizon；
-        #    obs_dim = 6 + 10 + 6*N + 6*horizon。
-        #    默认 N=20、horizon=24 时，current=136、forecast=144、base obs=280。
+        #    forecast_obs_dim = 8 组前瞻特征 × horizon
+        #    （price, temperature, arrival, pv, wind, carbon, sin, cos）；
+        #    obs_dim = 6 + 10 + 6*N + 8*horizon。
+        #    默认 N=20、horizon=24 时，current=136、forecast=192、base obs=328。
         self.global_obs_dim = 6
         self.task_pool_obs_dim = 10
         self.server_feature_groups = 6
@@ -288,7 +292,8 @@ class IDCPriceEnv20D(gym.Env):
             + self.task_pool_obs_dim
             + self.server_feature_groups * self.model.N
         )
-        self.forecast_feature_groups = 6
+        # 预测特征组固定顺序（M3.10b）：price, temperature, arrival, pv, wind, carbon, sin, cos
+        self.forecast_feature_groups = 8
         self.forecast_obs_dim = self.forecast_feature_groups * self.horizon
         self.obs_dim = self.current_obs_dim + self.forecast_obs_dim
         self.observation_space = spaces.Box(
@@ -320,10 +325,14 @@ class IDCPriceEnv20D(gym.Env):
         self.pv_t = np.maximum(self.pv_t, 0.0)
         pv_peak_kw = float(np.max(self.pv_t)) if self.pv_t.size else 0.0
         self.pv_ref_kw = max(float(pv_ref_kw), pv_peak_kw, 1e-6)
+        carbon_factor_peak = float(np.max(self.carbon_factor_t)) if self.carbon_factor_t.size else 0.0
+        self.carbon_factor_ref = max(float(carbon_factor_ref), carbon_factor_peak, 1e-6)
         self.allow_pv_export = bool(allow_pv_export)
         if self.allow_pv_export:
             raise ValueError("allow_pv_export=True is not supported in this first PV integration.")
         self.wt_t = self._validate_time_series("wt_t", wt_t) if wt_t is not None else np.zeros(self.horizon)
+        wind_peak_kw = float(np.max(self.wt_t)) if self.wt_t.size else 0.0
+        self.wind_ref_kw = max(float(wind_ref_kw), wind_peak_kw, 1e-6)
 
         # 8. 运行状态变量会在 reset() 中初始化
         self.current_step = 0
@@ -1886,14 +1895,23 @@ class IDCPriceEnv20D(gym.Env):
             self.task_arrival_forecast, dtype=np.float64
         ) / max(self.lambda_ref, eps) * visible
         pv_24h = np.asarray(self.pv_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
+        wind_24h = np.asarray(self.wt_t, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
+        carbon_24h = (
+            np.asarray(self.carbon_factor_t, dtype=np.float64)
+            / max(self.carbon_factor_ref, eps)
+            * visible
+        )
         time_sin_24h = np.sin(2 * np.pi * hours / max(self.horizon, 1))
         time_cos_24h = np.cos(2 * np.pi * hours / max(self.horizon, 1))
 
+        # 固定顺序（M3.10b）：price, temperature, arrival, pv, wind, carbon, sin, cos
         forecast_features = np.concatenate([
             price_24h,
             T_amb_24h,
             lambda_24h,
             pv_24h,
+            wind_24h,
+            carbon_24h,
             time_sin_24h,
             time_cos_24h,
         ]).astype(np.float32)

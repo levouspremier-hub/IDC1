@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class ContractBase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str = Field(default="contract-v1")
+    schema_version: str = Field(default="contract-v2")
 
 
 class ScenarioBundle(ContractBase):
@@ -32,6 +32,7 @@ class ScenarioBundle(ContractBase):
     pv_forecast: list[float]
     wind_forecast: list[float]
     temperature_forecast: list[float]
+    carbon_forecast: list[float]
     source_hashes: dict[str, str]
     synthetic: bool = False
 
@@ -41,6 +42,7 @@ class ScenarioBundle(ContractBase):
         "pv_forecast": "kW",
         "wind_forecast": "kW",
         "temperature_forecast": "degC",
+        "carbon_forecast": "kgCO2/kWh",
     }
 
     def content_hash(self) -> str:

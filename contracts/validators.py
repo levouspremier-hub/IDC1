@@ -19,6 +19,7 @@ _FORECAST_FIELDS = (
     "pv_forecast",
     "wind_forecast",
     "temperature_forecast",
+    "carbon_forecast",
 )
 
 

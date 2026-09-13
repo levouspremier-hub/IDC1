@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-CONTRACT_VERSION = "contract-v1"
+CONTRACT_VERSION = "contract-v2"
 ACTION_DIM = 21  # 20 compute + 1 signed storage
 
 
