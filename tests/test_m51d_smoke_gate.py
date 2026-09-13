@@ -155,3 +155,58 @@ def test_default_run_id_can_run_repeatedly(tmp_path):
 
 def test_script_exists_so_make_smoke_gate_is_real():
     assert SCRIPT.exists(), "make smoke 声明的脚本必须真实存在"
+
+
+# --- 5. 回归：失败路径、可重复性与 Makefile 接线 ---
+
+def test_failed_check_writes_failed_manifest_and_exits_nonzero(tmp_path, monkeypatch):
+    """检查失败必须写 status=failed 的 manifest 并退出非 0，不得假成功。"""
+    import scripts.smoke_main_chain as smoke
+
+    # 把接入上限容差置为不可满足，强制 access_limit 检查失败
+    monkeypatch.setattr(smoke, "ACCESS_LIMIT_TOL_KW", -1.0e6)
+
+    exit_code = smoke.main(["--base-dir", str(tmp_path), "--run-id", "fail_check", "--seed", "0"])
+    assert exit_code == 1
+
+    run_dir = tmp_path / "fail_check"
+    assert (run_dir / "manifest.json").exists(), "失败的 run 也必须有 manifest"
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["failure_classification"] == "smoke_check_failed"
+
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    assert report["status"] == "failed"
+    assert report["failure"], "失败原因必须落盘"
+    assert report["checks"]["access_limit"][-1]["passed"] is False
+
+
+def test_same_seed_reproduces_identical_report_and_metrics(tmp_path):
+    """同种子、同场景的两次运行必须产生相同的报告与指标（可重复执行）。"""
+    import pandas as pd
+
+    first = tmp_path / "a"
+    second = tmp_path / "b"
+    assert run_smoke(first, "--run-id", "rep", "--seed", "0").returncode == 0
+    assert run_smoke(second, "--run-id", "rep", "--seed", "0").returncode == 0
+
+    report_a = json.loads((first / "rep" / "report.json").read_text(encoding="utf-8"))
+    report_b = json.loads((second / "rep" / "report.json").read_text(encoding="utf-8"))
+    assert report_a == report_b
+
+    metrics_a = pd.read_parquet(first / "rep" / "metrics.parquet")
+    metrics_b = pd.read_parquet(second / "rep" / "metrics.parquet")
+    assert metrics_a.equals(metrics_b)
+    assert list(metrics_a["raw_exec_differs"])  # 修正器确实在做事
+
+
+def test_makefile_smoke_target_is_wired_and_its_guard_now_passes():
+    """Makefile 的 smoke 目标必须调用本脚本，且其存在性前置条件现已满足。
+
+    Makefile 未被本卡修改：它原有 `test -f scripts/smoke_main_chain.py` 守卫，
+    交付脚本后该守卫自然通过。
+    """
+    makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
+    body = makefile.split("smoke:", 1)[1].split("\n\n", 1)[0]
+    assert "scripts/smoke_main_chain.py" in body, "smoke 目标必须调用本脚本"
+    assert SCRIPT.exists(), "存在性守卫必须已满足，否则 make smoke 仍会失败"
