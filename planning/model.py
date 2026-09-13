@@ -46,6 +46,7 @@ FAILURE_NONE = "none"
 FAILURE_BASE_SHORTAGE = "base_shortage"
 FAILURE_DEADLINE_SHORTFALL = "deadline_shortfall"
 FAILURE_SOLVER_FAILURE = "solver_failure"
+FAILURE_TIMEOUT = "timeout"
 
 _TOL = 1e-6
 
@@ -547,10 +548,23 @@ def _solve_time_indexed(
 
     n_int = n_z
     if solver_status != SOLVER_OPTIMAL:
-        base_diag = diagnose_base_feasibility(snapshot)
+        if solver_status == SOLVER_TIME_LIMIT:
+            # 超时：立即返回零执行量 + 全部剩余业务缺口；
+            # **不调用 diagnose_base_feasibility**（不得为失败分类再启动第二次求解），
+            # 也不得使用超时 incumbent 作为结果。
+            return _empty_result(
+                snapshot, H, n_vars, len(rows), solver_status, solve_time,
+                FAILURE_TIMEOUT, None,
+                backend=backend, n_integer_variables=n_int,
+            )
+        base_diag = (
+            diagnose_base_feasibility(snapshot)
+            if solver_status == SOLVER_INFEASIBLE
+            else None
+        )
         failure = (
             FAILURE_BASE_SHORTAGE
-            if (solver_status == SOLVER_INFEASIBLE and not base_diag.feasible)
+            if (base_diag is not None and not base_diag.feasible)
             else FAILURE_SOLVER_FAILURE
         )
         return _empty_result(
