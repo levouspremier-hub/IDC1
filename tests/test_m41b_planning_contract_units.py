@@ -25,7 +25,9 @@ def _env(t: int = 0) -> IDCPriceEnv20D:
         T_amb=np.linspace(20.0, 30.0, h),
     )
     env.reset(seed=0)
-    action = np.concatenate([np.full(N_GROUP, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
+    action = np.concatenate(
+        [np.full(N_GROUP, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)]
+    )
     for _ in range(t):
         env.step(action)
     return env
@@ -167,7 +169,10 @@ def test_old_versions_rejected(tmp_path, version):
     )
     with pytest.raises(CheckpointVersionError, match="contract_version_id"):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
@@ -176,7 +181,10 @@ def test_unversioned_rejected(tmp_path):
     torch.save({"state": {}}, str(path))
     with pytest.raises(CheckpointVersionError, match="无版本"):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )
 
 
@@ -193,5 +201,8 @@ def test_old_payload_with_legacy_field_rejected(tmp_path):
     )
     with pytest.raises(CheckpointVersionError):
         VersionedCheckpoint.load(
-            path, expected_action_dim=21, expected_obs_dim=EXPECTED_OBS_DIM, expected_schema_hash="h"
+            path,
+            expected_action_dim=21,
+            expected_obs_dim=EXPECTED_OBS_DIM,
+            expected_schema_hash="h",
         )

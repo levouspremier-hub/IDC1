@@ -53,14 +53,14 @@ def _snapshot(**overrides) -> SystemSnapshot:
         bess_degradation_cost_per_kwh=0.02,
         base_idc_power_forecast_kw=[14.0] * 24,
         power_approximation_note="planning approximation; verify with env physics chain",
-        group_capacity_kw=[1.0] * 20,
+        group_work_capacity=[1.0] * 20,
         access_limit_kw=18.0,
         budget_remaining_sgd=100.0,
         tasks=[],
         forecast=_scenario(),
     )
     kwargs.update(overrides)
-    n_group = len(kwargs["group_capacity_kw"])  # type: ignore[arg-type]
+    n_group = len(kwargs["group_work_capacity"])  # type: ignore[arg-type]
     kwargs.setdefault("group_power_coeff_kw_per_work", [0.01] * n_group)
     kwargs.setdefault("group_power_upper_kw", [0.7] * n_group)
     return SystemSnapshot(**kwargs)  # type: ignore[arg-type]
@@ -88,8 +88,8 @@ def test_snapshot_soc_out_of_range_fails():
 
 
 def test_snapshot_negative_capacity_fails():
-    with pytest.raises(ValueError, match="group_capacity_kw"):
-        validate_snapshot(_snapshot(group_capacity_kw=[1.0] * 19 + [-1.0]))
+    with pytest.raises(ValueError, match="group_work_capacity"):
+        validate_snapshot(_snapshot(group_work_capacity=[1.0] * 19 + [-1.0]))
 
 
 def test_snapshot_valid_passes():
@@ -110,7 +110,7 @@ def test_proposal_storage_out_of_range_fails():
 
 
 def test_allocation_exceeds_max_rate_fails():
-    snap = _snapshot(group_capacity_kw=[10.0] * 2)
+    snap = _snapshot(group_work_capacity=[10.0] * 2)
     alloc = TaskAllocation(
         task_ids=["t1"], group_ids=[0, 1], matrix=[[6.0, 5.0]]
     )
@@ -119,14 +119,14 @@ def test_allocation_exceeds_max_rate_fails():
 
 
 def test_allocation_exceeds_group_capacity_fails():
-    snap = _snapshot(group_capacity_kw=[10.0, 1.0])
+    snap = _snapshot(group_work_capacity=[10.0, 1.0])
     alloc = TaskAllocation(task_ids=["t1", "t2"], group_ids=[0, 1], matrix=[[0.0, 0.0], [0.0, 5.0]])
     with pytest.raises(ValueError, match="超容量"):
         validate_task_allocation(alloc, snap, max_rate={"t1": 100.0, "t2": 100.0})
 
 
 def test_allocation_valid_passes():
-    snap = _snapshot(group_capacity_kw=[10.0, 10.0])
+    snap = _snapshot(group_work_capacity=[10.0, 10.0])
     alloc = TaskAllocation(task_ids=["t1"], group_ids=[0, 1], matrix=[[3.0, 2.0]])
     validate_task_allocation(alloc, snap, max_rate={"t1": 8.0})
 

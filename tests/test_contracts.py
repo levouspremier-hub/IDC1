@@ -82,7 +82,7 @@ def test_nested_roundtrip():
         soc_kwh=50.0,
         soc_min_kwh=10.0,
         soc_max_kwh=90.0,
-        group_capacity_kw=[1.0] * 20,
+        group_work_capacity=[1.0] * 20,
         delta_t_hours=1.0,
         planning_horizon_steps=24,
         soc_capacity_kwh=100.0,

@@ -48,7 +48,7 @@ def _snapshot() -> SystemSnapshot:
         soc_kwh=50.0,
         soc_min_kwh=10.0,
         soc_max_kwh=90.0,
-        group_capacity_kw=[4.0, 6.0],
+        group_work_capacity=[4.0, 6.0],
         delta_t_hours=1.0,
         planning_horizon_steps=24,
         soc_capacity_kwh=100.0,
@@ -85,7 +85,7 @@ def test_group_capacity_respected():
     r = solve(snap)
     for g in range(2):
         col_sum = sum(r.allocation[i][g] for i in range(2))
-        assert col_sum <= snap.group_capacity_kw[g] + 1e-6
+        assert col_sum <= snap.group_work_capacity[g] + 1e-6
 
 
 def test_task_remaining_respected():

@@ -32,7 +32,7 @@ def test_buffer_stores_raw_exec_separately():
     assert not np.allclose(t.raw_action, t.exec_action)  # exec 不覆盖 raw
     assert t.raw_action.shape == (21,)
     assert t.exec_action.shape == (21,)
-    assert t.contract_version == "contract-v3"
+    assert t.contract_version == "contract-v4"
 
 
 def test_buffer_rejects_wrong_dim():

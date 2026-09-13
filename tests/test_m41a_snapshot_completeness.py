@@ -24,7 +24,7 @@ BESS_FIELDS = (
     "bess_degradation_cost_per_kwh",
 )
 ACCESS_ONLY_FIELDS = ("access_limit_kw", "base_idc_power_forecast_kw")
-GROUP_FIELDS = ("group_capacity_kw", "group_power_coeff_kw_per_work", "group_power_upper_kw")
+GROUP_FIELDS = ("group_work_capacity", "group_power_coeff_kw_per_work", "group_power_upper_kw")
 
 
 def _env(cutoff: int = CUTOFF, t: int = 0, horizon: int = HORIZON) -> IDCPriceEnv20D:
@@ -59,7 +59,7 @@ def test_units_declared_for_new_fields():
         assert field in SystemSnapshot.UNITS, f"{field} 未声明单位"
     assert SystemSnapshot.UNITS["delta_t_hours"] == "h"
     assert SystemSnapshot.UNITS["bess_charge_efficiency"] == "fraction"
-    assert SystemSnapshot.UNITS["group_capacity_kw"] == "work-units"
+    assert SystemSnapshot.UNITS["group_work_capacity"] == "work-units"
     assert SystemSnapshot.UNITS["group_power_coeff_kw_per_work"] == "kW/work-unit"
     assert SystemSnapshot.UNITS["group_power_upper_kw"] == "kW"
 
@@ -186,8 +186,8 @@ def test_active_task_max_rate_matches_env_definition():
 
 # --- 6. 契约版本 v3 与旧 checkpoint 拒绝 ---
 
-def test_contract_version_is_v3():
-    assert CONTRACT_VERSION_ID == "contract-v3"
+def test_contract_version_is_v4():
+    assert CONTRACT_VERSION_ID == "contract-v4"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 

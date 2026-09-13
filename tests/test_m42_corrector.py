@@ -28,7 +28,7 @@ def _snapshot(soc_kwh=50.0, access_limit_kw=10.0, capacity=None) -> SystemSnapsh
         soc_kwh=soc_kwh,
         soc_min_kwh=10.0,
         soc_max_kwh=90.0,
-        group_capacity_kw=capacity,
+        group_work_capacity=capacity,
         delta_t_hours=1.0,
         planning_horizon_steps=24,
         soc_capacity_kwh=100.0,

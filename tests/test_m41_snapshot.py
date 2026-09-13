@@ -11,7 +11,7 @@ def test_snapshot_has_required_fields():
     env.reset(seed=0)
     snap = build_snapshot(env)
     assert snap.schema_version is not None
-    assert len(snap.group_capacity_kw) == env.model.N
+    assert len(snap.group_work_capacity) == env.model.N
     assert snap.soc_kwh is not None
     assert snap.access_limit_kw is not None
     assert isinstance(snap.tasks, list)

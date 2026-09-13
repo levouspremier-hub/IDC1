@@ -39,7 +39,7 @@ def _env(peak: float, cutoff: int = 4, t: int = 0) -> IDCPriceEnv20D:
 # --- 1. 唯一版本源 ---
 
 def test_contract_version_single_source():
-    assert CONTRACT_VERSION_ID == "contract-v3"
+    assert CONTRACT_VERSION_ID == "contract-v4"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
     assert BUFFER_CONTRACT_VERSION == CONTRACT_VERSION_ID
 
@@ -48,7 +48,7 @@ def test_no_hardcoded_version_literal_outside_contracts():
     """checkpointing 与 buffer 不得各自硬编码版本字面量。"""
     for path in ("checkpointing/versioned.py", "safe_rl_v2/buffer.py"):
         text = Path(path).read_text(encoding="utf-8")
-        assert '"contract-v3"' not in text and "'contract-v2'" not in text, (
+        assert '"contract-v4"' not in text and "'contract-v2'" not in text, (
             f"{path} 仍硬编码版本字面量"
         )
         assert "CONTRACT_VERSION_ID" in text, f"{path} 未从 contracts 导入唯一版本源"
