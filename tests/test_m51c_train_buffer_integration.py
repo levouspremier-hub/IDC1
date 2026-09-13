@@ -343,3 +343,66 @@ def test_bootstrap_is_not_masked_before_terminal():
     env, policy, lag, opt = make_setup(horizon=24)
     result = dry_run_update(env, policy, lag, opt, steps=3, seed=0, generator=make_generator(0))
     assert result["bootstrap_is_terminal"] is False
+
+
+# --- 7. 完整 payload 的跨进程确定性证据（不只是计数）---
+
+def _arm_buffer(corrector_on: bool, steps: int = 3) -> RolloutBuffer:
+    env = make_env()
+    policy = make_policy(env, seed=0)
+    buffer = RolloutBuffer()
+    collect_rollout(
+        env, policy, buffer, steps=steps, seed=0,
+        corrector_on=corrector_on,
+        corrector_time_limit_s=CORRECTOR_TIME_LIMIT_S if corrector_on else None,
+        generator=make_generator(0),
+    )
+    return buffer
+
+
+@pytest.mark.parametrize("corrector_on", [False, True])
+def test_full_decision_payload_is_identical_across_independent_runs(corrector_on):
+    """完整决策相关 payload 必须逐元素一致——比较整数哈希，而不是只比计数。"""
+    from scripts.probe_rollout_deterministic import (
+        decision_payload_fingerprint,
+        payload_fingerprint,
+    )
+
+    first = _arm_buffer(corrector_on)
+    second = _arm_buffer(corrector_on)
+
+    assert decision_payload_fingerprint(first) == decision_payload_fingerprint(second)
+    if not corrector_on:
+        # 无修正器时连墙钟字段都没有，连完整 payload 也必须一致
+        assert payload_fingerprint(first) == payload_fingerprint(second)
+
+
+def test_corrector_arm_differs_only_in_wall_clock_audit_fields():
+    """corrector 臂的跨进程差异必须**只**落在墙钟计时审计字段上。"""
+    from scripts.probe_rollout_deterministic import WALL_CLOCK_ONLY_KEYS
+
+    first, second = _arm_buffer(True), _arm_buffer(True)
+    seen_wall_clock = set()
+    for x, y in zip(first.transitions, second.transitions, strict=True):
+        np.testing.assert_array_equal(x.raw_action, y.raw_action)
+        np.testing.assert_array_equal(x.exec_action, y.exec_action)
+        assert x.old_raw_log_prob == y.old_raw_log_prob
+        assert set(x.correction_info) == set(y.correction_info)
+        for key, value in x.correction_info.items():
+            if key in WALL_CLOCK_ONLY_KEYS:
+                seen_wall_clock.add(key)
+                continue
+            assert value == y.correction_info[key], f"决策相关字段 {key} 不应随进程变化"
+    assert seen_wall_clock == set(WALL_CLOCK_ONLY_KEYS), "本测试必须覆盖全部墙钟字段"
+
+
+def test_decision_fingerprint_is_sensitive_to_action_changes():
+    """指纹必须有齿：改动一个 raw 动作分量即改变指纹。"""
+    from scripts.probe_rollout_deterministic import decision_payload_fingerprint
+
+    baseline = _arm_buffer(False)
+    mutated = _arm_buffer(False)
+    mutated.transitions[0].raw_action = mutated.transitions[0].raw_action.copy()
+    mutated.transitions[0].raw_action[0] += 0.01
+
+    assert decision_payload_fingerprint(baseline) != decision_payload_fingerprint(mutated)
