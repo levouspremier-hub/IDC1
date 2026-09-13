@@ -12,6 +12,23 @@ from idc_model.task_forecast import (
 )
 
 
+def decompose_supply(base_demand_kW: float, total_demand_kW: float, budget_kW: float) -> dict:
+    """独立供应分解（M3.7c）：基础负载优先供给，剩余预算给任务，两断供独立计算。"""
+    task_incremental = max(total_demand_kW - base_demand_kW, 0.0)
+    base_served = min(base_demand_kW, budget_kW)
+    task_budget = max(budget_kW - base_served, 0.0)
+    task_served = min(task_incremental, task_budget)
+    return {
+        "task_incremental_demand_kW": task_incremental,
+        "base_served_kW": base_served,
+        "task_budget_kW": task_budget,
+        "task_served_kW": task_served,
+        "unserved_base_load_kW": base_demand_kW - base_served,
+        "unserved_task_power_kW": task_incremental - task_served,
+        "idc_served_kW": base_served + task_served,
+    }
+
+
 class IDCPriceEnv20D(gym.Env):
     """
     面向 PPO 的智算中心分时电价任务调度环境：ultimate 前瞻状态版。
@@ -705,12 +722,15 @@ class IDCPriceEnv20D(gym.Env):
         COP_t = float(COP_arr[0])
         P_cooling_t = float(P_cooling_arr[0])
         P_IDC_demand_kW = P_IDC_t / 1000.0
-        P_IDC_served_kW = min(P_IDC_demand_kW, P_idc_budget_kW)
+        P_base_demand_kW = P_base_kW
+        dec = decompose_supply(P_base_demand_kW, P_IDC_demand_kW, P_idc_budget_kW)
+        P_task_incremental_demand_kW = dec["task_incremental_demand_kW"]
+        P_base_served_kW = dec["base_served_kW"]
+        P_task_served_kW = dec["task_served_kW"]
+        unserved_base_load_kW = dec["unserved_base_load_kW"]
+        unserved_task_power_kW = dec["unserved_task_power_kW"]
+        P_IDC_served_kW = dec["idc_served_kW"]
         P_IDC_kW = P_IDC_served_kW  # 旧字段，等价于 served
-        unserved_base_load_kW = max(P_IDC_demand_kW - P_idc_budget_kW, 0.0)
-        unserved_task_power_kW = max(
-            P_IDC_demand_kW - P_IDC_served_kW - unserved_base_load_kW, 0.0
-        )
 
         # 9. 应用 no-export 放电限制（放电 <= IDC），再算可再生与购电
         bess_discharge_power_kW = min(bess_discharge_power_kW, P_IDC_kW)
@@ -1052,6 +1072,10 @@ class IDCPriceEnv20D(gym.Env):
             "P_IDC_kW": float(P_IDC_kW),  # 等价于 P_IDC_served_kW（旧字段）
             "P_IDC_demand_kW": float(P_IDC_demand_kW),
             "P_IDC_served_kW": float(P_IDC_served_kW),
+            "P_base_demand_kW": float(P_base_demand_kW),
+            "P_task_incremental_demand_kW": float(P_task_incremental_demand_kW),
+            "P_base_served_kW": float(P_base_served_kW),
+            "P_task_served_kW": float(P_task_served_kW),
             "P_local_demand_kW": float(P_local_demand_kW),
             "P_local_net_before_pv_kW": float(P_local_net_before_pv_kW),
             "P_bus_net_kW": float(P_bus_net_kW),
