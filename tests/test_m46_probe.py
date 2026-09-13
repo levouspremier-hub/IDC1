@@ -116,16 +116,24 @@ def test_probe_output_has_no_legacy_fields():
         assert key in report, key
 
 
-def test_probe_throughput_is_labelled_as_tracemalloc_instrumented():
-    """吞吐与步耗时在 tracemalloc 下测得，必须显式标注口径，不得冒充真实训练吞吐。"""
+def test_probe_timing_and_memory_are_separated():
+    """M4.6a：计时区间不含 tracemalloc；内存采样独立，且字段分区标注。"""
     out = subprocess.run(
         ["uv", "run", "python", "-m", "planning.probe"],
         capture_output=True, text=True, check=True,
     ).stdout
     report = json.loads(out)
-    assert report["tracemalloc_instrumented"] is True
-    assert "rollout_steps_per_s_under_tracemalloc" in report
-    assert "throughput_measurement_note" in report
-    # 不得再以未标注的名字输出吞吐/步耗时
-    assert "rollout_steps_per_s" not in report
-    assert "env_step_mean_s" not in report
+
+    timing = report["timing_without_tracemalloc"]
+    memory = report["memory_with_tracemalloc"]
+    assert timing["tracemalloc_active"] is False   # 计时区间绝不启用 tracemalloc
+    assert memory["tracemalloc_active"] is True
+    assert "peak_memory_bytes" in memory
+    for key in ("corrector_solve_mean_s", "stage_a_solve_mean_s",
+                "stage_b_solve_mean_s", "corrector_total_mean_s",
+                "rollout_steps_per_s", "corrector_timeout_steps"):
+        assert key in timing, key
+    # 不得在顶层以未标注的名字输出计时/吞吐（避免被误读为真实训练吞吐）
+    for key in ("corrector_solve_mean_s", "rollout_steps_per_s",
+                "env_step_mean_s", "tracemalloc_instrumented"):
+        assert key not in report, key
