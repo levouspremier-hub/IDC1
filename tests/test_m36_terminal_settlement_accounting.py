@@ -52,15 +52,17 @@ def test_remaining_work_settlement():
     assert info["terminal_leftover_work"] > 0
     assert info["terminal_service_violation"] == 1
     assert info["total_objective_cost"] == pytest.approx(
-        info["total_cost"] + info["total_bess_degradation_cost"] + info["terminal_settlement_penalty"],
+        info["total_cost"] + info["total_bess_degradation_cost"]
+        + info["terminal_settlement_penalty"],
         abs=1e-6,
     )
 
 
 def test_deadline_miss_settlement():
     env = _env(horizon=6, access_limit_kw=1000.0)
-    env.tasks = [_task(1, workload=10.0, duration=1, deadline=1)]  # latest_finish=1
-    env.Q_t = 10.0
+    # max_rate=1，latest_finish=1，无法按时完成
+    env.tasks = [_task(1, workload=100.0, duration=100, deadline=1)]
+    env.Q_t = 100.0
     info = _run_to_terminal(env, _full_compute)
     assert info["terminal_deadline_miss_count"] > 0
 
@@ -80,14 +82,14 @@ def test_settlement_accumulates_once():
     env.tasks = [_task(1, workload=1000.0, duration=100, deadline=100)]
     env.Q_t = 1000.0
     a = _full_compute(env)
-    last_info = None
-    for _ in range(env.horizon):
-        _, _, term, _, last_info = env.step(a)
-        if term:
-            break
-    penalty = last_info["terminal_settlement_penalty"]
-    env.step(a)  # 终止后额外 step，结算不得重复累计
-    assert env.total_objective_cost == pytest.approx(env.total_cost + env.total_bess_degradation_cost + penalty, abs=1e-6)
+    info = _run_to_terminal(env, lambda e: a)
+    penalty = info["terminal_settlement_penalty"]
+    before = env.total_objective_cost
+    env._apply_terminal_settlement()  # 幂等：不改变累计
+    assert env.total_objective_cost == before
+    assert env.total_objective_cost == pytest.approx(
+        env.total_cost + env.total_bess_degradation_cost + penalty, abs=1e-6
+    )
 
 
 def test_state_dict_resume_settlement_identical():
