@@ -670,6 +670,8 @@ class IDCPriceEnv20D(gym.Env):
         (
             completed_work,
             completed_work_by_group,
+            w_unconstrained,
+            w_feasible,
             newly_finished_count,
             newly_finished_priority_sum,
             new_deadline_miss_count,
@@ -678,12 +680,13 @@ class IDCPriceEnv20D(gym.Env):
             non_interruptible_interruption_this_step,
         ) = self._execute_tasks_action_guided(
             planned_capacity_vec=scaled_capacity_vec,
+            unconstrained_capacity_vec=planned_capacity_vec,
             current_time=t,
             urgent_preference=urgent_preference,
             continuity_preference=continuity_preference,
         )
 
-        business_gap_work = max(planned_capacity - completed_work, 0.0)
+        access_curtailment_work = max(w_unconstrained - w_feasible, 0.0)
         unused_capacity = max(planned_capacity - completed_work, 0.0)
 
         # 7. 每组实际负载由完成工作/组能力导出（完整基础负载 + 任务负载）
@@ -702,8 +705,12 @@ class IDCPriceEnv20D(gym.Env):
         COP_t = float(COP_arr[0])
         P_cooling_t = float(P_cooling_arr[0])
         P_IDC_demand_kW = P_IDC_t / 1000.0
-        P_IDC_kW = min(P_IDC_demand_kW, P_idc_budget_kW)
+        P_IDC_served_kW = min(P_IDC_demand_kW, P_idc_budget_kW)
+        P_IDC_kW = P_IDC_served_kW  # 旧字段，等价于 served
         unserved_base_load_kW = max(P_IDC_demand_kW - P_idc_budget_kW, 0.0)
+        unserved_task_power_kW = max(
+            P_IDC_demand_kW - P_IDC_served_kW - unserved_base_load_kW, 0.0
+        )
 
         # 9. 应用 no-export 放电限制（放电 <= IDC），再算可再生与购电
         bess_discharge_power_kW = min(bess_discharge_power_kW, P_IDC_kW)
@@ -1042,14 +1049,17 @@ class IDCPriceEnv20D(gym.Env):
             "reward_total": float(reward),
 
             "P_IDC": P_IDC_t,
-            "P_IDC_kW": float(P_IDC_kW),
+            "P_IDC_kW": float(P_IDC_kW),  # 等价于 P_IDC_served_kW（旧字段）
+            "P_IDC_demand_kW": float(P_IDC_demand_kW),
+            "P_IDC_served_kW": float(P_IDC_served_kW),
             "P_local_demand_kW": float(P_local_demand_kW),
             "P_local_net_before_pv_kW": float(P_local_net_before_pv_kW),
             "P_bus_net_kW": float(P_bus_net_kW),
             "P_grid_kW": float(P_grid_kW),
             "access_limit_kw": float(self.access_limit_kw),
             "unserved_base_load_kW": float(unserved_base_load_kW),
-            "business_gap_work": float(business_gap_work),
+            "unserved_task_power_kW": float(unserved_task_power_kW),
+            "access_curtailment_work": float(access_curtailment_work),
             "grid_power_kW": float(grid_power_kW),
             "grid_power_limit_kW": float(self.grid_power_limit_kW),
             **self._server_group_info(),
@@ -1205,6 +1215,7 @@ class IDCPriceEnv20D(gym.Env):
     def _execute_tasks_action_guided(
         self,
         planned_capacity_vec: np.ndarray,
+        unconstrained_capacity_vec: np.ndarray,
         current_time: int,
         urgent_preference: float,
         continuity_preference: float,
@@ -1242,9 +1253,14 @@ class IDCPriceEnv20D(gym.Env):
             }
             for task in active_tasks
         ]
-        allocation = allocate_tasks(
+        feasible_allocation = allocate_tasks(
             summaries, [float(c) for c in np.asarray(planned_capacity_vec, dtype=np.float64)]
         )
+        unconstrained_allocation = allocate_tasks(
+            summaries, [float(c) for c in np.asarray(unconstrained_capacity_vec, dtype=np.float64)]
+        )
+        w_unconstrained = float(sum(sum(r) for r in unconstrained_allocation.matrix))
+        w_feasible = float(sum(sum(r) for r in feasible_allocation.matrix))
 
         completed_by_group = np.zeros(self.model.N, dtype=np.float64)
         completed_this_hour = 0.0
@@ -1254,7 +1270,7 @@ class IDCPriceEnv20D(gym.Env):
         executed_task_ids = set()
 
         for idx, task in enumerate(active_tasks):
-            row = allocation.matrix[idx]
+            row = feasible_allocation.matrix[idx]
             task_work = float(sum(row))
             for g in range(self.model.N):
                 completed_by_group[g] += row[g]
@@ -1289,6 +1305,8 @@ class IDCPriceEnv20D(gym.Env):
         return (
             float(completed_this_hour),
             completed_by_group,
+            float(w_unconstrained),
+            float(w_feasible),
             int(newly_finished_count),
             float(newly_finished_priority_sum),
             int(new_deadline_miss_count),
