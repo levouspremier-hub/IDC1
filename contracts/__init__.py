@@ -6,7 +6,7 @@ M3.10c：`CONTRACT_VERSION_ID` 是本仓库**唯一**的契约版本源。
 必须先于 `contracts.models` 导入定义，以避免循环导入。
 """
 
-CONTRACT_VERSION_ID = "contract-v5"
+CONTRACT_VERSION_ID = "contract-v6"
 
 from contracts.models import (  # noqa: E402
     DispatchProposal,

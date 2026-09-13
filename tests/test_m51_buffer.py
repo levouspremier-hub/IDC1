@@ -1,24 +1,31 @@
-"""M5.1 测试：buffer 同存 raw/exec，21 维，序列化往返。"""
+"""M5.1 测试（M5.1a 迁移）：buffer 同存 raw/exec、21 维、严格序列化往返。
+
+M5.1a 起 `Transition` 新增 next_observation / terminated / truncated / electricity_cost_sgd，
+契约版本升至 contract-v6；本文件只保留与新契约一致的断言，
+严格契约细节由 `tests/test_m51a_rollout_contract.py` 覆盖。
+"""
 
 import numpy as np
 import pytest
 
-from safe_rl_v2.buffer import RolloutBuffer, Transition
+from safe_rl_v2.buffer import ACTION_DIM, RolloutBuffer, Transition
 
-
-def _obs() -> np.ndarray:
-    return np.zeros(280, dtype=np.float32)
+OBS_DIM = 280
 
 
 def _transition(raw: np.ndarray, exec_a: np.ndarray) -> Transition:
     return Transition(
-        observation=_obs(),
+        observation=np.zeros(OBS_DIM, dtype=np.float32),
+        next_observation=np.ones(OBS_DIM, dtype=np.float32),
         raw_action=raw,
-        raw_log_prob=-1.5,
-        reward=0.1,
-        business_cost=0.5,
-        carbon_cost=0.3,
+        old_raw_log_prob=-1.5,
         exec_action=exec_a,
+        reward=0.1,
+        business_cost=3.0,  # 违规计数
+        carbon_cost=12.5,  # kgCO2e
+        electricity_cost_sgd=120.0,  # SGD
+        terminated=False,
+        truncated=False,
         correction_info={"reason": "access_limit"},
     )
 
@@ -30,17 +37,15 @@ def test_buffer_stores_raw_exec_separately():
     buf.add(_transition(raw, exec_a))
     t = buf.transitions[0]
     assert not np.allclose(t.raw_action, t.exec_action)  # exec 不覆盖 raw
-    assert t.raw_action.shape == (21,)
-    assert t.exec_action.shape == (21,)
-    assert t.contract_version == "contract-v5"
+    assert t.raw_action.shape == (ACTION_DIM,)
+    assert t.exec_action.shape == (ACTION_DIM,)
+    assert t.contract_version == "contract-v6"
 
 
 def test_buffer_rejects_wrong_dim():
     buf = RolloutBuffer()
-    raw23 = np.zeros(23)
-    exec21 = np.zeros(21)
     with pytest.raises(ValueError):
-        buf.add(_transition(raw23, exec21))
+        buf.add(_transition(np.zeros(23), np.zeros(21)))
 
 
 def test_buffer_serialization_roundtrip():
@@ -53,4 +58,4 @@ def test_buffer_serialization_roundtrip():
     t = restored.transitions[0]
     assert np.allclose(t.raw_action, raw)
     assert np.allclose(t.exec_action, exec_a)
-    assert t.raw_log_prob == -1.5
+    assert t.old_raw_log_prob == -1.5

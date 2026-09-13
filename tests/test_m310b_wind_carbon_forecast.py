@@ -133,7 +133,7 @@ def test_out_of_window_wind_carbon_change_ignored(cutoff):
 # --- 4. 契约版本与旧 schema 拒绝 ---
 
 def test_contract_version_bumped():
-    assert CURRENT_CONTRACT_VERSION == "contract-v5"
+    assert CURRENT_CONTRACT_VERSION == "contract-v6"
 
 
 def test_old_and_unversioned_checkpoints_rejected(tmp_path):
@@ -205,4 +205,4 @@ def test_scenario_contract_schema_version_bumped():
         carbon_forecast=[0.5, 0.6],
         source_hashes={"a": "b"},
     )
-    assert s.schema_version == "contract-v5"
+    assert s.schema_version == "contract-v6"

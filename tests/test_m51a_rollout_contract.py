@@ -4,7 +4,9 @@
 """
 
 import dataclasses
+import inspect
 import json
+from typing import Any
 
 import numpy as np
 import pytest
@@ -45,8 +47,8 @@ def _raw(v: float = 0.5) -> np.ndarray:
     return a
 
 
-def _transition(**over) -> Transition:
-    kwargs = dict(
+def _transition(**over: Any) -> Transition:
+    kwargs: dict[str, Any] = dict(
         observation=_obs(1),
         next_observation=_obs(2),
         raw_action=_raw(0.5),
@@ -105,9 +107,8 @@ def test_execution_action_carries_no_log_prob_field():
     for obj in (buffer_mod, Transition, RolloutBuffer, buf, buf.transitions[0]):
         assert _exec_prob_like(dir(obj)) == []
 
-    # 4) 构造路径不得接受该字段
-    with pytest.raises(TypeError):
-        Transition(**{**{f.name: None for f in dataclasses.fields(Transition)}}, exec_log_prob=0.0)
+    # 4) 构造签名不得声明该字段（静态可查，不依赖运行期报错文本）
+    assert _exec_prob_like(inspect.signature(Transition).parameters) == []
 
 
 # --- 2. 防御性复制 ---
