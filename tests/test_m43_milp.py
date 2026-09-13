@@ -18,6 +18,7 @@ def _forecast() -> ScenarioBundle:
         pv_forecast=[0.0] * 24,
         wind_forecast=[0.0] * 24,
         temperature_forecast=[28.0] * 24,
+        carbon_forecast=[0.0] * 24,
         source_hashes={"x": "y"},
     )
 

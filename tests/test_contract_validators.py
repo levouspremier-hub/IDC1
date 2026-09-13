@@ -29,6 +29,7 @@ def _scenario(**overrides) -> ScenarioBundle:
         pv_forecast=[0.0] * 6,
         wind_forecast=[0.0] * 6,
         temperature_forecast=[28.0] * 6,
+        carbon_forecast=[0.0] * 6,
         source_hashes={"a": "x"},
     )
     kwargs.update(overrides)

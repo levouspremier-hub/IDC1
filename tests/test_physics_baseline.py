@@ -17,8 +17,9 @@ def _neutral(env: IDCPriceEnv20D) -> np.ndarray:
     return np.full(env.action_dim, 0.5, dtype=np.float32)
 
 
-def test_baseline_obs_dim_is_280(env):
-    assert env.obs_dim == 280
+def test_obs_dim_after_wind_carbon_features(env):
+    # M3.10b：预测特征组 6 → 8（新增 wind/carbon），obs_dim 280 → 328
+    assert env.obs_dim == 328
 
 
 def test_baseline_num_groups_is_20(env):

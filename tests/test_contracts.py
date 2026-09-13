@@ -25,6 +25,7 @@ def _scenario(source_hashes: dict[str, str] | None = None) -> ScenarioBundle:
         pv_forecast=[0.0] * 6,
         wind_forecast=[0.0] * 6,
         temperature_forecast=[28.0] * 6,
+        carbon_forecast=[0.0] * 6,
         source_hashes=source_hashes or {"a": "x", "b": "y"},
     )
 
