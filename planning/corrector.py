@@ -98,9 +98,21 @@ def _zero_action(
     )
 
 
-def correct(snapshot: SystemSnapshot, proposal: DispatchProposal) -> Correction:
-    """把 raw proposal 投影到 H 步 MIP 可行域，并返回第 0 步 exec action。"""
+def correct(
+    snapshot: SystemSnapshot,
+    proposal: DispatchProposal,
+    *,
+    time_limit_s: float,
+) -> Correction:
+    """把 raw proposal 投影到 H 步 MIP 可行域，并返回第 0 步 exec action。
+
+    `time_limit_s` 是**本次调用的全局预算**（阶段 A/B 共享同一 deadline），
+    必须为显式正数——不得以隐式默认值掩盖运行时预算决策。
+    """
     import time
+
+    if not (isinstance(time_limit_s, (int, float)) and time_limit_s > 0.0):
+        raise ValueError(f"time_limit_s 必须为显式正数预算，实际 {time_limit_s!r}")
 
     n_group = len(snapshot.group_work_capacity)
     if len(proposal.compute_actions) != n_group:
@@ -119,7 +131,9 @@ def correct(snapshot: SystemSnapshot, proposal: DispatchProposal) -> Correction:
         )
 
     t0 = time.perf_counter()
-    res = solve_time_indexed_mip_raw_projection(snapshot, proposal)
+    res = solve_time_indexed_mip_raw_projection(
+        snapshot, proposal, time_limit_s=float(time_limit_s)
+    )
     solve_time = time.perf_counter() - t0
 
     failure = _FAILURE_MAP.get(res.failure_class, FailureClass.SOLVER_FAILURE)

@@ -19,7 +19,11 @@ from safe_rl.corrector_wrapper import CorrectorWrapper
 
 
 def main() -> None:
-    env = CorrectorWrapper(IDCPriceEnv20D())
+    # 测量参数（**不是**研究结论或生产默认值）：仅用于本次探针的单步时间预算
+    probe_corrector_time_limit_s = 5.0
+    env = CorrectorWrapper(
+        IDCPriceEnv20D(), corrector_time_limit_s=probe_corrector_time_limit_s
+    )
     env.reset(seed=0)
     raw: Any = env.env  # 未包装环境
     action = np.concatenate([np.full(20, 0.5, dtype=np.float32), np.array([0.0], dtype=np.float32)])
@@ -27,11 +31,22 @@ def main() -> None:
     tracemalloc.start()
     step_times: list[float] = []
     solve_times: list[float] = []
+    stage_a_times: list[float] = []
+    stage_b_times: list[float] = []
+    total_times: list[float] = []
+    reasons: list[str] = []
     for _ in range(raw.horizon):
         t0 = time.perf_counter()
         _, _, terminated, truncated, info = env.step(action)
         step_times.append(time.perf_counter() - t0)
         solve_times.append(float(info.get("correction_solve_time_s", 0.0)))
+        stage_a_times.append(float(info.get("stage_a_solve_time_s", 0.0)))
+        stage_b_times.append(float(info.get("stage_b_solve_time_s", 0.0)))
+        total_times.append(
+            float(info.get("stage_a_solve_time_s", 0.0))
+            + float(info.get("stage_b_solve_time_s", 0.0))
+        )
+        reasons.append(str(info.get("correction_reason", "")))
         if terminated or truncated:
             break
     _, peak_memory = tracemalloc.get_traced_memory()
@@ -83,8 +98,14 @@ def main() -> None:
         "mip_backend": mip_result.backend,
         "env_step_mean_s": float(np.mean(step_times)),
         "env_step_p95_s": float(np.percentile(step_times, 95)),
+        "probe_corrector_time_limit_s": probe_corrector_time_limit_s,
+        "probe_corrector_time_limit_is_measurement_parameter": True,
         "corrector_solve_mean_s": float(np.mean(solve_times)),
         "corrector_solve_p95_s": float(np.percentile(solve_times, 95)),
+        "stage_a_solve_mean_s": float(np.mean(stage_a_times)),
+        "stage_b_solve_mean_s": float(np.mean(stage_b_times)),
+        "corrector_total_mean_s": float(np.mean(total_times)),
+        "corrector_timeout_steps": int(sum(1 for r in reasons if r == "timeout")),
         "rollout_steps_per_s": float(len(step_times) / max(sum(step_times), 1e-9)),
         "peak_memory_bytes": int(peak_memory),
     }

@@ -18,6 +18,18 @@ from planning.snapshot_adapter import build_snapshot
 
 
 class CorrectorWrapper(gym.Wrapper):
+    def __init__(self, env, *, corrector_time_limit_s: float):
+        """`corrector_time_limit_s` 必须显式给出（单次投影调用的全局预算，秒）。
+
+        不提供隐式默认值：运行时预算决策必须由调用方显式作出。
+        """
+        super().__init__(env)
+        if not (isinstance(corrector_time_limit_s, (int, float)) and corrector_time_limit_s > 0.0):
+            raise ValueError(
+                f"corrector_time_limit_s 必须为显式正数，实际 {corrector_time_limit_s!r}"
+            )
+        self.corrector_time_limit_s = float(corrector_time_limit_s)
+
     def step(self, action):
         raw_action = np.asarray(action, dtype=np.float32).reshape(-1).copy()
         n_group = self.env.model.N
@@ -27,7 +39,9 @@ class CorrectorWrapper(gym.Wrapper):
         )
 
         snapshot = build_snapshot(self.env)
-        correction = correct(snapshot, proposal)
+        correction = correct(
+            snapshot, proposal, time_limit_s=self.corrector_time_limit_s
+        )
 
         exec_action = np.concatenate(
             [
