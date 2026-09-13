@@ -1407,19 +1407,32 @@ class IDCPriceEnv20D(gym.Env):
 
     def _update_deadline_miss(self, current_time: int) -> int:
         """
-        记录新发生的 deadline miss。
+        记录新发生的 deadline miss（M3.5a：与分类器边界严格一致）。
 
-        这里不会把任务直接标记为 failed，避免过早引入失败终止逻辑；
+        逾期判据（与 `_compute_task_classification` 相同）：
+        - 未完成任务：`current_time + 1 > latest_finish_time`；
+        - 已完成任务：`finish_time > latest_finish_time`（逾期完成）。
+
+        本方法在任务执行**之后**调用，故必须显式覆盖「在期限跨越那一步正好完成」的任务，
+        否则会漏记（该任务此刻已为 finished）。这里不会把任务标记为 failed；
         当前阶段只在 reward 和 info 中记录超时压力。
         """
         new_count = 0
         for task in self.tasks:
-            if task.status in ["not_arrived", "finished", "failed"]:
+            if task.status in ["not_arrived", "failed"]:
                 continue
-            if current_time + 1 > task.latest_finish_time:
-                if task.task_id not in self.deadline_miss_task_ids:
-                    self.deadline_miss_task_ids.add(task.task_id)
-                    new_count += 1
+            if task.task_id in self.deadline_miss_task_ids:
+                continue
+            if task.status == "finished":
+                finish_time = (
+                    int(task.finish_time) if task.finish_time is not None else int(current_time + 1)
+                )
+                is_miss = finish_time > int(task.latest_finish_time)
+            else:
+                is_miss = current_time + 1 > task.latest_finish_time
+            if is_miss:
+                self.deadline_miss_task_ids.add(task.task_id)
+                new_count += 1
         return new_count
 
     def _loads_from_group_completion(self, completed_work_by_group: np.ndarray) -> np.ndarray:
