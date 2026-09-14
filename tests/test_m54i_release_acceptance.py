@@ -161,14 +161,23 @@ def test_the_override_batch_is_recorded_and_excluded_from_the_release_gate(tmp_p
     """显式 0.05 诊断 run：如实记录、可聚合，但**不**参与生产 release acceptance。"""
     result = run_batch(tmp_path, "m54i_override", "--corrector-time-limit", "0.05")
     run_dir = tmp_path / "m54i_override"
+    # 先确认探针**确实**跑完并落了产物；否则后续 json 解析失败会掩盖真实原因。
+    assert (run_dir / "report.json").exists(), (
+        f"探针未产出 report.json（returncode={result.returncode}）\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
 
     assert report["effective_corrector_time_limit_s"] == pytest.approx(0.05)
     assert report["corrector_time_limit_source"] == "explicit_override"
     assert report["release_gate"]["passed"] is False, "override 不得通过生产门禁"
-    assert report["release_gate"]["observations"] == []
+    assert report["release_gate"]["observations"] == [], (
+        f"override 观测混进了生产默认证据：{report['release_gate']['observations']}"
+    )
     assert report["release_gate"]["override_observations"], "override 观测必须被如实登记"
-    assert result.returncode != 0
+    assert result.returncode != 0, (
+        f"override run 不得退出 0\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
 
     aggregated = probe.aggregate_release_batches([run_dir])
     assert aggregated["passed"] is False
