@@ -32,6 +32,7 @@ import numpy as np
 import pandas as pd
 
 from envs.idc_price_env import IDCPriceEnv20D
+from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S, resolve_corrector_budget
 from runs.writer import write_run
 from safe_rl.corrector_wrapper import CorrectorWrapper
 from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, UNIT_METADATA
@@ -44,7 +45,8 @@ ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
 
 DEFAULT_SEED = 0
 DEFAULT_STEPS = 3
-DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
+# corrector 生产默认预算**不在本文件定义**：唯一来源是
+# `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`（M5.4i）。
 ACCESS_LIMIT_TOL_KW = 1e-6
 
 # 充放电互斥 / 能量平衡要求存在且有限的具名字段
@@ -195,21 +197,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     parser.add_argument(
-        "--corrector-time-limit-s", type=float, default=DEFAULT_CORRECTOR_TIME_LIMIT_S
+        "--corrector-time-limit-s", type=float, default=None,
+        help="显式 override；省略则使用生产默认"
+             " planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S",
     )
     args = parser.parse_args(argv)
 
     if args.steps < 1:
         parser.error("--steps 必须 >= 1")
-    if not (args.corrector_time_limit_s > 0.0):
+    if args.corrector_time_limit_s is not None and not (args.corrector_time_limit_s > 0.0):
         parser.error("--corrector-time-limit-s 必须为正数")
+
+    effective_budget, budget_source = resolve_corrector_budget(
+        args.corrector_time_limit_s
+    )
 
     base_dir = Path(args.base_dir)
     run_id = args.run_id or _unique_run_id(base_dir, args.seed)
-    command = " ".join(
-        ["uv run python scripts/smoke_main_chain.py", f"--seed {args.seed}",
-         f"--steps {args.steps}", f"--run-id {run_id}"]
-    )
+    # 命令账本：未传预算时**不得**伪造显式预算参数；传了就必须记录（M5.4i）。
+    _argv = ["uv run python scripts/smoke_main_chain.py", f"--seed {args.seed}",
+             f"--steps {args.steps}", f"--base-dir {args.base_dir}", f"--run-id {run_id}"]
+    if args.corrector_time_limit_s is not None:
+        _argv += [f"--corrector-time-limit-s {args.corrector_time_limit_s}"]
+    command = " ".join(_argv)
 
     provenance = data_provenance()
     config = {
@@ -221,7 +231,10 @@ def main(argv: list[str] | None = None) -> int:
         "scenario_kwargs": dict(SCENARIO_KWARGS),
         "env_seed_kwargs": dict(ENV_SEED_KWARGS),
         "data_provenance": provenance,
-        "corrector_time_limit_s": float(args.corrector_time_limit_s),
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": effective_budget,
+        "corrector_time_limit_source": budget_source,
+        "corrector_time_limit_s": effective_budget,
         "action_dim": ACTION_DIM,
         "action_bounds": {"compute": [0.0, 1.0], "storage": [-1.0, 1.0]},
         "raw_action_source": "seeded numpy default_rng（健康检查用，非策略采样）",
@@ -230,7 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     env = build_env(args.seed)
-    wrapper = CorrectorWrapper(env, corrector_time_limit_s=float(args.corrector_time_limit_s))
+    wrapper = CorrectorWrapper(env, corrector_time_limit_s=float(effective_budget))
     rng = np.random.default_rng(args.seed)
     wrapper.reset(seed=args.seed)
 
@@ -291,6 +304,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "status": status,
         "seed": args.seed,
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": effective_budget,
+        "corrector_time_limit_source": budget_source,
         "steps_executed": len(rows),
         "contract_version": CONTRACT_VERSION,
         "checks": checks,

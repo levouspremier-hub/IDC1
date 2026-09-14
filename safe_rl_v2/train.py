@@ -47,6 +47,7 @@ import torch
 
 from contracts import CONTRACT_VERSION_ID
 from envs.idc_price_env import IDCPriceEnv20D
+from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S, resolve_corrector_budget
 from runs.writer import write_run
 from safe_rl_v2.buffer import ACTION_DIM, RolloutBuffer
 from safe_rl_v2.lagrangian import Lagrangian, validate_constraint_signals
@@ -296,7 +297,8 @@ def dry_run_update(
 
 DEFAULT_STEPS = 8
 DEFAULT_SEED = 0
-DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
+# corrector 生产默认预算**不在本文件定义**：唯一来源是
+# `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`（M5.4i）。
 # 环境三类种子必须同时显式给定：任一为 None 时 env 使用 default_rng(None) 熵源，
 # 跨进程不可复现。**不允许**留空。
 DEFAULT_ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
@@ -428,15 +430,24 @@ def _require_frozen_real_scenario(args) -> None:
         ) from exc
 
 
+def _budget_resolution(args) -> tuple[float | None, str]:
+    """解析本次调用的 `(有效预算, 来源)`；来源由**是否显式给出**决定。
+
+    四个入口共用 `planning.corrector.resolve_corrector_budget`，避免默认值再次分叉。
+    """
+    return resolve_corrector_budget(
+        args.corrector_time_limit_s, enabled=args.corrector == "on"
+    )
+
+
 def _run_synthetic_dry_run(args, run_id: str, env_seed_kwargs: dict[str, int]) -> dict:
     """跑一次合成短 dry rollout，返回 report。只调用既有 dry_run_update。"""
     from safe_rl_v2.lagrangian import UNIT_KG_CO2E, UNIT_VIOLATION_TASK_STEPS, ConstraintSpec
 
     corrector_on = args.corrector == "on"
-    if corrector_on and args.corrector_time_limit_s is None:
-        raise TrainEntryError(
-            "--corrector on 时必须显式给出 --corrector-time-limit-s（禁止隐式默认值）"
-        )
+    # M5.4i：未显式给出预算时解析为**生产默认**（不再拒绝）；
+    # 显式给出则原样使用，绝不静默替换。
+    effective_budget, _ = _budget_resolution(args)
 
     env = IDCPriceEnv20D(horizon=args.horizon, **env_seed_kwargs)
     # 权重初始化借用全局 RNG，但用 fork_rng 还原：调用方的全局 RNG 状态不受影响。
@@ -462,7 +473,7 @@ def _run_synthetic_dry_run(args, run_id: str, env_seed_kwargs: dict[str, int]) -
         env, policy, lagrangian, optimizer,
         steps=args.steps, seed=args.seed,
         corrector_on=corrector_on,
-        corrector_time_limit_s=args.corrector_time_limit_s if corrector_on else None,
+        corrector_time_limit_s=effective_budget,
         generator=generator,
     )
 
@@ -482,9 +493,10 @@ def _config_for(args, run_id: str, env_seed_kwargs: dict[str, int], scenario_typ
         "policy_seed": int(args.seed),
         "policy_rng": "explicit torch.Generator（不使用 torch.manual_seed 采样）",
         "corrector_on": args.corrector == "on",
-        "corrector_time_limit_s": (
-            float(args.corrector_time_limit_s) if args.corrector == "on" else None
-        ),
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": _budget_resolution(args)[0],
+        "corrector_time_limit_source": _budget_resolution(args)[1],
+        "corrector_time_limit_s": _budget_resolution(args)[0],
         "steps": int(args.steps),
         "horizon": int(args.horizon),
         "gamma": GAMMA,
@@ -494,7 +506,8 @@ def _config_for(args, run_id: str, env_seed_kwargs: dict[str, int], scenario_typ
     }
 
 
-def _report_for(result: dict, scenario_type: str) -> dict:
+def _report_for(result: dict, scenario_type: str, args) -> dict:
+    effective, source = _budget_resolution(args)
     return {
         "entry": "python -m safe_rl_v2.train",
         "synthetic": scenario_type == SCENARIO_TYPE_SYNTHETIC,
@@ -504,6 +517,9 @@ def _report_for(result: dict, scenario_type: str) -> dict:
         "scenario_type": scenario_type,
         "steps_collected": result["steps_collected"],
         "corrector_on": result["corrector_on"],
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": effective,
+        "corrector_time_limit_source": source,
         "multipliers_pre_update": result["multipliers_pre_update"],
         "multipliers_post_update": result["multipliers_post_update"],
         "constraint_means": result["constraint_means"],
@@ -616,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
         scenario_type = SCENARIO_TYPE_SYNTHETIC
         result = _run_synthetic_dry_run(args, run_id, env_seed_kwargs)
         config = _config_for(args, run_id, env_seed_kwargs, scenario_type)
-        report = _report_for(result, scenario_type)
+        report = _report_for(result, scenario_type, args)
         metrics = _metrics_for(result)
     except Exception as exc:
         print(f"训练入口失败：{type(exc).__name__}: {exc}", file=sys.stderr)

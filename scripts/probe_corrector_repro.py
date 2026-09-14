@@ -40,6 +40,13 @@ import pandas as pd
 import torch
 
 from envs.idc_price_env import IDCPriceEnv20D
+from planning.corrector import (
+    CORRECTOR_TIME_LIMIT_SOURCE_DISABLED,
+    CORRECTOR_TIME_LIMIT_SOURCE_EXPLICIT_OVERRIDE,
+    CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT,
+    PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+    resolve_corrector_budget,
+)
 from runs.writer import write_run
 from safe_rl_v2.buffer import RolloutBuffer
 from safe_rl_v2.policy import SafePPOPolicy
@@ -55,12 +62,14 @@ STEPS = 8
 DEFAULT_RUNS = 3
 
 # 每模式的 corrector 预算（秒）；`off` 不用 corrector。
-# `on` 用 0.05 s：明确、固定，且**不是**恒超时（恒超时会退化为确定性的边界动作，
-# 那会把「不稳定」掩盖成「稳定」，反而失去测量意义）。
-MODE_BUDGETS: dict[str, float | None] = {"off": None, "on": 0.05}
+# `on` 的预算是**本 run 的有效预算**（默认即生产默认），由 `main` 解析后传入。
+# 预算**不得**小到恒超时：恒超时会退化为确定性的边界动作，把「不稳定」掩盖成
+# 「稳定」，反而失去测量意义。
+MODE_BUDGETS: dict[str, float | None] = {"off": None, "on": PRODUCTION_CORRECTOR_TIME_LIMIT_S}
 
-# M5.4h：显式预算（默认仍是 0.05，**不得**改动默认值）
-DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
+# M5.4i：corrector 生产默认预算的**唯一**来源是
+# `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`（0.25 s）；本文件不再定义。
+# 0.05 s 仍是可用的**显式 override**（诊断值），绝不静默改写。
 # 节点上限：**仅**探针内 runtime wrapper 注入；默认关闭
 DEFAULT_NODE_CAP: int | None = None
 # 测量矩阵默认档位
@@ -68,6 +77,21 @@ DEFAULT_TIME_LIMIT_MATRIX: tuple[float, ...] = (0.05, 0.10, 0.25, 0.50, 2.0)
 # 矩阵要求：每档独立进程数 / 每进程 rollout 步数
 MATRIX_MIN_PROCESSES = 6
 MATRIX_MIN_STEPS = 8
+
+
+def resolve_effective_budget(requested_time_limit_s: float | None) -> tuple[float, str]:
+    """解析 `(有效预算, 来源)`；来源由**是否显式给出**决定，与数值无关。"""
+    effective, source = resolve_corrector_budget(requested_time_limit_s, enabled=True)
+    assert effective is not None  # enabled=True 时必为数值
+    return effective, source
+
+
+def resolve_budget_source(
+    requested_time_limit_s: float | None, *, disabled: bool = False
+) -> str:
+    """只要来源字符串。`disabled=True`（corrector 关闭）时为 `disabled`。"""
+    return resolve_corrector_budget(requested_time_limit_s, enabled=not disabled)[1]
+
 
 # 结论只允许三选一
 ALLOWED_CONCLUSIONS = (
@@ -507,34 +531,54 @@ def evaluate_release_gate(
     *,
     default_budget: float | None = None,
     mode_observations: list[dict] | None = None,
+    override_observations: list[dict] | None = None,
 ) -> dict:
     """**发布门禁**：决定 M5.4 阶段是否放行。
 
     与 `classify`（预算**归因**）是两个概念：归因成立**不能**让本门禁放行。
 
-    `observations` 是**默认预算**的跨进程观测；`mode_observations` 是平台确定性
+    `observations` 是**生产默认预算**的跨进程观测；`mode_observations` 是平台确定性
     观测（corrector 关闭时本应逐位一致）。两者**任一**不一致都必须拦下阶段放行 ——
     本门禁是阶段放行的**唯一**依据。
+
+    **只认生产默认**（M5.4i）：只有 `corrector_time_limit_source ==
+    "production_default"` 的观测才算生产默认证据；显式 override 的观测被挪到
+    `override_observations`，如实记录但**绝不**参与放行判定。
     """
-    budget = DEFAULT_CORRECTOR_TIME_LIMIT_S if default_budget is None else default_budget
-    observations = list(observations or [])
+    budget = PRODUCTION_CORRECTOR_TIME_LIMIT_S if default_budget is None else default_budget
+    submitted = list(observations or [])
     mode_observations = list(mode_observations or [])
+    observations = [
+        o for o in submitted
+        if o.get("corrector_time_limit_source") == CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT
+    ]
+    override_observations = list(override_observations or []) + [
+        o for o in submitted
+        if o.get("corrector_time_limit_source") != CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT
+    ]
     combined = observations + mode_observations
     if not combined:
+        not_measured = (
+            f"本 run 未测量生产默认 {budget}s corrector"
+            if not override_observations
+            else (
+                f"本 run 只测量了显式 override（"
+                f"{[o['source'] for o in override_observations]}），"
+                f"**未**测量生产默认 {budget}s —— override 不得充当生产默认证据"
+            )
+        )
         return {
             "evaluated": False,
             "default_budget_s": budget,
             "observations": [],
             "mode_observations": [],
+            "override_observations": override_observations,
             "blocked": False,
             "all_qualifying": None,
             "passed": False,
             "unstable_sources": [],
             "underpowered_sources": [],
-            "reason": (
-                f"本 run 未测量默认 {budget}s corrector —— 样本量不足，"
-                "**不得**据此放行该阶段（fail closed）"
-            ),
+            "reason": f"{not_measured} —— 样本量不足，**不得**据此放行该阶段（fail closed）",
         }
     unstable_sources = [o["source"] for o in combined if int(o["distinct"]) > 1]
     blocked = bool(unstable_sources)
@@ -576,6 +620,7 @@ def evaluate_release_gate(
         "default_budget_s": budget,
         "observations": observations,
         "mode_observations": mode_observations,
+        "override_observations": override_observations,
         "blocked": blocked,
         "all_qualifying": all_qualifying,
         "passed": passed,
@@ -943,8 +988,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--steps", type=int, default=STEPS)
     parser.add_argument(
-        "--corrector-time-limit", type=float, default=DEFAULT_CORRECTOR_TIME_LIMIT_S,
-        help="corrector 的 wall-clock 预算（秒）；默认 0.05，**不得**由本探针改动默认值",
+        "--corrector-time-limit", type=float, default=None,
+        help="corrector 的 wall-clock 预算（秒）的**显式 override**；省略则使用生产默认"
+             " planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S",
     )
     parser.add_argument(
         "--time-limits", type=float, nargs="+", default=None,
@@ -1014,11 +1060,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"--runs 必须 >= 1，got {args.runs}")
     if args.steps <= 0:
         parser.error(f"--steps 必须为正整数，got {args.steps}")
-    if args.corrector_time_limit <= 0:
+    if args.corrector_time_limit is not None and args.corrector_time_limit <= 0:
         parser.error(f"--corrector-time-limit 必须为正数，got {args.corrector_time_limit}")
     if args.load == "hogs" and args.load_concurrency < 1:
         parser.error("--load hogs 时 --load-concurrency 必须 >= 1")
-    budgets = list(args.time_limits) if args.time_limits else [args.corrector_time_limit]
+    effective_budget, budget_source = resolve_effective_budget(args.corrector_time_limit)
+    # 显式 `--time-limits` 的档位一律是诊断用的 override；不传时默认档即生产默认。
+    matrix_is_explicit = bool(args.time_limits)
+    budgets = list(args.time_limits) if matrix_is_explicit else [effective_budget]
 
     base_dir = Path(args.base_dir)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -1034,8 +1083,9 @@ def main(argv: list[str] | None = None) -> int:
     for mode in args.modes:
         digests: list[str] = []
         for _ in range(args.runs):
+            mode_budget = None if mode == "off" else effective_budget
             entry = run_in_subprocess(
-                mode, steps=args.steps, budget=MODE_BUDGETS[mode], load=load,
+                mode, steps=args.steps, budget=mode_budget, load=load,
             )
             digests.append(entry["digest"])
             provenance.append({**entry, "mode": mode})
@@ -1044,14 +1094,18 @@ def main(argv: list[str] | None = None) -> int:
                 "digest": entry["digest"],
                 "pid": entry["pid"],
                 "steps": entry["steps"],
-                "budget_s": MODE_BUDGETS[mode],
+                "budget_s": mode_budget,
             })
         decisions[mode] = decide(mode, digests)
 
     # --- 矩阵（M5.4h；仅在显式 --time-limits 时执行）---
     matrix: dict[str, dict] = {"budgets": {}}
     stage_rows: list[dict] = []
-    for budget in (budgets if args.time_limits else []):
+    # 默认档也要产出逐阶段审计行（否则 summary.parquet 缺失）；但 `--modes off`
+    # 的 run 不得偷偷跑 corrector-on 子进程 —— 只有显式 `--time-limits` 或
+    # `--modes` 含 `on` 时才展开矩阵。
+    matrix_budgets = budgets if (matrix_is_explicit or "on" in args.modes) else []
+    for budget in matrix_budgets:
         budget_digests: list[str] = []
         for _ in range(args.runs):
             entry = run_in_subprocess(
@@ -1114,18 +1168,27 @@ def main(argv: list[str] | None = None) -> int:
     attribution = classify(matrix) if args.time_limits else None
 
     # --- release_gate（与 attribution **分离**；阶段放行的**唯一**依据）---
+    # 每条观测都带**来源标签**；`evaluate_release_gate` 据此只放行生产默认证据。
     gate_observations: list[dict] = []
     if "on" in decisions:
         gate_observations.append({
             "source": "modes.on", "distinct": decisions["on"]["distinct"],
             "processes": args.runs, "steps": args.steps,
+            "effective_corrector_time_limit_s": effective_budget,
+            "corrector_time_limit_source": budget_source,
         })
-    _key = str(DEFAULT_CORRECTOR_TIME_LIMIT_S)
+    _key = str(PRODUCTION_CORRECTOR_TIME_LIMIT_S)
     if _key in matrix["budgets"]:
         _entry = matrix["budgets"][_key]
         gate_observations.append({
             "source": f"matrix.{_key}", "distinct": _entry["distinct"],
             "processes": _entry["processes"], "steps": _entry["steps"],
+            "effective_corrector_time_limit_s": float(_key),
+            # 显式 `--time-limits` 给出的档位是**诊断 override**，不得充当生产默认证据。
+            "corrector_time_limit_source": (
+                CORRECTOR_TIME_LIMIT_SOURCE_EXPLICIT_OVERRIDE if matrix_is_explicit
+                else budget_source
+            ),
         })
     # 平台确定性：corrector 关闭时本应逐位一致；不一致则整个测量平台不可信，同样不放行。
     mode_observations: list[dict] = []
@@ -1133,6 +1196,8 @@ def main(argv: list[str] | None = None) -> int:
         mode_observations.append({
             "source": "modes.off", "distinct": decisions["off"]["distinct"],
             "processes": args.runs, "steps": args.steps,
+            "effective_corrector_time_limit_s": None,
+            "corrector_time_limit_source": CORRECTOR_TIME_LIMIT_SOURCE_DISABLED,
         })
     release_gate = evaluate_release_gate(
         gate_observations, mode_observations=mode_observations
@@ -1150,10 +1215,12 @@ def main(argv: list[str] | None = None) -> int:
              "--modes", *args.modes,
              "--runs", str(args.runs),
              "--steps", str(args.steps),
-             "--corrector-time-limit", str(args.corrector_time_limit),
              "--load", args.load,
              "--base-dir", str(args.base_dir),
              "--run-id", run_id]
+    if args.corrector_time_limit is not None:
+        # 只有**显式**给出时才进账本：未给出时伪造该参数会让重放与实测不符。
+        _argv += ["--corrector-time-limit", str(args.corrector_time_limit)]
     if args.time_limits:
         _argv += ["--time-limits", *[str(b) for b in args.time_limits]]
     if args.load == "hogs":
@@ -1167,7 +1234,7 @@ def main(argv: list[str] | None = None) -> int:
         "probe": "m54d_corrector_reproducibility",
         "trained": False,
         "code_revision": _git_revision(),
-        "solver": solver_evidence(budget=MODE_BUDGETS["on"] or 0.0),
+        "solver": solver_evidence(budget=float(effective_budget)),
         "env_seed_kwargs": dict(ENV_SEED_KWARGS),
         "policy_seed": POLICY_SEED,
         "generator_seed": GENERATOR_SEED,
@@ -1175,14 +1242,17 @@ def main(argv: list[str] | None = None) -> int:
         "steps": args.steps,
         "modes": list(args.modes),
         "runs_per_mode": args.runs,
-        "corrector_time_limit_s": float(args.corrector_time_limit),
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": float(effective_budget),
+        "corrector_time_limit_source": budget_source,
+        "corrector_time_limit_s": float(effective_budget),
         "time_limit_matrix_s": [float(b) for b in budgets],
         "node_caps": list(args.node_caps) if args.node_caps else [],
         "node_cap_default": DEFAULT_NODE_CAP,
         "load": load,
         "load_injected": bool(load["load_injected"]),
         "machine": machine,
-        "budget_s": MODE_BUDGETS["on"],
+        "budget_s": float(effective_budget),
         "wall_clock_keys_excluded": list(WALL_CLOCK_KEYS),
         "digest_fields": list(DIGEST_FIELDS) + list(DIGEST_INFO_FIELDS),
         "retry_selection": False,
@@ -1191,7 +1261,10 @@ def main(argv: list[str] | None = None) -> int:
         "probe": "m54h_budget_attribution",
         "trained": False,
         "steps": int(args.steps),
-        "corrector_time_limit_s": float(args.corrector_time_limit),
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": float(effective_budget),
+        "corrector_time_limit_source": budget_source,
+        "corrector_time_limit_s": float(effective_budget),
         "time_limit_matrix_s": [float(b) for b in budgets],
         "load": load,
         "load_injected": bool(load["load_injected"]),
@@ -1209,7 +1282,7 @@ def main(argv: list[str] | None = None) -> int:
         "provenance_note": provenance_note(load),
     }
 
-    # 默认 0.05s 不稳定 -> manifest 必须 failed，**即使归因成立**。
+    # 生产默认预算不稳定 -> manifest 必须 failed，**即使归因成立**。
     # fail closed：blocked 之外的「未测量 / 样本量不足」同样是失败，必须归类。
     failure_classification = None
     if overall["blocked"]:
@@ -1246,6 +1319,9 @@ def main(argv: list[str] | None = None) -> int:
         "status": status,
         "exit_code": phase["exit_code"],
         "overall": overall,
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": float(effective_budget),
+        "corrector_time_limit_source": budget_source,
         "release_gate": release_gate,
         "attribution_conclusion": attribution["conclusion"] if attribution else None,
         "attribution_reason": attribution["reason"] if attribution else "（未请求矩阵）",

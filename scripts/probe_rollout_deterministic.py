@@ -31,6 +31,7 @@ import pandas as pd
 import torch
 
 from envs.idc_price_env import IDCPriceEnv20D
+from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S, resolve_corrector_budget
 from runs.writer import write_run
 from safe_rl_v2.buffer import UNIT_METADATA, RolloutBuffer
 from safe_rl_v2.policy import SafePPOPolicy
@@ -38,7 +39,8 @@ from safe_rl_v2.rollout import collect_rollout
 
 DEFAULT_SEED = 0
 DEFAULT_STEPS = 8
-DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
+# corrector 生产默认预算**不在本文件定义**：唯一来源是
+# `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`（M5.4i）。
 # 环境三类种子必须同时显式给定，否则 default_rng(None) 使用熵源
 ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
 
@@ -129,21 +131,40 @@ def run_arm(*, corrector_on: bool, steps: int, seed: int, corrector_time_limit_s
     return payload
 
 
+def _command_ledger(args, run_id: str) -> str:
+    """命令账本：必须可重放。
+
+    未显式给出预算时**不得**伪造 `--corrector-time-limit-s`；显式给出时必须记录
+    （否则重放会静默退回生产默认，账本与实测不符）。
+    """
+    argv = ["uv run python scripts/probe_rollout_deterministic.py",
+            "--steps", str(args.steps), "--seed", str(args.seed),
+            "--base-dir", str(args.base_dir), "--run-id", run_id]
+    if args.corrector_time_limit_s is not None:
+        argv += ["--corrector-time-limit-s", str(args.corrector_time_limit_s)]
+    return " ".join(argv)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="确定性 rollout probe（不训练）")
     parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
-    parser.add_argument("--corrector-time-limit-s", type=float,
-                        default=DEFAULT_CORRECTOR_TIME_LIMIT_S)
+    parser.add_argument("--corrector-time-limit-s", type=float, default=None,
+                        help="显式 override；省略则使用生产默认"
+                             " planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S")
     parser.add_argument("--no-write-run", action="store_true", help="只打印，不写 runs/<id>/")
+    parser.add_argument("--base-dir", default="runs", help="run 产物根目录")
+    parser.add_argument("--run-id", default=None, help="显式 run id（默认沿用 m51c_ 命名）")
     args = parser.parse_args()
+
+    effective_budget, budget_source = resolve_corrector_budget(args.corrector_time_limit_s)
 
     arms = [
         run_arm(
             corrector_on=corrector_on,
             steps=args.steps,
             seed=args.seed,
-            corrector_time_limit_s=args.corrector_time_limit_s,
+            corrector_time_limit_s=effective_budget,
         )
         for corrector_on in (False, True)
     ]
@@ -153,7 +174,7 @@ def main() -> None:
         corrector_on=False,
         steps=args.steps,
         seed=args.seed,
-        corrector_time_limit_s=args.corrector_time_limit_s,
+        corrector_time_limit_s=effective_budget,
     )
     deterministic = repeat["decision_payload_sha256"] == arms[0]["decision_payload_sha256"]
 
@@ -169,7 +190,10 @@ def main() -> None:
         "env_seed_kwargs": ENV_SEED_KWARGS,
         "policy_weights_seed": args.seed,
         "policy_sampler_rng": "explicit torch.Generator（不使用 torch.manual_seed 采样）",
-        "corrector_time_limit_s": args.corrector_time_limit_s,
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": effective_budget,
+        "corrector_time_limit_source": budget_source,
+        "corrector_time_limit_s": effective_budget,
         "deterministic_repeat_decision_payload_match": bool(deterministic),
         "repeat_decision_payload_sha256": repeat["decision_payload_sha256"],
         "wall_clock_only_keys": list(WALL_CLOCK_ONLY_KEYS),
@@ -196,7 +220,7 @@ def main() -> None:
                 for a in arms
             ]
         )
-        run_id = f"m51c_rollout_probe_s{args.seed}_n{args.steps}"
+        run_id = args.run_id or f"m51c_rollout_probe_s{args.seed}_n{args.steps}"
         run_dir = write_run(
             run_id,
             config={
@@ -207,13 +231,17 @@ def main() -> None:
                 "env_seed_kwargs": ENV_SEED_KWARGS,
                 "policy_weights_seed": args.seed,
                 "policy_sampler_rng": "explicit torch.Generator",
-                "corrector_time_limit_s": args.corrector_time_limit_s,
+                "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                "effective_corrector_time_limit_s": effective_budget,
+                "corrector_time_limit_source": budget_source,
+                "corrector_time_limit_s": effective_budget,
                 "units": UNIT_METADATA,
             },
             metrics=metrics,
             report=report,
+            base_dir=args.base_dir,
             seed=args.seed,
-            command="uv run python scripts/probe_rollout_deterministic.py",
+            command=_command_ledger(args, run_id),
         )
         print(f"\nrun 产物：{run_dir}")
 

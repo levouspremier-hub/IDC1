@@ -31,6 +31,39 @@ from planning.model import (
 # 可执行（第 0 步候选可进入环境）的失败类别
 _EXECUTABLE = {FAILURE_NONE, FAILURE_DEADLINE_SHORTFALL}
 
+# --- M5.4i：corrector 生产默认预算的**唯一**来源 -----------------------------
+# 依据：0.05 s 在受控负载（hogs4/hogs8）下跨进程 digest 可分叉，release gate 因此
+# blocked（M5.4h/M5.4h1/M5.4h2）；0.25 s 在三种负载口径下均无 observed `time_limit`
+# 且 digest 一致。它是**本机候选值**，不构成跨机器保证。
+#
+# **四个入口（train / smoke / probe_rollout_deterministic / probe_corrector_repro）
+# 必须导入本常量，不得各自硬编码。** 本常量是数值，不是默认参数：
+# `correct()` 仍要求调用方**显式**传入 `time_limit_s`。
+PRODUCTION_CORRECTOR_TIME_LIMIT_S = 0.25
+
+# 预算来源：描述「预算从哪来」，**不是**「数值等于多少」——显式给出 0.25 也记 override。
+CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT = "production_default"
+CORRECTOR_TIME_LIMIT_SOURCE_EXPLICIT_OVERRIDE = "explicit_override"
+CORRECTOR_TIME_LIMIT_SOURCE_DISABLED = "disabled"
+
+
+def resolve_corrector_budget(
+    requested_time_limit_s: float | None, *, enabled: bool = True
+) -> tuple[float | None, str]:
+    """把「调用方是否显式给出预算」解析为 `(有效预算, 来源)`。
+
+    这是四个入口共用的**同一份**解析逻辑，避免各处再次分叉出不同默认值。
+    `enabled=False`（corrector 关闭）时有效预算为 `None`。
+    """
+    if not enabled:
+        return None, CORRECTOR_TIME_LIMIT_SOURCE_DISABLED
+    if requested_time_limit_s is None:
+        return (
+            PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+            CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT,
+        )
+    return float(requested_time_limit_s), CORRECTOR_TIME_LIMIT_SOURCE_EXPLICIT_OVERRIDE
+
 
 class FailureClass(StrEnum):
     NONE = "none"
