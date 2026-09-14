@@ -218,3 +218,97 @@ def test_node_cap_is_only_injected_at_runtime():
     assert "mip_max_nodes" not in deterministic_mip_options(time_limit_s=0.05)
     assert "mip_max_nodes" not in deterministic_mip_options(time_limit_s=None)
     assert probe.DEFAULT_NODE_CAP is None
+
+
+# --- 5. 回归：节点上限只在运行时注入，且被记录 -------------------------------
+
+def test_node_cap_is_injected_at_runtime_and_recorded():
+    """`mip_max_nodes` 只能由探针的 runtime wrapper 注入，且必须被记录。"""
+    entry = probe.run_once("on", steps=1, budget=0.25, record_stages=True, node_cap=10)
+    calls = entry["steps_detail"][0]["calls"]
+    assert calls, "必须记录阶段调用"
+    for call in calls:
+        assert call["options"]["mip_max_nodes"] == 10
+        assert call["node_cap_injected"] == 10
+        # 确定性选项仍在（注入节点上限不得挤掉它们）
+        assert call["options"]["random_seed"] == 0
+        assert call["options"]["parallel"] is False
+
+
+def test_no_node_cap_by_default():
+    entry = probe.run_once("on", steps=1, budget=0.25, record_stages=True)
+    for call in entry["steps_detail"][0]["calls"]:
+        assert "mip_max_nodes" not in call["options"]
+        assert call["node_cap_injected"] is None
+
+
+# --- 6. 回归：负载口径与机器信息必须被记录 ----------------------------------
+
+def test_load_metadata_records_program_and_concurrency():
+    parser = probe.build_parser()
+    none_args = parser.parse_args([])
+    assert probe.load_info(none_args) == {
+        "mode": "none", "concurrency": 0, "program": None
+    }
+
+    hogs_args = parser.parse_args(["--load", "hogs", "--load-concurrency", "4"])
+    info = probe.load_info(hogs_args)
+    assert info["mode"] == "hogs"
+    assert info["concurrency"] == 4
+    assert info["program"], "必须记录负载程序（不得只写「有负载」）"
+
+
+def test_machine_info_is_recorded():
+    info = probe.machine_info()
+    for key in ("platform", "machine", "python", "cpu_count"):
+        assert key in info and info[key] is not None
+
+
+def test_parser_rejects_hogs_without_concurrency():
+    with pytest.raises(SystemExit):
+        probe.main(["--modes", "on", "--runs", "1", "--load", "hogs"])
+
+
+# --- 7. 回归：产物的一致性与完整审计表（slow） ------------------------------
+
+@pytest.mark.slow
+def test_summary_artifacts_are_written_and_consistent(tmp_path):
+    result = run_probe(
+        "--modes", "on", "--time-limits", "0.05", "0.10", "0.25", "0.50", "2.0",
+        "--runs", "1", "--steps", "1",
+        "--base-dir", str(tmp_path), "--run-id", "audit",
+    )
+    assert result.returncode in (0, 1), result.stderr
+    run_dir = tmp_path / "audit"
+    assert (run_dir / "summary.json").exists(), "结论不得只存在于任务卡"
+    assert (run_dir / "summary.parquet").exists(), "必须产出逐阶段审计表"
+
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    assert summary["conclusion"] == report["attribution"]["conclusion"]
+    assert summary["conclusion"] in probe.ALLOWED_CONCLUSIONS
+    assert summary["load"]["mode"] == "none"
+    assert summary["machine"]["cpu_count"]
+
+    import pandas as pd
+
+    table = pd.read_parquet(run_dir / "summary.parquet")
+    for column in ("budget_s", "pid", "step", "stage", "status", "elapsed_s",
+                   "remaining_deadline_s", "mip_node_count", "corrector_reason"):
+        assert column in table.columns, column
+    assert len(table) > 0
+    # 审计表必须覆盖矩阵的每一个预算档
+    assert set(table["budget_s"].unique()) == {0.05, 0.10, 0.25, 0.50, 2.0}
+
+
+@pytest.mark.slow
+def test_config_records_matrix_load_and_machine(tmp_path):
+    run_probe("--modes", "on", "--time-limits", "0.05", "0.10", "0.25", "0.50", "2.0",
+              "--runs", "1", "--steps", "1", "--load", "hogs", "--load-concurrency", "2",
+              "--base-dir", str(tmp_path), "--run-id", "meta")
+    config = yaml.safe_load((tmp_path / "meta" / "config.yaml").read_text(encoding="utf-8"))
+    assert config["corrector_time_limit_s"] == pytest.approx(0.05)
+    assert config["time_limit_matrix_s"] == [0.05, 0.10, 0.25, 0.50, 2.0]
+    assert config["load"]["mode"] == "hogs" and config["load"]["concurrency"] == 2
+    assert config["machine"]["cpu_count"]
+    assert config["node_cap_default"] is None
