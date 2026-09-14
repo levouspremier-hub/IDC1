@@ -60,7 +60,10 @@ def test_explicit_budget_is_recorded_in_config_manifest_and_report(tmp_path):
     result = run_probe("--modes", "off", "--runs", "1", "--steps", "1",
                        "--corrector-time-limit", "0.25",
                        "--base-dir", str(tmp_path), "--run-id", "budget")
-    assert result.returncode == 0, result.stderr
+    # M5.4h2 返修迁移：只测 corrector 关闭时**未测量默认预算**，release gate
+    # 因此 fail closed（manifest=failed、退出码非 0）。本测试只关心预算是否被
+    # 如实记录到三处，故不再断言 exit 0。
+    assert result.returncode != 0, "证据不足必须 fail closed"
     run_dir = tmp_path / "budget"
 
     config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
@@ -70,6 +73,9 @@ def test_explicit_budget_is_recorded_in_config_manifest_and_report(tmp_path):
     assert config["corrector_time_limit_s"] == pytest.approx(0.25)
     assert report["corrector_time_limit_s"] == pytest.approx(0.25)
     assert "--corrector-time-limit" in shlex.split(manifest["command"])
+    # 返修新增：证据不足时门禁与 manifest 必须一致地 fail closed
+    assert report["release_gate"]["passed"] is False
+    assert manifest["status"] == "failed"
 
 
 # --- 2. 逐步、逐阶段的求解器事实 --------------------------------------------

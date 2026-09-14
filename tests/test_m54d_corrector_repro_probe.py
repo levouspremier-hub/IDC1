@@ -171,7 +171,10 @@ def test_probe_off_is_reproducible_and_writes_complete_evidence(tmp_path):
     exit_code = probe.main([
         "--modes", "off", "--runs", "3", "--base-dir", str(tmp_path), "--run-id", "off_probe",
     ])
-    assert exit_code == 0, "corrector 关闭时必须判定为可复现"
+    # M5.4h2 返修迁移（范围外，已登记）：退出码现在由 `release_gate.passed` 决定，
+    # 而本 run **未测量默认预算**，门禁 fail closed -> 非 0。corrector 关闭本身仍
+    # 必须逐位一致，故下面对 digest/reproducible 的断言**未变**。
+    assert exit_code != 0, "未测量默认预算必须 fail closed"
     run_dir = tmp_path / "off_probe"
     for name in ARTIFACTS:
         assert (run_dir / name).exists(), f"缺少产物 {name}"
@@ -208,7 +211,10 @@ def test_probe_records_the_on_conclusion_without_presetting_it(tmp_path):
     if on["distinct"] == 1:
         assert on["reproducible"] is True and on["blocked"] is False
         assert on["failure_classification"] is None
-        assert exit_code == 0
+        # M5.4h2 返修迁移（范围外，已登记）：`--runs 3` 低于门禁下限 6 个独立进程，
+        # 门禁 fail closed -> 退出码非 0。`overall.blocked` 仍只反映 blocked。
+        assert report["release_gate"]["passed"] is False
+        assert exit_code != 0, "样本量不足必须 fail closed"
         assert report["overall"]["blocked"] is False
     else:
         assert on["reproducible"] is False and on["blocked"] is True
@@ -217,7 +223,12 @@ def test_probe_records_the_on_conclusion_without_presetting_it(tmp_path):
         assert report["overall"]["blocked"] is True
 
     manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["status"] == ("success" if not on["blocked"] else "failed")
+    # M5.4h2 返修迁移（范围外，已登记）：manifest 现在跟随 `release_gate.passed`，
+    # 不再只看 `blocked`；本 run 的 3 个进程低于门禁下限，故恒为 failed。
+    gate = report["release_gate"]
+    assert gate["passed"] is (not on["blocked"] and gate["evaluated"]
+                              and gate["all_qualifying"])
+    assert manifest["status"] == ("success" if gate["passed"] else "failed")
 
 
 @pytest.mark.slow

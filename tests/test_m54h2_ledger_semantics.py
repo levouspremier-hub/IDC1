@@ -253,11 +253,12 @@ def test_node_cap_candidate_requires_an_observed_binding():
     notes = probe.candidate_notes(
         None, {"blocked": True},
         {"100": {"arm": "alternative_semantics", "wall_clock_disabled_in_probe": True,
-                 "distinct": 1, "processes": 6, "cap_bound": True,
+                 "distinct": 1, "processes": 6, "steps": 8, "cap_bound": True,
                  "max_mip_node_count": 100.0}},
     )
     assert notes["node_cap_effective"] is True
     assert notes["node_cap_candidate"] is True
+    assert notes["candidate_caps"] == ["100"]
 
 
 def test_bound_but_unstable_node_cap_is_not_a_candidate():
@@ -282,6 +283,90 @@ def test_wall_clock_candidate_stays_machine_local():
     assert notes["default_budget_still_blocked"] is True
 
 
+# --- 3b. 返修：node-cap 候选必须是**同一个 cap** 的证据交集 --------------------
+
+def _cap_entry(*, distinct=1, processes=6, steps=8, cap_bound=False,
+               max_mip_node_count=None, arm="alternative_semantics",
+               wall_clock_disabled=True) -> dict:
+    return {
+        "arm": arm,
+        "wall_clock_disabled_in_probe": wall_clock_disabled,
+        "distinct": distinct, "processes": processes, "steps": steps,
+        "cap_bound": cap_bound, "max_mip_node_count": max_mip_node_count,
+    }
+
+
+def test_split_node_cap_evidence_is_not_a_candidate():
+    """cap 100 已绑定但**不稳定**；cap 10000 稳定但**未绑定** -> 不得拼成候选。
+
+    这正是返修要消除的错误：把「某个 cap 绑定」与「另一个 cap 稳定」拼成 true。
+    """
+    notes = probe.candidate_notes(
+        None, {"blocked": True},
+        {
+            "100": _cap_entry(distinct=2, cap_bound=True, max_mip_node_count=100.0),
+            "10000": _cap_entry(distinct=1, cap_bound=False, max_mip_node_count=1.0),
+        },
+    )
+    assert notes["node_cap_effective"] is True, "确实至少有一个 cap 曾绑定"
+    assert notes["node_cap_candidate"] is False
+    assert notes["candidate_caps"] == []
+
+    alternative = notes["node_cap_alternative_semantics"]
+    assert alternative["candidate_caps"] == []
+    assert alternative["node_cap_candidate"] is False
+    assert "100" not in alternative["candidate_caps"], "绑定的 cap 不稳定，不得为候选"
+    assert "10000" not in alternative["candidate_caps"], "稳定的 cap 未绑定，不得为候选"
+    # 两个 cap 的原始事实仍须如实保留
+    assert alternative["cap_bound_caps"] == ["100"]
+    assert alternative["stable_caps"] == ["10000"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"cap_bound": False}, id="cap_never_bound"),
+        pytest.param({"distinct": 2}, id="unstable"),
+        pytest.param({"processes": probe.MATRIX_MIN_PROCESSES - 1}, id="too_few_processes"),
+        pytest.param({"steps": probe.MATRIX_MIN_STEPS - 1}, id="too_few_steps"),
+    ],
+)
+def test_every_node_cap_candidate_condition_is_required(overrides):
+    entry = _cap_entry(distinct=1, cap_bound=True, max_mip_node_count=100.0)
+    entry.update(overrides)
+    notes = probe.candidate_notes(None, {"blocked": True}, {"100": entry})
+    assert notes["node_cap_candidate"] is False, f"{overrides} 任一不满足即不得为候选"
+    assert notes["candidate_caps"] == []
+
+
+def test_a_cap_meeting_every_condition_is_the_only_candidate():
+    notes = probe.candidate_notes(
+        None, {"blocked": True},
+        {
+            "100": _cap_entry(distinct=1, cap_bound=True, max_mip_node_count=100.0),
+            "10000": _cap_entry(distinct=1, cap_bound=False, max_mip_node_count=1.0),
+        },
+    )
+    assert notes["node_cap_effective"] is True
+    assert notes["node_cap_candidate"] is True
+    assert notes["candidate_caps"] == ["100"], "只有同时满足全部条件的 cap 才是候选"
+    assert notes["node_cap_alternative_semantics"]["candidate_caps"] == ["100"]
+
+
+def test_node_cap_candidate_reasons_distinguish_the_two_failure_modes():
+    unbound = probe.candidate_notes(
+        None, {"blocked": True}, {"100": _cap_entry(cap_bound=False)},
+    )
+    assert "observed_mip_node_count_below_cap" in unbound["node_cap_reasons"]
+
+    bound_but_no_candidate = probe.candidate_notes(
+        None, {"blocked": True},
+        {"100": _cap_entry(distinct=2, cap_bound=True, max_mip_node_count=100.0)},
+    )
+    assert bound_but_no_candidate["node_cap_effective"] is True
+    assert "no_cap_meets_all_candidate_conditions" in bound_but_no_candidate["node_cap_reasons"]
+
+
 def test_node_cap_is_not_described_as_a_candidate_without_evidence():
     """只做了 with_wall_clock 臂时不得出现替代语义候选块。"""
     notes = probe.candidate_notes(
@@ -291,6 +376,108 @@ def test_node_cap_is_not_described_as_a_candidate_without_evidence():
     )
     assert "node_cap_alternative_semantics" not in notes
     assert notes["node_cap_candidate"] is False
+
+
+# --- 3c. 返修：证据不足必须 fail closed --------------------------------------
+
+def test_release_gate_exposes_a_machine_readable_passed_flag():
+    assert probe.evaluate_release_gate([_obs(1)])["passed"] is True
+    assert probe.evaluate_release_gate([_obs(2)])["passed"] is False
+    assert probe.evaluate_release_gate([_obs(1, processes=2, steps=3)])["passed"] is False
+    assert probe.evaluate_release_gate([])["passed"] is False
+
+
+def test_passed_is_evaluated_and_all_qualifying_and_not_blocked():
+    gates = [
+        probe.evaluate_release_gate([]),
+        probe.evaluate_release_gate([_obs(2)]),
+        probe.evaluate_release_gate([_obs(1, processes=2, steps=3)]),
+        probe.evaluate_release_gate([_obs(1)]),
+    ]
+    for gate in gates:
+        expected = bool(gate["evaluated"] and gate["all_qualifying"] and not gate["blocked"])
+        assert gate["passed"] is expected, gate
+
+
+def test_phase_status_fails_closed_without_a_default_budget_measurement():
+    """未测默认预算 -> 不得 manifest success / exit 0。"""
+    gate = probe.evaluate_release_gate([])
+    phase = probe.phase_status(release_gate=gate)
+    assert gate["evaluated"] is False
+    assert phase["overall"]["blocked"] is False, "未测量不是 blocked"
+    assert phase["overall"]["conclusion"] == "not_evaluated"
+    assert phase["status"] == "failed", "证据不足必须 fail closed"
+    assert phase["exit_code"] == 1
+
+
+def test_phase_status_fails_closed_when_the_sample_is_underpowered():
+    """processes<6 或 steps<8 -> 不得 manifest success / exit 0。"""
+    gate = probe.evaluate_release_gate([_obs(1, processes=2, steps=3)])
+    assert gate["blocked"] is False
+    assert gate["passed"] is False
+    phase = probe.phase_status(release_gate=gate)
+    assert phase["overall"]["conclusion"] == "insufficient_evidence"
+    assert phase["status"] == "failed", "证据不足必须 fail closed"
+    assert phase["exit_code"] == 1
+
+
+@pytest.mark.parametrize(
+    "gate_factory,expected_status,expected_exit",
+    [
+        pytest.param(lambda: probe.evaluate_release_gate([_obs(2)]),
+                     "failed", 1, id="blocked"),
+        pytest.param(lambda: probe.evaluate_release_gate([]),
+                     "failed", 1, id="not_evaluated"),
+        pytest.param(lambda: probe.evaluate_release_gate([_obs(1, processes=2, steps=3)]),
+                     "failed", 1, id="insufficient_evidence"),
+        pytest.param(lambda: probe.evaluate_release_gate([_obs(1)]),
+                     "success", 0, id="qualified_and_stable"),
+    ],
+)
+def test_manifest_status_and_exit_code_follow_passed(gate_factory, expected_status, expected_exit):
+    gate = gate_factory()
+    phase = probe.phase_status(release_gate=gate)
+    assert phase["status"] == expected_status
+    assert phase["exit_code"] == expected_exit
+    assert (phase["status"] == "success") is gate["passed"]
+    assert phase["overall"]["blocked"] == gate["blocked"], "overall 仍只反映 blocked"
+
+
+def test_overall_blocked_still_equals_the_gate_in_every_case():
+    for gate in (
+        probe.evaluate_release_gate([]),
+        probe.evaluate_release_gate([_obs(2)]),
+        probe.evaluate_release_gate([_obs(1, processes=2, steps=3)]),
+        probe.evaluate_release_gate([_obs(1)]),
+    ):
+        assert probe.phase_status(release_gate=gate)["overall"]["blocked"] == gate["blocked"]
+
+
+@pytest.mark.parametrize(
+    "gate_factory",
+    [
+        pytest.param(lambda: probe.evaluate_release_gate([]), id="not_evaluated"),
+        pytest.param(
+            lambda: probe.evaluate_release_gate([_obs(1, processes=2, steps=3)]),
+            id="underpowered",
+        ),
+    ],
+)
+def test_insufficient_evidence_reason_names_the_sample_size_shortfall(gate_factory):
+    gate = gate_factory()
+    assert gate["passed"] is False
+    assert "不足" in gate["reason"], f"证据不足必须写明样本量不足：{gate['reason']}"
+
+
+def test_underpowered_gate_names_the_offending_sources():
+    gate = probe.evaluate_release_gate([_obs(1, processes=2, steps=3)])
+    assert [s["source"] for s in gate["underpowered_sources"]] == ["matrix.0.05"]
+    assert gate["underpowered_sources"][0]["processes"] == 2
+    assert gate["underpowered_sources"][0]["steps"] == 3
+
+
+def test_qualified_gate_reports_no_underpowered_sources():
+    assert probe.evaluate_release_gate([_obs(1)])["underpowered_sources"] == []
 
 
 # --- 4. 真实产物：report / summary.json / manifest 三者一致（slow） ----------
@@ -315,8 +502,9 @@ def test_artifacts_agree_on_the_release_status(tmp_path):
     assert summary["overall"] == report["overall"], "summary 的阶段状态必须与 report 一致"
     assert summary["release_gate"]["blocked"] == gate["blocked"]
     assert summary["status"] == manifest["status"]
-    assert manifest["status"] == ("failed" if gate["blocked"] else "success")
-    assert (result.returncode != 0) == gate["blocked"]
+    # 返修：manifest/退出码由 release_gate.passed 决定，不能只看 blocked。
+    assert manifest["status"] == ("success" if gate["passed"] else "failed")
+    assert (result.returncode != 0) == (not gate["passed"])
 
 
 @pytest.mark.slow
@@ -373,6 +561,7 @@ def test_node_cap_run_records_an_unbound_cap_as_not_effective(tmp_path):
     assert result.returncode in (0, 1), result.stderr
     run_dir = tmp_path / "m54h2_nodealt"
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
     notes = summary["candidate_notes"]
 
     table = pd.read_parquet(run_dir / "summary.parquet")
@@ -382,6 +571,35 @@ def test_node_cap_run_records_an_unbound_cap_as_not_effective(tmp_path):
 
     assert notes["node_cap_effective"] is False
     assert notes["node_cap_candidate"] is False
+    assert notes["candidate_caps"] == []
+
+    # 每个 cap 的证据必须自带样本量，候选判定才能逐个 cap 做交集。
+    assert set(report["node_cap_matrix"]) == {"100", "10000"}
+    for cap, entry in report["node_cap_matrix"].items():
+        assert entry["steps"] == 8, f"cap {cap} 必须记录 steps"
+        assert entry["processes"] == 6, f"cap {cap} 必须记录独立进程数"
+        assert entry["cap_bound"] is False
+
+
+@pytest.mark.slow
+def test_a_run_without_a_default_budget_measurement_fails_closed(tmp_path):
+    """只测 corrector 关闭：未测量默认预算 -> manifest failed、退出码非 0。"""
+    result = run_probe(
+        "--modes", "off", "--runs", "6", "--steps", "8",
+        "--base-dir", str(tmp_path), "--run-id", "m54h2r1_off_only",
+    )
+    run_dir = tmp_path / "m54h2r1_off_only"
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    gate = report["release_gate"]
+
+    assert gate["evaluated"] is False
+    assert gate["passed"] is False
+    assert report["overall"]["blocked"] is False, "未测量不是 blocked"
+    assert report["overall"]["conclusion"] == "not_evaluated"
+    assert manifest["status"] == "failed", "证据不足必须 fail closed"
+    assert result.returncode != 0
+    assert "不足" in gate["reason"]
 
 
 # --- 5. 禁止事项的结构性保证 ------------------------------------------------
