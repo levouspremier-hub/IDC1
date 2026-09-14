@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal, overload
 
 from contracts.models import DispatchProposal, SystemSnapshot
 from planning.model import (
@@ -45,6 +46,18 @@ PRODUCTION_CORRECTOR_TIME_LIMIT_S = 0.25
 CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT = "production_default"
 CORRECTOR_TIME_LIMIT_SOURCE_EXPLICIT_OVERRIDE = "explicit_override"
 CORRECTOR_TIME_LIMIT_SOURCE_DISABLED = "disabled"
+
+
+@overload
+def resolve_corrector_budget(
+    requested_time_limit_s: float | None, *, enabled: Literal[True] = True
+) -> tuple[float, str]: ...
+
+
+@overload
+def resolve_corrector_budget(
+    requested_time_limit_s: float | None, *, enabled: bool = ...
+) -> tuple[float | None, str]: ...
 
 
 def resolve_corrector_budget(
