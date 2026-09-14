@@ -10,7 +10,9 @@ import re
 import subprocess
 import sys
 
+import numpy as np
 import pytest
+import torch
 import yaml
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -166,7 +168,9 @@ def test_corrector_on_requires_explicit_time_limit(tmp_path):
     )
     assert result.returncode != 0
     combined = result.stdout + result.stderr
-    assert "corrector_time_limit_s" in combined or "time_limit" in combined, combined
+    # 报错必须点名用户可见的那个开关
+    assert "--corrector-time-limit-s" in combined, combined
+    assert "显式" in combined or "explicit" in combined.lower(), combined
 
 
 def test_corrector_on_with_limit_is_recorded(tmp_path):
@@ -199,12 +203,19 @@ def test_invalid_arguments_fail_explicitly(tmp_path, args):
     assert result.returncode != 0, f"非法参数必须失败：{args}"
 
 
-def test_argument_failure_after_run_id_still_writes_failed_manifest(tmp_path):
-    """已获得 run_id 时，失败也必须写失败 manifest（便于事后定位）。"""
-    run_cli("--synthetic-smoke", "--steps", "-3",
-            "--base-dir", str(tmp_path), "--run-id", "bad_steps")
-    manifest_path = tmp_path / "bad_steps" / "manifest.json"
-    assert manifest_path.exists()
+def test_failure_after_run_id_allocation_writes_failed_manifest(tmp_path):
+    """已获得 run_id 的运行期失败，也必须写失败 manifest（便于事后定位）。
+
+    注意：argparse 层面的参数错误发生在 run_id 分配**之前**，此时不存在 run_id，
+    故不写 manifest（其非 0 退出由 test_invalid_arguments_fail_explicitly 覆盖）。
+    """
+    result = run_cli(
+        "--synthetic-smoke", "--steps", "1", "--corrector", "on",
+        "--base-dir", str(tmp_path), "--run-id", "on_without_limit_manifest",
+    )
+    assert result.returncode != 0
+    manifest_path = tmp_path / "on_without_limit_manifest" / "manifest.json"
+    assert manifest_path.exists(), "run_id 已分配后的失败必须落失败 manifest"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "failed"
     assert manifest["failure_classification"]
@@ -262,19 +273,94 @@ def test_entry_delegates_to_the_existing_dry_run_update():
 # --- 6. 文档纠正（要求 7） --------------------------------------------------
 
 def test_docstring_does_not_claim_preflight_precedes_sampling_forward():
-    """预检在 rollout 收集**之后**，不得声称它在采样前向之前。"""
+    """预检在 rollout 收集**之后**：不得声称它在采样前向之前。"""
     source = TRAIN_MODULE.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    docstring = ast.get_docstring(tree) or ""
-    assert "任何 forward" not in docstring
-    assert "rollout" in docstring and "预检" in docstring
+    docstring = ast.get_docstring(ast.parse(source)) or ""
 
-    # 行内注释同样不得声称「任何 forward 之前」
-    assert "在任何** forward" not in source
-    assert "在任何 forward" not in source
+    # 若出现「任何 forward」，必须带上「更新阶段」这一限定
+    if "任何 forward" in docstring:
+        assert "更新阶段" in docstring, "不得笼统声称预检在任何 forward 之前"
+    # 必须显式点明它**不**在采样前向之前
+    assert "不在采样前向之前" in docstring or "采样前向" in docstring, docstring
+    assert "collect_rollout" in docstring
+    # 行内注释同样必须限定为更新阶段
+    assert "在任何** forward / backward / optimizer.step 之前" not in source
+    assert "更新阶段**的 forward" in source
 
 
 def test_docstring_describes_the_actual_preflight_position():
     docstring = ast.get_docstring(ast.parse(TRAIN_MODULE.read_text(encoding="utf-8"))) or ""
-    assert "收集" in docstring or "rollout" in docstring
-    assert "更新" in docstring
+    assert "rollout 收集之后" in docstring, docstring
+    assert "更新阶段" in docstring, docstring
+    # 必须说明它保证的是「更新阶段零副作用」
+    assert "零副作用" in docstring
+
+
+# --- 7. 回归：全局 RNG 还原、无 checkpoint、metrics 形状 ---------------------
+
+def test_global_torch_rng_is_restored_after_a_synthetic_dry_run():
+    """权重初始化借用全局 RNG，但必须用 fork_rng 还原：调用方状态不受影响。"""
+    from safe_rl_v2 import train as train_mod
+
+    args = train_mod.build_parser().parse_args(
+        ["--synthetic-smoke", "--steps", "1", "--seed", "3", "--corrector", "off"]
+    )
+    torch.manual_seed(1234)
+    before = torch.get_rng_state().clone()
+    train_mod._run_synthetic_dry_run(
+        args, "rng_probe", {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
+    )
+    assert torch.equal(before, torch.get_rng_state()), "全局 Torch RNG 必须被还原"
+
+
+def test_same_seed_produces_the_same_weights_across_calls():
+    """fork_rng + manual_seed 的意义：同 seed 的权重初始化必须逐位一致。"""
+    from safe_rl_v2 import train as train_mod
+
+    args = train_mod.build_parser().parse_args(
+        ["--synthetic-smoke", "--steps", "1", "--seed", "5", "--corrector", "off"]
+    )
+    seeds = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
+    first = train_mod._run_synthetic_dry_run(args, "a", seeds)
+    second = train_mod._run_synthetic_dry_run(args, "b", seeds)
+    np.testing.assert_allclose(
+        first["buffer"].transitions[0].raw_action, second["buffer"].transitions[0].raw_action
+    )
+
+
+def test_synthetic_run_writes_no_checkpoint_artifacts(synthetic_run):
+    """本卡不写 checkpoint：产物目录里不得出现模型权重文件。"""
+    offenders = [
+        path.name
+        for path in synthetic_run.rglob("*")
+        if path.is_file()
+        and path.suffix.lower() in {".pt", ".pth", ".ckpt", ".bin"}
+    ]
+    assert offenders == [], f"本卡不得写 checkpoint：{offenders}"
+
+
+def test_metrics_parquet_has_one_row_per_transition(synthetic_run):
+    import pandas as pd
+
+    metrics = pd.read_parquet(synthetic_run / "metrics.parquet")
+    assert len(metrics) == 3  # fixture 用 --steps 3
+    for column in (
+        "reward", "business_violations", "carbon_emissions_kg",
+        "electricity_cost_sgd", "old_raw_log_prob", "raw_exec_differs",
+        "terminated", "truncated",
+    ):
+        assert column in metrics.columns, column
+
+
+def test_config_and_report_agree_on_scenario_type(synthetic_run):
+    config = yaml.safe_load((synthetic_run / "config.yaml").read_text(encoding="utf-8"))
+    report = json.loads((synthetic_run / "report.json").read_text(encoding="utf-8"))
+    assert config["scenario_type"] == report["scenario_type"]
+    assert config["synthetic"] is True and report["synthetic"] is True
+
+
+def test_blocked_default_run_never_writes_a_success_manifest(tmp_path):
+    run_cli("--base-dir", str(tmp_path), "--run-id", "blocked3")
+    manifest = json.loads((tmp_path / "blocked3" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert manifest["failure_classification"] == "TrainEntryError"
