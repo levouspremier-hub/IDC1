@@ -1391,6 +1391,10 @@ def main(argv: list[str] | None = None) -> int:
                 report={
                     "probe": "m54i_release_batch_aggregation",
                     "trained": False,
+                    # 与 config/manifest **恒等**（M5.4i 返修：三处不得各自推导）
+                    "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                    "effective_corrector_time_limit_s": unified_budget,
+                    "corrector_time_limit_source": unified_source,
                     "claims": {"trained": False, "performance_evaluated": False,
                                "convergence_claimed": False},
                     "aggregated": aggregated,
