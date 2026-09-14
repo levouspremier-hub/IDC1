@@ -684,6 +684,41 @@ def main(argv: list[str] | None = None) -> int:
             "digests": budget_digests,
         }
 
+    # --- 节点上限标定（M5.4h §4.5；**仅探针内 runtime 注入**，不写 planning/默认配置）---
+    node_cap_matrix: dict[str, dict] = {}
+    for cap in (args.node_caps or []):
+        cap_digests: list[str] = []
+        cap_reasons: list[str] = []
+        for _ in range(args.runs):
+            entry = run_in_subprocess(
+                "on", steps=args.steps, budget=args.corrector_time_limit,
+                record_stages=True, node_cap=cap, load=load,
+            )
+            cap_digests.append(entry["digest"])
+            for step in entry["steps_detail"]:
+                for call in step["calls"]:
+                    cap_reasons.append(call["corrector_reason"])
+                    stage_rows.append({
+                        "budget_s": args.corrector_time_limit,
+                        "node_cap": cap,
+                        "pid": entry["pid"], "step": step["step"],
+                        "stage": call["stage"], "status": call["status"],
+                        "success": call["success"], "elapsed_s": call["elapsed_s"],
+                        "remaining_deadline_s": call["remaining_deadline_s"],
+                        "mip_node_count": call["mip_node_count"],
+                        "mip_dual_bound": call["mip_dual_bound"],
+                        "mip_gap": call["mip_gap"],
+                        "corrector_reason": call["corrector_reason"],
+                        "node_cap_injected": call["node_cap_injected"],
+                        "options_json": json.dumps(call["options"], sort_keys=True),
+                    })
+        node_cap_matrix[str(cap)] = {
+            "distinct": len(set(cap_digests)),
+            "processes": len(cap_digests),
+            "digests": cap_digests,
+            "reasons": sorted(set(cap_reasons)),
+        }
+
     attribution = classify(matrix) if args.time_limits else None
     if attribution is not None:
         overall = {
@@ -750,6 +785,7 @@ def main(argv: list[str] | None = None) -> int:
         "claims": {"trained": False, "performance_evaluated": False, "convergence_claimed": False},
         "modes": decisions,
         "matrix": matrix,
+        "node_cap_matrix": node_cap_matrix,
         "attribution": attribution,
         "overall": overall,
         "provenance_note": "每个 digest 来自一个独立 Python 进程；未注入 CPU 负载、未重试挑选取样",
