@@ -580,9 +580,15 @@ def main(argv: list[str] | None = None) -> int:
                 "existing manifest is frozen; refusing raw-write option(s) before any I/O: "
                 f"{options}"
             )
-        _copy_input(args.usep_zip, args.raw_dir / REQUIRED_FILES["emc_usep"])
-        _copy_input(args.generation_zip, args.raw_dir / REQUIRED_FILES["emc_metered_generation"])
-        _copy_input(args.sasea_zip, args.raw_dir / REQUIRED_FILES["sasea_demand"])
+        if args.usep_zip is not None:
+            _copy_input(args.usep_zip, args.raw_dir / REQUIRED_FILES["emc_usep"])
+        if args.generation_zip is not None:
+            _copy_input(
+                args.generation_zip,
+                args.raw_dir / REQUIRED_FILES["emc_metered_generation"],
+            )
+        if args.sasea_zip is not None:
+            _copy_input(args.sasea_zip, args.raw_dir / REQUIRED_FILES["sasea_demand"])
         if args.fetch_weather:
             url = fetch_open_meteo_weather(args.raw_dir / REQUIRED_FILES["open_meteo_weather"])
             print(f"[downloaded] Open-Meteo weather: {url}", file=sys.stderr)
