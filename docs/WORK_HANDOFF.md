@@ -2,7 +2,8 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract` @ `0ee844d`（M5.4h2 执行完成，**等待人工审查**）。
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4h2 实现终点 `0ee844d`
+> （其后仅有本卡的证据与交接 docs 提交）；M5.4h2 **执行完成，等待人工审查**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -51,7 +52,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `0ee844d` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链。 |
+| `p4-safeppo-m51a-rollout-contract` | `0ee844d` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链（`0ee844d` 为 M5.4h2 实现终点）。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
