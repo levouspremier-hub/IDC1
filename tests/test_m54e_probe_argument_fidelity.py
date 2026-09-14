@@ -29,13 +29,41 @@ def run_probe(*args: str) -> subprocess.CompletedProcess:
     )
 
 
+def assert_exit_code_is_explained_by_the_gate(
+    result: subprocess.CompletedProcess, run_dir: pathlib.Path, run_id: str
+) -> dict:
+    """M5.4h2 返修迁移（范围外，已登记）。
+
+    退出码现在由 `release_gate.passed` 决定，不再是恒 0：本文件的 run 只测
+    corrector 关闭（`--modes off`）或样本量不足，门禁因此 fail closed -> 退出码 1。
+    本文件的主题是**参数保真**，与门禁判定无关，故改为**更严**的断言：
+
+    - 产物必须真的写出来（探针崩溃时不会有 `report.json`，仍会被抓住）；
+    - 退出码必须**恰好**等于门禁的判定，不能由任何其他失败解释。
+    """
+    report_path = run_dir / "report.json"
+    assert report_path.exists(), (
+        f"run {run_id} 未产出 report.json（探针可能崩溃）："
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    assert (run_dir / "manifest.json").exists(), f"run {run_id} 未产出 manifest.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    passed = report["release_gate"]["passed"]
+    assert result.returncode == (0 if passed else 1), (
+        f"退出码必须由 release_gate.passed 决定：passed={passed} "
+        f"returncode={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+    )
+    return report
+
+
 def probe_run(tmp_path: pathlib.Path, run_id: str, steps: int, *extra: str):
     result = run_probe(
         "--modes", "off", "--runs", "1", "--steps", str(steps),
         "--base-dir", str(tmp_path), "--run-id", run_id, "--emit-provenance", *extra,
     )
-    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
-    return tmp_path / run_id
+    run_dir = tmp_path / run_id
+    assert_exit_code_is_explained_by_the_gate(result, run_dir, run_id)
+    return run_dir
 
 
 # --- 1. steps 必须一致地记录在每一处 ----------------------------------------
@@ -104,7 +132,7 @@ def test_command_ledger_records_every_effective_parameter(tmp_path, steps):
 def test_emit_provenance_is_omitted_from_the_ledger_when_not_requested(tmp_path):
     result = run_probe("--modes", "off", "--runs", "1", "--steps", "1",
                        "--base-dir", str(tmp_path), "--run-id", "nochar")
-    assert result.returncode == 0, result.stderr
+    assert_exit_code_is_explained_by_the_gate(result, tmp_path / "nochar", "nochar")
     command = json.loads((tmp_path / "nochar" / "manifest.json").read_text(encoding="utf-8"))[
         "command"
     ]
@@ -122,7 +150,9 @@ def test_manifest_command_can_be_replayed(tmp_path):
     argv[argv.index("--base-dir") + 1] = str(tmp_path / "second")
     replay = subprocess.run([sys.executable, *argv[1:]], cwd=REPO_ROOT,
                             capture_output=True, text=True, timeout=600)
-    assert replay.returncode == 0, replay.stderr
+    assert_exit_code_is_explained_by_the_gate(
+        replay, tmp_path / "second" / "replay", "replay"
+    )
 
     first_cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
     second_cfg = yaml.safe_load(
@@ -154,7 +184,7 @@ def test_non_positive_steps_do_not_write_a_success_manifest(tmp_path):
 def test_default_steps_still_works(tmp_path):
     result = run_probe("--modes", "off", "--runs", "1",
                        "--base-dir", str(tmp_path), "--run-id", "default")
-    assert result.returncode == 0, result.stderr
+    assert_exit_code_is_explained_by_the_gate(result, tmp_path / "default", "default")
     config = yaml.safe_load((tmp_path / "default" / "config.yaml").read_text(encoding="utf-8"))
     metrics = pd.read_parquet(tmp_path / "default" / "metrics.parquet")
     assert config["steps"] == probe.STEPS == int(metrics["steps"].iloc[0])
@@ -173,9 +203,9 @@ def test_modes_and_runs_match_the_actual_metrics_rows(tmp_path, modes, runs):
     run_id = f"mr_{'_'.join(modes)}_{runs}"
     result = run_probe("--modes", *modes, "--runs", str(runs), "--steps", "1",
                        "--base-dir", str(tmp_path), "--run-id", run_id)
-    assert result.returncode == 0, result.stderr
 
     run_dir = tmp_path / run_id
+    assert_exit_code_is_explained_by_the_gate(result, run_dir, run_id)
     config = _config_of(tmp_path, run_dir)
     metrics = pd.read_parquet(run_dir / "metrics.parquet")
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
@@ -213,8 +243,8 @@ def test_recorded_parameters_are_the_ones_actually_executed(tmp_path):
         result = run_probe("--modes", "off", "--runs", "1", "--steps", str(steps),
                            "--base-dir", str(tmp_path), "--run-id", run_id,
                            "--emit-provenance")
-        assert result.returncode == 0, result.stderr
         run_dir = tmp_path / run_id
+        assert_exit_code_is_explained_by_the_gate(result, run_dir, run_id)
         metrics = pd.read_parquet(run_dir / "metrics.parquet")
         provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
         # metrics/provenance 的 steps 来自**实际采集到的 transition 数**，
