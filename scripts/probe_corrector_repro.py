@@ -642,71 +642,115 @@ PROVENANCE_KEYS = (
     "effective_corrector_time_limit_s",
     "corrector_time_limit_source",
 )
+# 负载 / 机器签名必须**完整**具备的键（M5.4i 第二次返修）
+LOAD_KEYS = ("mode", "concurrency", "program", "load_injected")
+MACHINE_KEYS = ("platform", "machine", "python", "cpu_count")
+
+
+def _total_order_key(value):
+    """任意类型的全序键：混入 str/None/float 时 `sorted` 也**不得**抛异常。"""
+    return (type(value).__name__, repr(value))
 
 
 def _aggregation_failure(failures: list, reason: str, *, batch, detail: str = "") -> None:
-    failures.append({"batch": batch, "reason": reason, "detail": detail})
+    failures.append({"batch": batch, "reason": reason, "detail": str(detail)})
 
 
 def _read_batch(path: Path, failures: list) -> dict | None:
-    """读取一个批次；**任何**缺失/不可解析都 fail closed 并记录原因。"""
+    """**只读一次**每个输入；任何缺失、错误类型或转换异常都 fail closed。
+
+    **不得**把异常泄漏给调用方：合法 JSON/YAML/Parquet 里的错误类型同样必须
+    变成 `passed=false`，而不是抛 `AttributeError`/`ValueError`/`TypeError`。
+    """
     batch = path.name
-    artifacts: dict = {}
-    missing = [
-        name for name in REQUIRED_BATCH_ARTIFACTS if not (path / name).exists()
-    ]
+    missing = [name for name in REQUIRED_BATCH_ARTIFACTS if not (path / name).exists()]
     if missing:
         _aggregation_failure(failures, "missing_or_unreadable_artifact",
                              batch=batch, detail=f"缺少 {missing}")
         return None
     try:
-        artifacts["config"] = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
-        artifacts["report"] = json.loads((path / "report.json").read_text(encoding="utf-8"))
-        artifacts["manifest"] = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-        artifacts["summary"] = json.loads((path / "summary.json").read_text(encoding="utf-8"))
+        config = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
+        report = json.loads((path / "report.json").read_text(encoding="utf-8"))
+        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        json.loads((path / "summary.json").read_text(encoding="utf-8"))
         table = pd.read_parquet(path / "summary.parquet")
     except Exception as exc:  # noqa: BLE001 - 解析失败必须 fail closed，不得默认通过
         _aggregation_failure(failures, "missing_or_unreadable_artifact",
                              batch=batch, detail=f"{type(exc).__name__}: {exc}")
         return None
-    if "status" not in table.columns:
+
+    for obj, label in ((config, "config.yaml"), (report, "report.json"),
+                       (manifest, "manifest.json")):
+        if not isinstance(obj, dict):
+            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                                 detail=f"{label} 顶层不是 dict（{type(obj).__name__}）")
+            return None
+    if not isinstance(table, pd.DataFrame) or "status" not in table.columns:
         _aggregation_failure(failures, "summary_parquet_missing_status_column", batch=batch)
         return None
-    artifacts["stage_statuses"] = [
-        s for s in table["status"].tolist() if s is not None
-    ]
-    artifacts["path"] = path
-    return artifacts
+
+    stage_statuses: list[int] = []
+    for raw in table["status"].tolist():
+        if raw is None:
+            continue
+        try:
+            stage_statuses.append(int(raw))
+        except (TypeError, ValueError, OverflowError):
+            _aggregation_failure(failures, "summary_parquet_malformed_status",
+                                 batch=batch, detail=f"status={raw!r}")
+            return None
+
+    return {
+        "path": path, "batch": batch,
+        "config": config, "report": report, "manifest": manifest,
+        "stage_statuses": stage_statuses,
+    }
 
 
-def _check_batch(batch: str, artifacts: dict, failures: list) -> dict:
-    """逐批核验；返回该批的机器可读摘要（即使失败也保留）。"""
-    manifest = artifacts["manifest"]
-    report = artifacts["report"]
-    config = artifacts["config"]
-    gate = report.get("release_gate") or {}
+def _check_batch(artifacts: dict, failures: list) -> dict | None:
+    """校验单批；返回**已验证**的摘要（后续签名比较只看摘要，不再二次读取）。"""
+    batch = artifacts["batch"]
+    config, report, manifest = artifacts["config"], artifacts["report"], artifacts["manifest"]
+    malformed = len(failures)
 
+    # --- manifest 基本字段 ---
     if manifest.get("status") != "success":
         _aggregation_failure(failures, "manifest_status_not_success",
                              batch=batch, detail=str(manifest.get("status")))
     run_id = manifest.get("run_id")
-    if not run_id:
+    if not isinstance(run_id, str) or not run_id:
         _aggregation_failure(failures, "manifest_run_id_missing", batch=batch)
+        run_id = None
     revision = manifest.get("revision")
-    if not revision:
+    if not isinstance(revision, str) or not revision:
         _aggregation_failure(failures, "manifest_revision_missing", batch=batch)
+        revision = None
 
-    # provenance：三处（config/report/manifest）必须都存在且恒等
-    for obj, label in ((config, "config"), (report, "report"), (manifest, "manifest")):
-        absent = [k for k in PROVENANCE_KEYS if k not in (obj or {})]
-        if absent:
-            _aggregation_failure(failures, "manifest_provenance_missing",
-                                 batch=batch, detail=f"{label} 缺少 {absent}")
-    if all(k in manifest and k in report for k in PROVENANCE_KEYS):
-        if any(manifest[k] != report[k] for k in PROVENANCE_KEYS):
-            _aggregation_failure(failures, "provenance_inconsistent",
-                                 batch=batch, detail="manifest 与 report 不一致")
+    # --- 三方恒等：config == report == manifest，逐字段 ---
+    provenance: dict = {}
+    for key in PROVENANCE_KEYS:
+        values = []
+        for obj, label in ((config, "config"), (report, "report"), (manifest, "manifest")):
+            if key not in obj:
+                _aggregation_failure(failures, "manifest_provenance_missing",
+                                     batch=batch, detail=f"{label} 缺少 {key}")
+                values = []
+                break
+            values.append(obj[key])
+        if not values:
+            continue
+        if any(value != values[0] for value in values[1:]):
+            _aggregation_failure(failures, "provenance_inconsistent", batch=batch,
+                                 detail=f"{key}: config={values[0]!r} report={values[1]!r} "
+                                        f"manifest={values[2]!r}")
+        provenance[key] = values[0]
 
+    # --- 单批门禁 ---
+    gate = report.get("release_gate")
+    if not isinstance(gate, dict):
+        _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                             detail=f"release_gate 不是 dict（{type(gate).__name__}）")
+        gate = {}
     if gate.get("evaluated") is not True:
         _aggregation_failure(failures, "release_gate_not_evaluated", batch=batch)
     if gate.get("all_qualifying") is not True:
@@ -714,34 +758,87 @@ def _check_batch(batch: str, artifacts: dict, failures: list) -> dict:
     if gate.get("passed") is not True:
         _aggregation_failure(failures, "release_gate_not_passed", batch=batch)
 
+    observations = gate.get("observations")
+    if not isinstance(observations, list):
+        _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                             detail=f"observations 不是 list（{type(observations).__name__}）")
+        observations = []
+
+    # --- load / machine 签名（必须是**完整**的 dict）---
+    load = report.get("load")
+    if not isinstance(load, dict) or not load:
+        _aggregation_failure(failures, "load_signature_invalid", batch=batch,
+                             detail=f"load 不是非空 dict：{load!r}")
+        load = None
+    else:
+        absent = [k for k in LOAD_KEYS if k not in load]
+        if absent:
+            _aggregation_failure(failures, "load_signature_invalid", batch=batch,
+                                 detail=f"load 缺少 {absent}")
+            load = None
+    machine = report.get("machine")
+    if not isinstance(machine, dict) or not machine:
+        _aggregation_failure(failures, "machine_signature_invalid", batch=batch,
+                             detail=f"machine 不是非空 dict：{machine!r}")
+        machine = None
+    else:
+        absent = [k for k in MACHINE_KEYS if k not in machine]
+        if absent:
+            _aggregation_failure(failures, "machine_signature_invalid", batch=batch,
+                                 detail=f"machine 缺少 {absent}")
+            machine = None
+
+    # --- 逐观测：类型、样本量、digest、来源、预算 ---
     digests: list[str] = []
-    for observation in gate.get("observations") or []:
-        source = str(observation.get("source"))
-        processes = int(observation.get("processes") or 0)
-        steps = int(observation.get("steps") or 0)
-        observed = list(observation.get("digests") or [])
+    for observation in observations:
+        if not isinstance(observation, dict):
+            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                                 detail=f"observation 不是 dict（{type(observation).__name__}）")
+            continue
+        source_label = str(observation.get("source"))
+        try:
+            processes = int(observation.get("processes"))
+            steps = int(observation.get("steps"))
+        except (TypeError, ValueError, OverflowError):
+            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                                 detail=f"{source_label} processes/steps 不可转换："
+                                        f"{observation.get('processes')!r}/"
+                                        f"{observation.get('steps')!r}")
+            continue
+        observed = observation.get("digests")
+        if not isinstance(observed, list):
+            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                                 detail=f"{source_label} digests 不是 list")
+            continue
         if processes < MATRIX_MIN_PROCESSES or steps < MATRIX_MIN_STEPS:
             _aggregation_failure(failures, "observation_underpowered", batch=batch,
-                                 detail=f"{source} processes={processes} steps={steps}")
+                                 detail=f"{source_label} processes={processes} steps={steps}")
         if not observed:
-            _aggregation_failure(failures, "digests_empty", batch=batch, detail=source)
+            _aggregation_failure(failures, "digests_empty", batch=batch, detail=source_label)
         elif len(observed) != processes:
             _aggregation_failure(failures, "digest_count_mismatch", batch=batch,
-                                 detail=f"{source} len={len(observed)} processes={processes}")
+                                 detail=f"{source_label} len={len(observed)} processes={processes}")
         if observation.get("corrector_time_limit_source") != (
             CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT
         ):
             _aggregation_failure(failures, "override_observation_in_release_evidence",
-                                 batch=batch, detail=source)
+                                 batch=batch, detail=source_label)
         budget = observation.get("effective_corrector_time_limit_s")
-        if budget is None or abs(float(budget) - PRODUCTION_CORRECTOR_TIME_LIMIT_S) > 1e-12:
-            _aggregation_failure(failures, "budget_not_production_default",
-                                 batch=batch, detail=f"{source} budget={budget}")
-        digests.extend(observed)
+        try:
+            budget_ok = budget is not None and abs(
+                float(budget) - PRODUCTION_CORRECTOR_TIME_LIMIT_S
+            ) <= 1e-12
+        except (TypeError, ValueError, OverflowError):
+            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
+                                 detail=f"{source_label} budget 不可转换：{budget!r}")
+            budget_ok = False
+            budget = None
+        if not budget_ok:
+            _aggregation_failure(failures, "budget_not_production_default", batch=batch,
+                                 detail=f"{source_label} budget={budget!r}")
+        digests.extend(str(d) for d in observed)
 
-    time_limit_failures = sum(
-        1 for s in artifacts["stage_statuses"] if int(s) == 1
-    )
+    time_limit_failures = sum(1 for s in artifacts["stage_statuses"] if s == 1)
     if time_limit_failures:
         _aggregation_failure(failures, "time_limit_failure", batch=batch,
                              detail=f"{time_limit_failures} 次")
@@ -750,6 +847,9 @@ def _check_batch(batch: str, artifacts: dict, failures: list) -> dict:
         _aggregation_failure(failures, "batch_distinct_not_one", batch=batch,
                              detail=f"distinct={distinct}")
 
+    if len(failures) > malformed and not digests and not observations:
+        # 结构性失败：不再继续派生无意义的摘要
+        pass
     return {
         "batch": batch,
         "path": str(artifacts["path"]),
@@ -759,21 +859,30 @@ def _check_batch(batch: str, artifacts: dict, failures: list) -> dict:
         "release_gate_passed": gate.get("passed"),
         "observed_processes": len(digests),
         "observed_distinct": distinct,
-        "observations": [str(o.get("source")) for o in gate.get("observations") or []],
+        "observations": [str(o.get("source")) for o in observations
+                         if isinstance(o, dict)],
         "time_limit_failures": time_limit_failures,
-        "effective_corrector_time_limit_s": report.get("effective_corrector_time_limit_s"),
-        "corrector_time_limit_source": report.get("corrector_time_limit_source"),
+        "effective_corrector_time_limit_s": provenance.get(
+            "effective_corrector_time_limit_s"
+        ),
+        "corrector_time_limit_source": provenance.get("corrector_time_limit_source"),
+        "production_corrector_time_limit_s": provenance.get(
+            "production_corrector_time_limit_s"
+        ),
+        "load": load,
+        "machine": machine,
         "digests": digests,
     }
 
 
 def aggregate_release_batches(run_dirs: list) -> dict:
-    """把**同一负载**的多个**独立批次** run 聚合起来（M5.4i §10）。
+    """把**同一负载**的多个**独立批次** run 聚合起来（M5.4i §10/§11）。
 
     **fail closed**：批次不足、路径/run_id 重复、批间负载或机器不一致、任一批次
     manifest 非 success、revision 缺失或不一致、门禁未通过、样本量不足、
-    `summary.parquet` 缺失或不可读、输入产物不完整 —— 一律 `passed=false`，
-    并在 `failures` 里给出**具体批次与原因**。任何字段/文件缺失都**不得**默认通过。
+    `summary.parquet` 缺失/不可读/status 非法、输入产物不完整、provenance 三方不等、
+    顶层生产默认判据不成立 —— 一律 `passed=false`，并在 `failures` 里给出
+    **具体批次 + 原因码 + detail**。**任何**异常都不允许泄漏到调用方。
     """
     failures: list[dict] = []
     normalized: list[Path] = []
@@ -794,49 +903,45 @@ def aggregate_release_batches(run_dirs: list) -> dict:
         artifacts = _read_batch(path, failures)
         if artifacts is None:
             continue
-        batches.append(_check_batch(path.name, artifacts, failures))
-        all_digests.extend(batches[-1]["digests"])
+        summary = _check_batch(artifacts, failures)
+        if summary is None:
+            continue
+        batches.append(summary)
+        all_digests.extend(summary["digests"])
 
     if len(run_dirs) < MIN_RELEASE_BATCHES:
-        _aggregation_failure(
-            failures, "too_few_batches", batch=None,
-            detail=f"{len(run_dirs)} < {MIN_RELEASE_BATCHES}",
-        )
+        _aggregation_failure(failures, "too_few_batches", batch=None,
+                             detail=f"{len(run_dirs)} < {MIN_RELEASE_BATCHES}")
 
     run_ids = [b["manifest_run_id"] for b in batches if b["manifest_run_id"]]
     if len(run_ids) != len(set(run_ids)):
         _aggregation_failure(failures, "duplicate_run_id", batch=None,
-                             detail=str(sorted(run_ids)))
+                             detail=str(sorted(run_ids, key=_total_order_key)))
 
     revisions = {b["manifest_revision"] for b in batches if b["manifest_revision"]}
     if len(revisions) > 1:
         _aggregation_failure(failures, "inconsistent_revision", batch=None,
-                             detail=str(sorted(revisions)))
+                             detail=str(sorted(revisions, key=_total_order_key)))
 
-    # 负载 / 机器签名必须完全一致（保持「本机候选」语义）
-    signatures: dict[str, set] = {"load": set(), "machine": set()}
-    for raw in run_dirs:
-        try:
-            report = json.loads((Path(raw) / "report.json").read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 - 已在 _read_batch 记录
-            continue
-        signatures["load"].add(
-            json.dumps(report.get("load") or {}, sort_keys=True, ensure_ascii=False)
-        )
-        signatures["machine"].add(
-            json.dumps(report.get("machine") or {}, sort_keys=True, ensure_ascii=False)
-        )
-    if len(signatures["load"]) > 1:
+    # 签名比较**只看已验证的摘要**（避免二次读取产生不一致）
+    load_signatures = {
+        json.dumps(b["load"], sort_keys=True, ensure_ascii=False)
+        for b in batches if b["load"] is not None
+    }
+    machine_signatures = {
+        json.dumps(b["machine"], sort_keys=True, ensure_ascii=False)
+        for b in batches if b["machine"] is not None
+    }
+    if len(load_signatures) > 1:
         _aggregation_failure(failures, "inconsistent_load_signature", batch=None,
-                             detail=json.dumps(sorted(signatures["load"]), ensure_ascii=False))
-    if len(signatures["machine"]) > 1:
+                             detail=json.dumps(sorted(load_signatures), ensure_ascii=False))
+    if len(machine_signatures) > 1:
         _aggregation_failure(failures, "inconsistent_machine_signature", batch=None)
 
-    sources = sorted({b["corrector_time_limit_source"] for b in batches})
-    budgets = sorted(
-        {b["effective_corrector_time_limit_s"] for b in batches},
-        key=lambda x: (x is None, x),
-    )
+    sources = sorted({b["corrector_time_limit_source"] for b in batches},
+                     key=_total_order_key)
+    budgets = sorted({b["effective_corrector_time_limit_s"] for b in batches},
+                     key=_total_order_key)
     every_batch_distinct_one = bool(batches) and all(
         b["observed_distinct"] == 1 for b in batches
     )
@@ -851,6 +956,38 @@ def aggregate_release_batches(run_dirs: list) -> dict:
         _aggregation_failure(failures, "budget_not_production_default", batch=None,
                              detail=str(budgets))
 
+    # --- 生产默认判据必须**显式**成立（不再是「没有 failure 就算过」）---
+    production_caps = {b["production_corrector_time_limit_s"] for b in batches}
+    production_default_ok = bool(
+        batches
+        and production_default_only
+        and budgets == [PRODUCTION_CORRECTOR_TIME_LIMIT_S]
+        and production_caps == {PRODUCTION_CORRECTOR_TIME_LIMIT_S}
+        and every_batch_passed
+        and time_limit_failures == 0
+    )
+    if not production_default_ok:
+        _aggregation_failure(
+            failures, "production_default_not_satisfied", batch=None,
+            detail=(
+                f"production_default_only={production_default_only} "
+                f"production_budget={sorted(production_caps, key=_total_order_key)} "
+                f"effective_budget={budgets} "
+                f"every_batch_passed={every_batch_passed} "
+                f"time_limit_failures={time_limit_failures}"
+            ),
+        )
+
+    passed = bool(
+        not failures
+        and len(batches) >= MIN_RELEASE_BATCHES
+        and production_default_only
+        and every_batch_distinct_one
+        and aggregate_distinct == 1
+        and time_limit_failures == 0
+        and every_batch_passed
+    )
+
     return {
         "batches": len(batches),
         "min_batches": MIN_RELEASE_BATCHES,
@@ -863,13 +1000,15 @@ def aggregate_release_batches(run_dirs: list) -> dict:
         "corrector_time_limit_sources": sources,
         "effective_corrector_time_limit_s": budgets,
         "production_default_only": production_default_only,
-        "load_signatures": sorted(signatures["load"]),
-        "machine_signatures": sorted(signatures["machine"]),
+        "production_default_satisfied": production_default_ok,
+        "load_signatures": sorted(load_signatures),
+        "machine_signatures": sorted(machine_signatures),
         "revisions": sorted(revisions),
         "failures": failures,
-        # 发布候选判据：**无任何失败原因**才算通过（fail closed）。
-        "passed": not failures,
+        # 发布候选判据：**无任何失败原因**且全部显式条件同时成立（fail closed）。
+        "passed": passed,
     }
+
 
 
 def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict:
