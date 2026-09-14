@@ -395,12 +395,23 @@ def _step_digest(transition) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def encode_options_json(value) -> str | None:
+    """审计表 `options` 列的**固定**编码规则（M5.4h2）。
+
+    `None`（未执行的 skipped 阶段）保持 `null`；其余一律写规范 JSON 字符串。
+    **不得**同时保留 `options_json` 兼容列。
+    """
+    if value is None:
+        return None
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def _skipped_row(*, step, stage, budget, pid, entry, node_cap, wall_clock_disabled, reason):
     """未执行的阶段也必须有一条显式行 —— 不得静默少行。"""
     return {
         "budget_s": budget, "node_cap": node_cap, "pid": pid, "step": step,
         "stage": stage, "skipped": True, "skip_reason": reason,
-        "options_json": None, "status": None, "success": None, "message": None,
+        "options": None, "status": None, "success": None, "message": None,
         "elapsed_s": None, "remaining_deadline_s": None,
         "mip_node_count": None, "mip_dual_bound": None, "mip_gap": None,
         "unavailable_fields": None,
@@ -444,7 +455,7 @@ def build_stage_rows(
                 "budget_s": budget, "node_cap": node_cap, "pid": pid,
                 "step": step["step"], "stage": stage, "skipped": False,
                 "skip_reason": None,
-                "options_json": json.dumps(call.get("options") or {}, sort_keys=True),
+                "options": encode_options_json(call.get("options")),
                 "status": call.get("status"),
                 "success": call.get("success"),
                 "message": call.get("message"),
@@ -470,7 +481,7 @@ def build_stage_rows(
                 "budget_s": budget, "node_cap": node_cap, "pid": pid,
                 "step": step["step"], "stage": "extra", "skipped": False,
                 "skip_reason": None,
-                "options_json": json.dumps(call.get("options") or {}, sort_keys=True),
+                "options": encode_options_json(call.get("options")),
                 "status": call.get("status"), "success": call.get("success"),
                 "message": call.get("message"), "elapsed_s": call.get("elapsed_s"),
                 "remaining_deadline_s": call.get("remaining_deadline_s"),
@@ -491,44 +502,133 @@ def build_stage_rows(
     return rows
 
 
-def evaluate_release_gate(observations: list[dict], *, default_budget: float | None = None) -> dict:
-    """**发布门禁**：默认 0.05 s corrector 是否可跨进程复现。
+def evaluate_release_gate(
+    observations: list[dict],
+    *,
+    default_budget: float | None = None,
+    mode_observations: list[dict] | None = None,
+) -> dict:
+    """**发布门禁**：决定 M5.4 阶段是否放行。
 
     与 `classify`（预算**归因**）是两个概念：归因成立**不能**让本门禁放行。
+
+    `observations` 是**默认预算**的跨进程观测；`mode_observations` 是平台确定性
+    观测（corrector 关闭时本应逐位一致）。两者**任一**不一致都必须拦下阶段放行 ——
+    本门禁是阶段放行的**唯一**依据。
     """
     budget = DEFAULT_CORRECTOR_TIME_LIMIT_S if default_budget is None else default_budget
-    if not observations:
+    observations = list(observations or [])
+    mode_observations = list(mode_observations or [])
+    combined = observations + mode_observations
+    if not combined:
         return {
             "evaluated": False,
             "default_budget_s": budget,
             "observations": [],
+            "mode_observations": [],
             "blocked": False,
             "all_qualifying": None,
-            "reason": f"本 run 未测量默认 {budget}s corrector（只测了 corrector 关闭）",
+            "unstable_sources": [],
+            "reason": f"本 run 未测量默认 {budget}s corrector，也未测平台确定性",
         }
-    blocked = any(int(o["distinct"]) > 1 for o in observations)
+    unstable_sources = [o["source"] for o in combined if int(o["distinct"]) > 1]
+    blocked = bool(unstable_sources)
     all_qualifying = all(
         o.get("processes", 0) >= MATRIX_MIN_PROCESSES and o.get("steps", 0) >= MATRIX_MIN_STEPS
-        for o in observations
+        for o in combined
     )
-    unstable = [o["source"] for o in observations if int(o["distinct"]) > 1]
+    if blocked:
+        reason = (
+            f"发布门禁 blocked：{unstable_sources} 跨进程不一致（distinct>1）；"
+            f"默认预算 {budget}s 不得放行"
+        )
+    elif not observations:
+        reason = (
+            f"未测量默认 {budget}s corrector；平台确定性观测 distinct=1，"
+            "但不足以放行该阶段"
+        )
+    else:
+        reason = f"默认预算 {budget}s 的观测全部 distinct=1"
     return {
-        "evaluated": True,
+        "evaluated": bool(observations),
         "default_budget_s": budget,
         "observations": observations,
+        "mode_observations": mode_observations,
         "blocked": blocked,
         "all_qualifying": all_qualifying,
-        "reason": (
-            f"默认预算 {budget}s 在 {unstable} 上跨进程不一致（distinct>1）"
-            if blocked else f"默认预算 {budget}s 的观测全部 distinct=1"
-        ),
+        "unstable_sources": unstable_sources,
+        "reason": reason,
+    }
+
+
+def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict:
+    """阶段放行状态 —— **只**由 `release_gate` 决定。
+
+    语义分层（M5.4h2 固定）：
+
+    - `release_gate`：决定 M5.4 阶段是否放行；
+    - `overall`（本函数返回）：反映 `release_gate` 的最终阶段状态；
+    - `attribution`：只解释不稳定的原因，**绝不**决定是否放行。
+
+    故 `overall["blocked"] == release_gate["blocked"]` 恒成立；`attribution` 只作为
+    上下文记录，不参与判定。返回的 `status` / `exit_code` 供 manifest 与进程退出码共用，
+    三者**不得**各自推导。
+    """
+    blocked = bool(release_gate.get("blocked"))
+    evaluated = bool(release_gate.get("evaluated"))
+    if blocked:
+        conclusion = "blocked"
+    elif not evaluated:
+        conclusion = "not_evaluated"
+    elif not release_gate.get("all_qualifying", False):
+        conclusion = "insufficient_evidence"
+    else:
+        conclusion = "released"
+    return {
+        "overall": {
+            "blocked": blocked,
+            "conclusion": conclusion,
+            "decided_by": "release_gate",
+            "reason": release_gate.get("reason", ""),
+            "unstable_sources": list(release_gate.get("unstable_sources", [])),
+            "attribution_conclusion": (
+                attribution.get("conclusion") if attribution else None
+            ),
+        },
+        "status": "failed" if blocked else "success",
+        "exit_code": 1 if blocked else 0,
+    }
+
+
+def node_cap_binding(rows: list[dict], *, cap: int) -> dict:
+    """由**实测**求解事实判断节点上限是否真的绑定。
+
+    只统计已执行、且有 `mip_node_count` 的行；未执行的 skipped 行不参与。
+    `cap_bound` 仅在观测到的节点数触及 cap 时为真 —— **未绑定就不是候选**。
+    """
+    observed = [
+        float(row["mip_node_count"])
+        for row in rows
+        if not row.get("skipped") and row.get("mip_node_count") is not None
+    ]
+    maximum = max(observed) if observed else None
+    return {
+        "cap": int(cap),
+        "observed_solves": len(observed),
+        "max_mip_node_count": maximum,
+        "cap_bound": bool(maximum is not None and maximum >= float(cap)),
     }
 
 
 def candidate_notes(
     attribution: dict | None, release_gate: dict, node_cap_matrix: dict
 ) -> dict:
-    """候选值的**如实**表述：不得声称跨机器保证；节点上限仅在替代语义臂稳定时才是候选。"""
+    """候选值的**如实**表述。
+
+    - 不得声称跨机器保证；
+    - 节点上限**只有**在「实测确实绑定」且「替代语义臂稳定」时才可能是候选；
+      未绑定时必须给出 `node_cap_effective=false` 与 `node_cap_candidate=false`。
+    """
     notes: dict = {
         "default_budget_still_blocked": bool(release_gate["blocked"]),
         "machine_local": True,
@@ -537,25 +637,56 @@ def candidate_notes(
     if attribution and attribution.get("conclusion") == "wall_clock_budget_dominant":
         notes["wall_clock_candidate"] = (
             "存在「较大预算档稳定、较小档不稳定」的证据；"
-            "可采用经证明非绑定的 wall-clock 预算（候选值随机器变化）"
+            "可采用经证明非绑定的 wall-clock 预算（候选值随机器变化，仅本机）"
         )
     alternatives = {
         cap: m for cap, m in node_cap_matrix.items()
         if m.get("wall_clock_disabled_in_probe")
     }
+    bound_caps = sorted(
+        (cap for cap, m in alternatives.items() if m.get("cap_bound")), key=int
+    )
+    stable_caps = sorted(
+        (cap for cap, m in alternatives.items() if m.get("distinct") == 1), key=int
+    )
+    effective = bool(bound_caps)
+    if effective:
+        reasons = ["node_cap_observed_to_bind"]
+    else:
+        reasons = [
+            "observed_mip_node_count_below_cap",
+            "stability_attributable_to_wall_clock_disabled_in_probe",
+            "mip_max_nodes_not_a_production_candidate",
+        ]
+    notes["node_cap_effective"] = effective
+    notes["node_cap_candidate"] = bool(effective and stable_caps)
+    notes["node_cap_reasons"] = reasons
     if alternatives:
-        stable = [cap for cap, m in alternatives.items() if m["distinct"] == 1]
         notes["node_cap_alternative_semantics"] = {
             "caps_tested": sorted(alternatives, key=int),
-            "stable_caps": sorted(stable, key=int),
-            "candidate": bool(stable),
-            "note": (
-                "替代语义臂（移除 time_limit）稳定 -> 可作为候选"
-                if stable else
-                "替代语义臂仍不稳定 -> **不得**作为候选"
-            ),
+            "stable_caps": stable_caps,
+            "cap_bound_caps": bound_caps,
+            "max_mip_node_count_by_cap": {
+                cap: m.get("max_mip_node_count")
+                for cap, m in sorted(alternatives.items(), key=lambda kv: int(kv[0]))
+            },
+            "node_cap_effective": effective,
+            "node_cap_candidate": bool(effective and stable_caps),
+            "note": _node_cap_note(effective=effective, stable_caps=stable_caps),
         }
     return notes
+
+
+def _node_cap_note(*, effective: bool, stable_caps: list[str]) -> str:
+    if not effective:
+        return (
+            "实测 mip_node_count 未触及任何被注入的 cap，节点上限**从未绑定**；"
+            "替代语义臂的稳定性只能归因于 probe 内关闭 wall-clock（移除 time_limit），"
+            "**不得**把 mip_max_nodes 描述为生产候选或确定性根因 -> 不得作为候选"
+        )
+    if stable_caps:
+        return "节点上限确实绑定且替代语义臂稳定 -> 仅可称为**本机**候选，不构成跨机器保证"
+    return "节点上限确实绑定但替代语义臂仍不稳定 -> **不得**作为候选"
 
 
 def classify(matrix: dict) -> dict:
@@ -849,8 +980,6 @@ def main(argv: list[str] | None = None) -> int:
                 "budget_s": MODE_BUDGETS[mode],
             })
         decisions[mode] = decide(mode, digests)
-    overall = overall_conclusion(decisions)
-    blocked = overall["blocked_modes"]
 
     # --- 矩阵（M5.4h；仅在显式 --time-limits 时执行）---
     matrix: dict[str, dict] = {"budgets": {}}
@@ -883,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
     for cap in (args.node_caps or []):
         cap_digests: list[str] = []
         cap_reasons: list[str] = []
+        cap_rows: list[dict] = []
         wall_clock_disabled = args.node_cap_arm == "alternative_semantics"
         for _ in range(args.runs):
             entry = run_in_subprocess(
@@ -896,7 +1026,10 @@ def main(argv: list[str] | None = None) -> int:
                 node_cap=cap, wall_clock_disabled=wall_clock_disabled,
             )
             stage_rows.extend(rows_for_cap)
+            cap_rows.extend(rows_for_cap)
             cap_reasons.extend(r["corrector_reason"] for r in rows_for_cap)
+        # 绑定判据必须来自**实测**求解事实，不得由「臂稳定」反推。
+        binding = node_cap_binding(cap_rows, cap=cap)
         node_cap_matrix[str(cap)] = {
             "arm": args.node_cap_arm,
             "wall_clock_disabled_in_probe": bool(wall_clock_disabled),
@@ -904,11 +1037,14 @@ def main(argv: list[str] | None = None) -> int:
             "processes": len(cap_digests),
             "digests": cap_digests,
             "reasons": sorted({r for r in cap_reasons if r}),
+            "cap_bound": binding["cap_bound"],
+            "max_mip_node_count": binding["max_mip_node_count"],
+            "observed_solves": binding["observed_solves"],
         }
 
     attribution = classify(matrix) if args.time_limits else None
 
-    # --- release_gate（与 attribution **分离**）---
+    # --- release_gate（与 attribution **分离**；阶段放行的**唯一**依据）---
     gate_observations: list[dict] = []
     if "on" in decisions:
         gate_observations.append({
@@ -922,16 +1058,22 @@ def main(argv: list[str] | None = None) -> int:
             "source": f"matrix.{_key}", "distinct": _entry["distinct"],
             "processes": _entry["processes"], "steps": _entry["steps"],
         })
-    release_gate = evaluate_release_gate(gate_observations)
-    if attribution is not None:
-        overall = {
-            "blocked": attribution["conclusion"] != "wall_clock_budget_dominant",
-            "blocked_modes": [] if attribution["conclusion"] == "wall_clock_budget_dominant"
-                              else ["on"],
-            "conclusion": attribution["conclusion"],
-            "reason": attribution["reason"],
-        }
-        blocked = overall["blocked_modes"]
+    # 平台确定性：corrector 关闭时本应逐位一致；不一致则整个测量平台不可信，同样不放行。
+    mode_observations: list[dict] = []
+    if "off" in decisions:
+        mode_observations.append({
+            "source": "modes.off", "distinct": decisions["off"]["distinct"],
+            "processes": args.runs, "steps": args.steps,
+        })
+    release_gate = evaluate_release_gate(
+        gate_observations, mode_observations=mode_observations
+    )
+    # overall / manifest.status / 退出码共用**同一**推导，三者不得各自计算。
+    phase = phase_status(release_gate, attribution=attribution)
+    overall = phase["overall"]
+    status = phase["status"]
+    # modes 级汇总只作审计记录，**不参与**放行判定（attribution 更不能）。
+    modes_overall = {**overall_conclusion(decisions), "decides_release": False}
     rows = base_rows + stage_rows
 
     # 命令账本：用 shlex.join 完整记录**全部有效参数**（M5.4c 的标准）
@@ -993,11 +1135,19 @@ def main(argv: list[str] | None = None) -> int:
         "node_cap_matrix": node_cap_matrix,
         "attribution": attribution,
         "overall": overall,
+        "modes_overall": modes_overall,
+        "status": status,
         "provenance_note": provenance_note(load),
     }
 
     # 默认 0.05s 不稳定 -> manifest 必须 failed，**即使归因成立**
-    status = "failed" if release_gate["blocked"] else "success"
+    failure_classification = None
+    if overall["blocked"]:
+        failure_classification = (
+            "corrector_off_nonreproducible"
+            if "modes.off" in release_gate["unstable_sources"]
+            else "corrector_nonreproducible"
+        )
     run_dir = write_run(
         run_id,
         config=config,
@@ -1008,25 +1158,28 @@ def main(argv: list[str] | None = None) -> int:
         command=command,
         dependency_lock_hash=_dependency_lock_hash(),
         status=status,
-        failure_classification=(
-            decisions[blocked[0]]["failure_classification"] if blocked else None
-        ),
+        failure_classification=failure_classification,
     )
     if args.emit_provenance:
         (run_dir / "provenance.json").write_text(
             json.dumps(provenance, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
-    # 汇总表：不得只在任务卡写人工摘要
+    # 汇总表：不得只在任务卡写人工摘要。
+    # 阶段状态与 report / manifest **共用** phase_status 的同一推导，不得各自计算。
     summary = {
         "probe": "m54h_budget_attribution",
         "matrix": matrix,
-        "conclusion": attribution["conclusion"] if attribution else overall["conclusion"],
-        "reason": attribution["reason"] if attribution else "（未请求矩阵；见 modes 结论）",
+        "conclusion": overall["conclusion"],
+        "status": status,
+        "exit_code": phase["exit_code"],
+        "overall": overall,
+        "release_gate": release_gate,
+        "attribution_conclusion": attribution["conclusion"] if attribution else None,
+        "attribution_reason": attribution["reason"] if attribution else "（未请求矩阵）",
         "load": load,
         "load_injected": bool(load["load_injected"]),
         "machine": machine,
-        "release_gate": release_gate,
         "stage_field_count": len(stage_rows),
         "candidate_notes": candidate_notes(attribution, release_gate, node_cap_matrix),
     }
@@ -1041,7 +1194,9 @@ def main(argv: list[str] | None = None) -> int:
     for mode, decision in decisions.items():
         print(f"  {mode:>3}: runs={decision['runs']} distinct={decision['distinct']} "
               f"-> {decision['conclusion']}")
-    return 1 if release_gate["blocked"] else 0
+    print(f"  release_gate.blocked={release_gate['blocked']} -> overall={overall['conclusion']} "
+          f"(manifest={status}, exit={phase['exit_code']})")
+    return phase["exit_code"]
 
 
 def _git_revision() -> str:
