@@ -346,3 +346,120 @@ def test_train_docstring_records_what_m54_still_owes():
     docstring = ast.get_docstring(ast.parse(source)) or ""
     for token in ("M5.4", "入口", "泄漏", "corrector"):
         assert token in docstring, f"顶部说明缺少 M5.4 未完成项：{token}"
+
+
+# --- 7. 回归：随机批下「要么成功、要么完全不改」 ----------------------------
+
+def _random_signal(rng, size: int) -> list[float]:
+    kind = int(rng.integers(0, 5))
+    if kind == 0:
+        return rng.uniform(0.0, 20.0, size=size).tolist()
+    if kind == 1:
+        return rng.uniform(-20.0, 0.0, size=size).tolist()
+    if kind == 2:
+        return rng.uniform(-20.0, 20.0, size=size).tolist()
+    if kind == 3:
+        return [0.0] * size
+    values = rng.uniform(0.0, 20.0, size=size)
+    values[0] = float("nan")
+    return values.tolist()
+
+
+def _signal_ok(values) -> bool:
+    arr = np.asarray(values, dtype=np.float64)
+    return bool(arr.size > 0 and np.all(np.isfinite(arr)) and np.all(arr >= 0.0))
+
+
+def test_dry_run_is_all_or_nothing_under_random_signals(monkeypatch):
+    """随机批：dry_run_update 要么成功并更新乘子，要么抛错且三态逐位不变。"""
+    rng = np.random.default_rng(20240914)
+    succeeded = failed = 0
+    for _ in range(60):
+        size = int(rng.integers(1, 5))
+        business = _random_signal(rng, size)
+        carbon = _random_signal(rng, size)
+        expected_ok = _signal_ok(business) and _signal_ok(carbon)
+
+        policy, lagrangian, optimizer = run(monkeypatch, business=business, carbon=carbon)
+        before = snapshot(policy, lagrangian, optimizer)
+
+        try:
+            result = dry_run_update(
+                None, policy, lagrangian, optimizer,
+                steps=len(business), seed=0, corrector_on=False, generator=None,
+            )
+        except (ValueError, TypeError) as exc:
+            failed += 1
+            assert not expected_ok, f"合法信号被拒绝：{business} / {carbon}：{exc}"
+            assert_untouched(policy, lagrangian, optimizer, before)
+        else:
+            succeeded += 1
+            assert expected_ok, f"非法信号被接受：{business} / {carbon}"
+            assert result["constraint_means"]["business"] == pytest.approx(
+                float(np.mean(business))
+            )
+            assert result["constraint_means"]["carbon"] == pytest.approx(float(np.mean(carbon)))
+            assert lagrangian.state_dict() != before["lagrangian"]
+    assert succeeded > 0 and failed > 0, f"样本必须同时覆盖成功与失败：{succeeded}/{failed}"
+
+
+def test_preflight_also_guards_the_corrector_path(monkeypatch):
+    """corrector_on=True 时同样必须预检（该分支不得绕过检查）。"""
+    policy, lagrangian, optimizer = run(
+        monkeypatch, business=[-3.0, 1.0], carbon=GOOD_CARBON
+    )
+    before = snapshot(policy, lagrangian, optimizer)
+    with pytest.raises(ValueError, match="business"):
+        dry_run_update(None, policy, lagrangian, optimizer, steps=2, seed=0,
+                       corrector_on=True, corrector_time_limit_s=0.05, generator=None)
+    assert_untouched(policy, lagrangian, optimizer, before)
+
+
+def test_preflight_runs_exactly_once_regardless_of_buffer_size(monkeypatch):
+    calls: list[int] = []
+    for size in (1, 2, 5):
+        business = [1.0] * size
+        carbon = [2.0] * size
+        policy, lagrangian, optimizer = run(monkeypatch, business=business, carbon=carbon)
+        real_validate = lag_mod.validate_constraint_signals
+
+        def spy(batch_signals, expected, _real=real_validate):
+            calls.append(len(np.asarray(batch_signals["business"])))
+            return _real(batch_signals, expected)
+
+        with monkeypatch.context() as ctx:
+            ctx.setattr(train_mod, "validate_constraint_signals", spy)
+            dry_run_update(None, policy, lagrangian, optimizer, steps=size, seed=0,
+                           corrector_on=False, generator=None)
+    assert calls == [1, 2, 5]
+
+
+def test_preflight_failure_message_names_constraint_and_reason(monkeypatch):
+    """预检的报错必须指出具体约束与失败原因（供定位上游缺陷）。"""
+    for business, carbon, expected in (
+        ([1.0, -2.0], GOOD_CARBON, "business"),
+        (GOOD_BUSINESS, [1.0, -2.0], "carbon"),
+    ):
+        policy, lagrangian, optimizer = run(monkeypatch, business=business, carbon=carbon)
+        before = snapshot(policy, lagrangian, optimizer)
+        with pytest.raises(ValueError) as excinfo:
+            dry_run_update(None, policy, lagrangian, optimizer, steps=2, seed=0,
+                           corrector_on=False, generator=None)
+        message = str(excinfo.value)
+        assert expected in message, message
+        assert "batch_signals" in message, message
+        assert_untouched(policy, lagrangian, optimizer, before)
+
+
+def test_non_finite_signals_are_rejected_even_earlier_by_the_buffer(monkeypatch):
+    """非有限信号由 `RolloutBuffer.add` 更早拦下，根本到不了预检。
+
+    这是两层防御：buffer 保证入库数据有限，预检保证约束物理域。
+    两者都必须在任何 forward / optimizer.step 之前完成。
+    """
+    policy, lagrangian, optimizer = run(monkeypatch, carbon=[2.0, float("nan")])
+    before = snapshot(policy, lagrangian, optimizer)
+    with pytest.raises((ValueError, TypeError), match="finite|非有限"):
+        dry_run_update(None, policy, lagrangian, optimizer, steps=2, seed=0,
+                       corrector_on=False, generator=None)
+    assert_untouched(policy, lagrangian, optimizer, before)
