@@ -77,9 +77,11 @@ def test_explicit_budget_is_recorded_in_config_manifest_and_report(tmp_path):
 def test_child_records_every_stage_field():
     """子进程探针必须产出逐步 × 逐阶段的完整字段。"""
     entry = probe.run_once("on", steps=2, budget=0.25, record_stages=True)
-    assert entry["steps"], "必须记录每一步"
-    assert len(entry["steps"]) == 2
-    for step in entry["steps"]:
+    detail = entry["steps_detail"]
+    assert detail, "必须记录每一步"
+    assert len(detail) == 2
+    assert entry["steps"] == 2  # 计数仍为 int（M5.4e 契约）
+    for step in detail:
         assert set(step) >= {"step", "digest", "corrector_failure", "corrector_reason", "calls"}
         assert step["calls"], f"step {step['step']} 没有记录任何阶段调用"
         for call in step["calls"]:
@@ -92,14 +94,14 @@ def test_child_records_every_stage_field():
 
 def test_two_stages_are_recorded_per_step_when_the_solver_converges():
     entry = probe.run_once("on", steps=1, budget=0.25, record_stages=True)
-    stages = [call["stage"] for call in entry["steps"][0]["calls"]]
+    stages = [call["stage"] for call in entry["steps_detail"][0]["calls"]]
     assert stages[:2] == ["A", "B"], f"阶段顺序必须是 A、B，实际 {stages}"
 
 
 def test_unavailable_solver_fields_are_null_with_a_reason():
     """字段不可用必须写 null **并给出原因**，不得伪造数值。"""
     entry = probe.run_once("on", steps=1, budget=0.25, record_stages=True)
-    for call in entry["steps"][0]["calls"]:
+    for call in entry["steps_detail"][0]["calls"]:
         for field in ("mip_node_count", "mip_dual_bound", "mip_gap"):
             if call[field] is None:
                 assert field in call["unavailable_fields"], f"{field} 为 null 但未说明原因"
@@ -109,7 +111,7 @@ def test_unavailable_solver_fields_are_null_with_a_reason():
 
 def test_remaining_deadline_matches_the_time_limit_actually_passed():
     entry = probe.run_once("on", steps=2, budget=0.25, record_stages=True)
-    for step in entry["steps"]:
+    for step in entry["steps_detail"]:
         for call in step["calls"]:
             assert call["remaining_deadline_s"] == pytest.approx(
                 call["options"]["time_limit"], abs=1e-9
@@ -119,7 +121,7 @@ def test_remaining_deadline_matches_the_time_limit_actually_passed():
 def test_reported_options_carry_the_deterministic_flags():
     """记录的是**实际传入**的 options —— 必须含 M5.4g 接线的确定性选项。"""
     entry = probe.run_once("on", steps=1, budget=0.25, record_stages=True)
-    for call in entry["steps"][0]["calls"]:
+    for call in entry["steps_detail"][0]["calls"]:
         assert call["options"]["random_seed"] == 0
         assert call["options"]["parallel"] is False
 
