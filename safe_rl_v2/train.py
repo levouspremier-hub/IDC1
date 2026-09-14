@@ -6,8 +6,15 @@
 **M5.3 已完成**：乘子目标接线 —— actor 有效优势为
 `A_reward − lambda_business·A_business − lambda_carbon·A_carbon`，
 乘子取自 `Lagrangian`（更新前的值），约束信号的非负物理域与状态自洽性均已强制。
-**M5.4 尚未完成**：训练入口（本模块仍无 `__main__`）、未来信息泄漏门禁、
-corrector 开/关下的可复现性。
+**M5.4 尚未完成**：未来信息泄漏门禁、corrector 开/关下的跨进程可复现性。
+（训练入口见 §「命令行」；本模块**不写 checkpoint**。）
+
+**预检的位置**：`validate_constraint_signals` 在 **rollout 收集之后**、
+**训练更新阶段的任何 forward / backward / optimizer.step 之前**执行。
+注意它**不**在采样前向之前 —— `collect_rollout` 内部会调用 `policy.act(...)`，
+而 `act` 会执行 `forward`。预检保证的是「**更新阶段零副作用**」，
+使得非法约束信号既不更新参数、也不推进 optimizer 状态。
+
 **不得**据此宣称训练有效、收敛或任何性能改善。
 
 红线：
@@ -27,10 +34,20 @@ corrector 开/关下的可复现性。
 
 from __future__ import annotations
 
+import argparse
+import json
+import sys
+import time
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
 import torch
 
-from safe_rl_v2.buffer import RolloutBuffer
+from contracts import CONTRACT_VERSION_ID
+from envs.idc_price_env import IDCPriceEnv20D
+from runs.writer import write_run
+from safe_rl_v2.buffer import ACTION_DIM, RolloutBuffer
 from safe_rl_v2.lagrangian import Lagrangian, validate_constraint_signals
 from safe_rl_v2.models import compute_three_value_targets
 from safe_rl_v2.policy import SafePPOPolicy
@@ -111,9 +128,10 @@ def dry_run_update(
     terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
     truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
 
-    # --- M5.3f 预检：必须在**任何** forward / backward / optimizer.step 之前 ---
-    # 复用 lagrangian 的共享校验规则（不在此处另写一套）。失败时本函数尚未产生
-    # 任何副作用：policy 参数、optimizer state、Lagrangian state 三者都不变。
+    # --- M5.3f 预检：在**更新阶段**的 forward / backward / optimizer.step 之前 ---
+    # 注意位置在 rollout 收集**之后**（采样前向已由 collect_rollout 完成），
+    # 保证的是「更新阶段零副作用」：失败时 policy 参数、optimizer state、
+    # Lagrangian state 三者都不变。复用 lagrangian 的共享校验规则。
     validate_constraint_signals(
         {"business": business_violations, "carbon": carbon_emissions},
         lagrangian.constraints,
@@ -261,3 +279,314 @@ def dry_run_update(
             "carbon_mean": float(carbon_term.mean().item()),
         },
     }
+
+
+# ===========================================================================
+# M5.4a 命令行入口
+# ===========================================================================
+#
+# 用法：`python -m safe_rl_v2.train [--synthetic-smoke] ...`（Makefile 用 `make train`）。
+#
+# 定位：**可执行但不冒充正式实验**。
+# - 默认路径要求 M1.2 的真实冻结数据；缺失时**明确失败**，绝不回退到合成数据；
+# - 只有显式 `--synthetic-smoke` 才跑一次短 dry rollout，产物全程自我标注
+#   `synthetic=true` / `dry_run_only=true`，claims 三项全为 false。
+# 本入口**不写 checkpoint**，也**不实现** PPO ratio/clip/熵项。
+
+DEFAULT_STEPS = 8
+DEFAULT_SEED = 0
+DEFAULT_CORRECTOR_TIME_LIMIT_S = 0.05
+# 环境三类种子必须同时显式给定：任一为 None 时 env 使用 default_rng(None) 熵源，
+# 跨进程不可复现。**不允许**留空。
+DEFAULT_ENV_SEED_KWARGS = {"task_seed": 0, "server_seed": 0, "forecast_seed": 300000}
+
+SCENARIO_TYPE_SYNTHETIC = "synthetic_internal_env"
+SCENARIO_TYPE_FROZEN_REAL = "frozen_real_scenario"
+
+REPORT_STATEMENT = (
+    "合成 dry-run：仅验证「采集 → 一次更新」闭环可执行，并产出运行产物。"
+    "本 run **不是**正式训练、**不是**性能评估、**不构成**论文结果；"
+    "不得据此宣称训练有效或收敛。"
+)
+
+_DRY_RUN_CLAIMS = {
+    "trained": False,
+    "performance_evaluated": False,
+    "convergence_claimed": False,
+}
+
+
+class TrainEntryError(RuntimeError):
+    """入口级失败（参数、数据阻塞、运行期错误）；用于写失败 manifest。"""
+
+
+def _dependency_lock_hash() -> str | None:
+    import hashlib
+
+    lock = Path(__file__).resolve().parent.parent / "uv.lock"
+    return hashlib.sha256(lock.read_bytes()).hexdigest() if lock.exists() else None
+
+
+def _unique_run_id(base_dir: Path, seed: int) -> str:
+    """默认 run_id 每次调用唯一，使重复运行不覆盖既有成功结果。"""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    base = f"train_synthetic_s{seed}_{stamp}"
+    candidate, suffix = base, 1
+    while (base_dir / candidate / "manifest.json").exists():
+        candidate = f"{base}_{suffix}"
+        suffix += 1
+    return candidate
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="python -m safe_rl_v2.train",
+        description="安全 PPO v2 训练入口（默认要求 M1.2 真实数据；合成 dry-run 需显式开关）",
+    )
+    parser.add_argument(
+        "--synthetic-smoke", action="store_true",
+        help="显式启用合成短 dry rollout（产物标注 synthetic=true，不代表正式训练）",
+    )
+    parser.add_argument("--steps", type=int, default=DEFAULT_STEPS)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="policy 采样 RNG 种子")
+    parser.add_argument("--corrector", choices=("on", "off"), default="off")
+    parser.add_argument("--corrector-time-limit-s", type=float, default=None)
+    parser.add_argument("--base-dir", default="runs")
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--task-seed", type=int, default=DEFAULT_ENV_SEED_KWARGS["task_seed"])
+    parser.add_argument("--server-seed", type=int, default=DEFAULT_ENV_SEED_KWARGS["server_seed"])
+    parser.add_argument(
+        "--forecast-seed", type=int, default=DEFAULT_ENV_SEED_KWARGS["forecast_seed"]
+    )
+    parser.add_argument("--horizon", type=int, default=24)
+    return parser
+
+
+def _require_frozen_real_scenario(args) -> None:
+    """正式路径：必须要有 M1.2 的真实冻结数据；缺失即失败，**不回退合成**。"""
+    from scenario.scenario import build_scenario
+
+    try:
+        build_scenario("train", start="2023-01-01", horizon=args.horizon, forecast_cutoff=4)
+    except (FileNotFoundError, KeyError, ValueError) as exc:
+        raise TrainEntryError(
+            "训练默认路径需要 M1.2 的冻结真实数据，当前不可用，故明确失败"
+            "（**不**回退到合成数据）。原始错误："
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _run_synthetic_dry_run(args, run_id: str, env_seed_kwargs: dict[str, int]) -> dict:
+    """跑一次合成短 dry rollout，返回 report。只调用既有 dry_run_update。"""
+    from safe_rl_v2.lagrangian import UNIT_KG_CO2E, UNIT_VIOLATION_TASK_STEPS, ConstraintSpec
+
+    corrector_on = args.corrector == "on"
+    if corrector_on and args.corrector_time_limit_s is None:
+        raise TrainEntryError(
+            "--corrector on 时必须显式给出 --corrector-time-limit-s（禁止隐式默认值）"
+        )
+
+    env = IDCPriceEnv20D(horizon=args.horizon, **env_seed_kwargs)
+    # 权重初始化借用全局 RNG，但用 fork_rng 还原：调用方的全局 RNG 状态不受影响。
+    # **采样**另有显式 generator（红线：不得用全局 RNG 采样、不得靠重播种伪造可复现）。
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(args.seed)
+        policy = SafePPOPolicy(obs_dim=env.obs_dim)
+    lagrangian = Lagrangian((
+        ConstraintSpec(
+            name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+        ConstraintSpec(
+            name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
+            learning_rate=0.01, max_multiplier=100.0,
+        ),
+    ))
+    optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
+    generator = torch.Generator()
+    generator.manual_seed(args.seed)
+
+    return dry_run_update(
+        env, policy, lagrangian, optimizer,
+        steps=args.steps, seed=args.seed,
+        corrector_on=corrector_on,
+        corrector_time_limit_s=args.corrector_time_limit_s if corrector_on else None,
+        generator=generator,
+    )
+
+
+def _config_for(args, run_id: str, env_seed_kwargs: dict[str, int], scenario_type: str) -> dict:
+    from runs.writer import git_revision
+
+    return {
+        "entry": "python -m safe_rl_v2.train",
+        "run_id": run_id,
+        "synthetic": scenario_type == SCENARIO_TYPE_SYNTHETIC,
+        "dry_run_only": True,
+        "scenario_type": scenario_type,
+        "action_dim": ACTION_DIM,
+        "contract_version": CONTRACT_VERSION_ID,
+        "env_seed_kwargs": dict(env_seed_kwargs),
+        "policy_seed": int(args.seed),
+        "policy_rng": "explicit torch.Generator（不使用 torch.manual_seed 采样）",
+        "corrector_on": args.corrector == "on",
+        "corrector_time_limit_s": (
+            float(args.corrector_time_limit_s) if args.corrector == "on" else None
+        ),
+        "steps": int(args.steps),
+        "horizon": int(args.horizon),
+        "gamma": GAMMA,
+        "lam": LAM,
+        "code_revision": git_revision(),
+        "units": dict(METRIC_UNITS),
+    }
+
+
+def _report_for(result: dict, scenario_type: str) -> dict:
+    return {
+        "entry": "python -m safe_rl_v2.train",
+        "synthetic": scenario_type == SCENARIO_TYPE_SYNTHETIC,
+        "dry_run_only": True,
+        "statement": REPORT_STATEMENT,
+        "claims": dict(_DRY_RUN_CLAIMS),
+        "scenario_type": scenario_type,
+        "steps_collected": result["steps_collected"],
+        "corrector_on": result["corrector_on"],
+        "multipliers_pre_update": result["multipliers_pre_update"],
+        "multipliers_post_update": result["multipliers_post_update"],
+        "constraint_means": result["constraint_means"],
+        "constraint_units": result["constraint_units"],
+        "actor_loss": result["actor_loss"],
+        "critic_loss": result["critic_loss"],
+        "actor_objective_source": result["actor_objective_source"],
+        "units": result["units"],
+    }
+
+
+def _metrics_for(result: dict) -> pd.DataFrame:
+    buffer = result["buffer"]
+    return pd.DataFrame(
+        [
+            {
+                "step": index,
+                "reward": t.reward,
+                "business_violations": t.business_cost,
+                "carbon_emissions_kg": t.carbon_cost,
+                "electricity_cost_sgd": t.electricity_cost_sgd,
+                "old_raw_log_prob": t.old_raw_log_prob,
+                "raw_exec_differs": bool(not np.array_equal(t.raw_action, t.exec_action)),
+                "terminated": bool(t.terminated),
+                "truncated": bool(t.truncated),
+            }
+            for index, t in enumerate(buffer.transitions)
+        ]
+    )
+
+
+def _write_failed_run(
+    run_id: str, base_dir: Path, command: str, seed: int, error: Exception
+) -> None:
+    """已获得 run_id 的失败也必须落一个失败 manifest。"""
+    try:
+        write_run(
+            run_id,
+            config={
+                "entry": "python -m safe_rl_v2.train",
+                "run_id": run_id,
+                "dry_run_only": True,
+                "status": "failed",
+            },
+            metrics=pd.DataFrame(),
+            report={
+                "entry": "python -m safe_rl_v2.train",
+                "dry_run_only": True,
+                "synthetic": False,
+                "statement": "本 run 失败，不代表任何训练或评估结果。",
+                "claims": dict(_DRY_RUN_CLAIMS),
+                "failure": f"{type(error).__name__}: {error}",
+            },
+            base_dir=str(base_dir),
+            seed=seed,
+            command=command,
+            status="failed",
+            failure_classification=type(error).__name__,
+        )
+    except Exception as exc:  # pragma: no cover - 失败写失败 manifest 本身失败时不再掩盖
+        print(f"警告：写失败 manifest 时又出错：{exc}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.steps <= 0:
+        parser.error(f"--steps 必须为正整数，got {args.steps}")
+    if args.corrector_time_limit_s is not None and args.corrector_time_limit_s <= 0.0:
+        parser.error(
+            f"--corrector-time-limit-s 必须为正数，got {args.corrector_time_limit_s}"
+        )
+    if args.corrector == "off" and args.corrector_time_limit_s is not None:
+        parser.error(
+            "--corrector off 时不得给出 --corrector-time-limit-s"
+            "（传入预算会让调用方误以为修正器已生效）"
+        )
+
+    env_seed_kwargs = {
+        "task_seed": args.task_seed,
+        "server_seed": args.server_seed,
+        "forecast_seed": args.forecast_seed,
+    }
+    for key, value in env_seed_kwargs.items():
+        if value is None:
+            parser.error(f"--{key.replace('_', '-')} 不得为空（env 会用熵源，导致不可复现）")
+
+    base_dir = Path(args.base_dir)
+    run_id = args.run_id or _unique_run_id(base_dir, args.seed)
+    command = " ".join(
+        ["python -m safe_rl_v2.train", f"--steps {args.steps}", f"--seed {args.seed}",
+         f"--corrector {args.corrector}", f"--run-id {run_id}"]
+        + (["--synthetic-smoke"] if args.synthetic_smoke else [])
+    )
+
+    try:
+        if not args.synthetic_smoke:
+            _require_frozen_real_scenario(args)
+            raise TrainEntryError(  # pragma: no cover - 数据到位前不可达
+                "真实数据路径的正式训练尚未实现（需 M5.4/M5.5 的训练循环）"
+            )
+        scenario_type = SCENARIO_TYPE_SYNTHETIC
+        result = _run_synthetic_dry_run(args, run_id, env_seed_kwargs)
+        config = _config_for(args, run_id, env_seed_kwargs, scenario_type)
+        report = _report_for(result, scenario_type)
+        metrics = _metrics_for(result)
+    except Exception as exc:
+        print(f"训练入口失败：{type(exc).__name__}: {exc}", file=sys.stderr)
+        _write_failed_run(run_id, base_dir, command, args.seed, exc)
+        return 1
+
+    try:
+        run_dir = write_run(
+            run_id,
+            config=config,
+            metrics=metrics,
+            report=report,
+            base_dir=str(base_dir),
+            seed=args.seed,
+            command=command,
+            scenario_hash=None,
+            data_hash=None,
+            dependency_lock_hash=_dependency_lock_hash(),
+            status="success",
+        )
+    except FileExistsError as exc:
+        print(f"拒绝覆盖既有成功 run：{exc}", file=sys.stderr)
+        return 2
+
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    print(f"\nrun 产物：{run_dir}")
+    print(f"scenario_type={scenario_type}  synthetic=true  dry_run_only=true  trained=false")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

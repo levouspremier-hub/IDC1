@@ -8,6 +8,9 @@ MAIN_CHAIN_DIRS := scenario contracts checkpointing planning safe_rl_v2 evaluati
 MAIN_CHAIN_FILES := idc_model/allocation.py safe_rl/corrector_wrapper.py runs/writer.py
 MAIN_PY := $(shell find $(MAIN_CHAIN_DIRS) -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null) $(foreach f,$(MAIN_CHAIN_FILES),$(wildcard $(f)))
 
+# 训练入口参数透传：make train TRAIN_ARGS='--synthetic-smoke --steps 8 --seed 0 --corrector off'
+TRAIN_ARGS ?=
+
 .PHONY: check test contract probe smoke train eval figures report
 
 # 主门禁：依次运行 ruff -> mypy -> pytest -m 'not slow'
@@ -36,7 +39,7 @@ smoke:
 
 train:
 	@test -f safe_rl_v2/train.py || { echo "模块未完成：safe_rl_v2/train.py 不存在（M5.4 交付）"; exit 1; }
-	@uv run python safe_rl_v2/train.py
+	@uv run python -m safe_rl_v2.train $(TRAIN_ARGS)
 
 eval:
 	@test -d evaluation || { echo "模块未完成：evaluation/ 不存在（M6.2 交付）"; exit 1; }

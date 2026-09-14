@@ -281,15 +281,48 @@ def test_train_source_does_not_step_env_directly():
     assert offenders == [], f"train.py 不得直接调用 env.step（行 {offenders}）"
 
 
-def test_train_source_does_not_reseed_global_torch_rng():
+def _fork_rng_line_ranges(tree: ast.Module) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.With):
+            continue
+        for item in node.items:
+            call = item.context_expr
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "fork_rng"
+            ):
+                ranges.append((node.lineno, max(node.end_lineno or node.lineno, node.lineno)))
+    return ranges
+
+
+def test_train_source_never_reseeds_the_global_torch_rng_without_restoring_it():
+    """`torch.manual_seed` 只允许用于**权重初始化**，且必须在 `fork_rng` 内（状态还原）。
+
+    M5.4a 迁移：此前禁止 train.py 出现任何 `manual_seed`；CLI 的权重初始化需要一个
+    确定性的起点，故放宽为「必须包在 `torch.random.fork_rng` 里」——
+    **采样仍只消耗调用方注入的显式 generator**（见
+    `test_collector_with_explicit_generator_leaves_global_rng_untouched`）。
+    """
+    tree = _train_ast()
+    ranges = _fork_rng_line_ranges(tree)
     offenders = [
         node.lineno
-        for node in ast.walk(_train_ast())
+        for node in ast.walk(tree)
+        # 只针对**全局**的 torch.manual_seed；`generator.manual_seed(...)` 是显式
+        # Generator 实例的正规用法，正是红线要求的那种写法。
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "manual_seed"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "torch"
+        and not any(start <= node.lineno <= end for start, end in ranges)
     ]
-    assert offenders == [], f"train.py 不得重新播种全局 Torch RNG（行 {offenders}）"
+    assert offenders == [], (
+        f"train.py 的 torch.manual_seed 必须包在 torch.random.fork_rng 内（还原全局状态），"
+        f"违规行 {offenders}"
+    )
 
 
 # --- 5. RNG 注入语义 ---
