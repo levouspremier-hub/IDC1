@@ -647,6 +647,16 @@ LOAD_KEYS = ("mode", "concurrency", "program", "load_injected")
 MACHINE_KEYS = ("platform", "machine", "python", "cpu_count")
 
 
+def _coerce_int(value) -> int | None:
+    """把外部值转成 int；不可转换（含 None/容器/NaN）返回 None，**不抛异常**。"""
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _total_order_key(value):
     """任意类型的全序键：混入 str/None/float 时 `sorted` 也**不得**抛异常。"""
     return (type(value).__name__, repr(value))
@@ -729,7 +739,7 @@ def _check_batch(artifacts: dict, failures: list) -> dict | None:
     # --- 三方恒等：config == report == manifest，逐字段 ---
     provenance: dict = {}
     for key in PROVENANCE_KEYS:
-        values = []
+        values: list = []
         for obj, label in ((config, "config"), (report, "report"), (manifest, "manifest")):
             if key not in obj:
                 _aggregation_failure(failures, "manifest_provenance_missing",
@@ -796,10 +806,9 @@ def _check_batch(artifacts: dict, failures: list) -> dict | None:
                                  detail=f"observation 不是 dict（{type(observation).__name__}）")
             continue
         source_label = str(observation.get("source"))
-        try:
-            processes = int(observation.get("processes"))
-            steps = int(observation.get("steps"))
-        except (TypeError, ValueError, OverflowError):
+        processes = _coerce_int(observation.get("processes"))
+        steps = _coerce_int(observation.get("steps"))
+        if processes is None or steps is None:
             _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
                                  detail=f"{source_label} processes/steps 不可转换："
                                         f"{observation.get('processes')!r}/"
