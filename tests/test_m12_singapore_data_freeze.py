@@ -15,6 +15,7 @@ from scripts.fetch_singapore_data import (  # type: ignore[import-not-found]
     EXPECTED_HALF_HOUR_ROWS,
     EXPECTED_HOURLY_ROWS,
     SINGAPORE_TIMEZONE,
+    main,
     validate_singapore_2024,
     write_manifest,
 )
@@ -184,3 +185,20 @@ def test_manifest_records_permissions_and_no_silent_resampling(
         assert source["raw_file_frozen_at_utc"]
         assert source["timezone"] == SINGAPORE_TIMEZONE
         assert source["raw_units"]
+
+
+def test_cli_verification_output_is_machine_readable_json(
+    complete_bundle: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(
+        [
+            "--raw-dir",
+            str(complete_bundle),
+            "--manifest",
+            str(tmp_path / "singapore_2024.json"),
+            "--verify",
+            "--write-manifest",
+        ]
+    ) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["year"] == 2024
