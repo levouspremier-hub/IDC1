@@ -288,13 +288,23 @@ def validate_singapore_2024(raw_dir: Path | str) -> dict[str, Any]:
     }
 
 
-def _manifest_from_report(report: dict[str, Any]) -> dict[str, Any]:
+def _parse_freeze_timestamp(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"--frozen-at-utc must be ISO-8601, got {value!r}") from error
+    if parsed.tzinfo is None:
+        raise ValueError("--frozen-at-utc must include an explicit UTC offset")
+    return parsed.astimezone(UTC).replace(microsecond=0).isoformat()
+
+
+def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict[str, Any]:
     return {
         "schema": "m1.2-singapore-2024-v1",
         "year": report["year"],
         "timezone": report["timezone"],
         "verification": {
-            "verified_at_utc": report["verified_at_utc"],
+            "frozen_at_utc": frozen_at_utc,
             "missing_data_policy": "reject; no imputation",
             "raw_files": report["files"],
         },
@@ -307,6 +317,9 @@ def _manifest_from_report(report: dict[str, Any]) -> dict[str, Any]:
                 "terms_url": EMC_TERMS_URL,
                 "automation": "manual browser download only",
                 "downloaded_product": "USEP and Demand Forecast annual ZIP",
+                "raw_file_frozen_at_utc": frozen_at_utc,
+                "timezone": SINGAPORE_TIMEZONE,
+                "raw_units": {"usep": "SGD/MWh", "demand_forecast": "MW"},
             },
             "emc_metered_generation": {
                 "url": EMC_PRICES_URL,
@@ -316,11 +329,17 @@ def _manifest_from_report(report: dict[str, Any]) -> dict[str, Any]:
                 "terms_url": EMC_TERMS_URL,
                 "automation": "manual browser download only",
                 "downloaded_product": "Metered Generation by Facility Type annual ZIP",
+                "raw_file_frozen_at_utc": frozen_at_utc,
+                "timezone": SINGAPORE_TIMEZONE,
+                "raw_units": {"net_injection": "MWh per half-hour settlement period"},
             },
             "sasea_demand": {
                 "url": SASEA_URL,
                 "license": "CC-BY-4.0",
                 "downloaded_product": "data.zip / data/raw/raw_SGP_demand.csv",
+                "raw_file_frozen_at_utc": frozen_at_utc,
+                "timezone": SINGAPORE_TIMEZONE,
+                "raw_units": {"system_demand": "MW"},
             },
             "open_meteo_weather": {
                 "url": OPEN_METEO_URL,
@@ -335,6 +354,9 @@ def _manifest_from_report(report: dict[str, Any]) -> dict[str, Any]:
                     "timezone": SINGAPORE_TIMEZONE,
                     "models": "era5",
                 },
+                "raw_file_frozen_at_utc": frozen_at_utc,
+                "timezone": SINGAPORE_TIMEZONE,
+                "raw_units": report["weather"]["raw_units"],
             },
         },
         "series": {
@@ -381,11 +403,16 @@ def _manifest_from_report(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def write_manifest(report: dict[str, Any], output: Path | str) -> None:
+def write_manifest(report: dict[str, Any], output: Path | str, *, frozen_at_utc: str) -> None:
     path = Path(output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps(_manifest_from_report(report), ensure_ascii=False, indent=2, sort_keys=True)
+        json.dumps(
+            _manifest_from_report(report, frozen_at_utc=_parse_freeze_timestamp(frozen_at_utc)),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -439,6 +466,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--write-manifest", action="store_true", help="write manifest after successful verification"
     )
+    parser.add_argument(
+        "--frozen-at-utc",
+        help="required ISO-8601 timestamp when writing the immutable manifest",
+    )
     return parser.parse_args(argv)
 
 
@@ -450,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         _copy_input(args.sasea_zip, args.raw_dir / REQUIRED_FILES["sasea_demand"])
         if args.fetch_weather:
             url = fetch_open_meteo_weather(args.raw_dir / REQUIRED_FILES["open_meteo_weather"])
-            print(f"[downloaded] Open-Meteo weather: {url}")
+            print(f"[downloaded] Open-Meteo weather: {url}", file=sys.stderr)
         if not args.verify and not args.write_manifest:
             print(
                 "No verification requested; use --verify --write-manifest "
@@ -459,8 +490,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         report = validate_singapore_2024(args.raw_dir)
         if args.write_manifest:
-            write_manifest(report, args.manifest)
-            print(f"[manifest] {args.manifest}")
+            if args.frozen_at_utc is None:
+                raise ValueError("--write-manifest requires --frozen-at-utc")
+            write_manifest(report, args.manifest, frozen_at_utc=args.frozen_at_utc)
+            print(f"[manifest] {args.manifest}", file=sys.stderr)
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     except (FileNotFoundError, ValueError, zipfile.BadZipFile, OSError) as error:

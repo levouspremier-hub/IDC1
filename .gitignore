@@ -80,6 +80,8 @@
 !data/grid_node_sensitivity/.gitkeep
 !data/raw/
 !data/raw/*.md
+!data/manifest/
+!data/manifest/*.json
 !report_tools/
 !report_tools/*.py
 !legacy/

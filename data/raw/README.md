@@ -1,48 +1,79 @@
-# 原始数据需求与阻塞记录（M1.2）
+# Singapore-2024 原始场景数据（M1.2 已完成）
 
-> 状态：**阻塞**。未能获得无需登录的连续一年匹配数据；本文件记录需求、源目录与解除条件。
-> 依据：`docs/IMPLEMENTATION_PLAN.md` §4 M1.2。原始大文件不入 git。
+本目录冻结 M1.2 的原始输入；所有大型数据文件均被 `.gitignore` 忽略，**不得**
+提交、镜像或重新分发。Git 只跟踪
+[`data/manifest/singapore_2024.json`](../manifest/singapore_2024.json) 中的来源、
+用途、时间轴和 SHA-256。
 
-## 1. 数据需求（M1.2 验收）
+## 1. 冻结范围
 
-| 数据 | 频率 | 覆盖 | 单位 |
-|---|---|---|---|
-| 新加坡 USEP（电价） | 半小时 | 连续一年 | SGD/MWh → 转 SGD/kWh |
-| 系统需求（负荷） | 半小时 | 连续一年，与价格一一对齐 | MW |
-| 温度 | 逐时 | 同年同地点 | °C |
-| 太阳辐照/光伏 | 逐时 | 同年同地点 | W/m² 或 kW |
-| 风速/风电 | 逐时 | 同年同地点 | m/s 或 kW |
+选择 2024（闰年）作为唯一的首版真实场景年。所有时间戳均为
+`Asia/Singapore`（UTC+8）。核验结果：
 
-每源需：URL、许可证、下载日期、时区、原单位、sha256。缺失时段、插补规则、禁用时段写入 `data/manifest/*.json`。
-
-## 2. 源目录
-
-| 数据 | 来源 | 访问要求 |
+| 原始文件 | 原始字段与语义 | 粒度 / 完整性 |
 |---|---|---|
-| USEP / 需求 | EMC NEMS 门户 `https://www.nems.emcsg.com/en/nems-prices` | 需注册/登录（CSV 最多 31 天/文件，5 年滚动期） |
-| 电价统计（月均） | EMA SES 第 5 章 `https://www.ema.gov.sg/resources/singapore-energy-statistics/chapter5` | 仅统计图表，非半小时 CSV |
-| 温度/辐照/风 | MSS / NEA / ERA5（CDS） | 需注册账户 |
+| `emc_usep_2024.zip` | 最终 USEP；`DEMAND (MW)` 只是**需求预测**，不得作为实际系统负荷 | 17,568 半小时点 |
+| `sasea_demand_2024.zip` | `raw_SGP_demand.csv` 的实际系统负荷（MW） | 17,568 半小时点 |
+| `emc_metered_generation_2024.zip` | NEMS IGS 的实际净注入（MWh/半小时） | 17,568 半小时点；不是太阳能专属、不是 IDC 本地 PV 实测 |
+| `open_meteo_era5_2024.csv` | ERA5 温度、10m 风速、GHI | 8,784 小时点；M1.2 不重采样 |
 
-## 3. 阻塞状态（未验证，非已证明）
+任何重复、缺口、无穷/非数值或错误时区都会使本地核验失败；本卡**没有插补**。
+天气字段为“前一小时平均”的原始 GHI，后续读入器若要映射到半小时，必须另开卡、
+固定规则并记录该规则，不能静默复制或前向填充。
 
-**尚未验证到满足「许可证明确 + 匿名访问 + 全年连续高频粒度」的完整数据组合**，而非已证明「无数据源」。具体：
+### 1.1 冻结后不可变与只读
 
-1. 官方 EMC NEMS 页面公开提供 USEP/需求下载入口，并说明单次 CSV 的时间范围限制（最多 31 天/文件）；但完整一年的高频数据是否一定需要登录/账户，本卡未实际完成验证（`WebFetch` 无法匿名访问该门户，但这是网络限制，不构成「登录必需」的证明）。
-2. 未找到满足全年连续粒度的无需登录公开镜像（GitHub/Kaggle 等搜索无结果）——但不能据此断言「不存在」。
-3. 可再生数据（温度/辐照/风）主流源（MSS/NEA/ERA5）通常需账户，但未逐一验证匿名下载路径。
-4. EMA / data.gov.sg 的公开统计数据不足以替代所需的高频全年联合数据。
+四个 raw 文件**已冻结**并完成 SHA-256 核验；raw 文件**不入 Git**（仅 manifest 入库）。
+**冻结后路径只读**：不得重新下载、不得覆盖、不得改动已冻结的 hash、时间戳或来源。
 
-结论：本卡阻塞于「未能验证到满足要求的数据组合」，而非「已证明无数据源」。解除需实际验证某源的匿名/许可证/全年粒度，或另行授权账户下载。
+### 1.2 语义隔离（不得扩大解释）
 
-## 4. 现状
+- `emc_metered_generation_2024.zip` 是 **national intermittent generation**，
+  **不是** IDC 本地 PV，也**不是**太阳能专属。
+- ERA5 的 10m 风速是**国家级网格再分析**，**不是**本地风电实测。
 
-仓库现有数据仅 `data/grid_scenarios/nems_singapore/raw/USEP_May-2026.csv`（14 天，672 行，手动下载），远非连续一年。
+### 1.3 尚未冻结的项：是「未验证/未冻结」，不是「已证明不存在」
 
-## 5. 解除条件（满足其一即可继续 M1.2）
+半小时碳强度、IDC 本地 PV 实测、IDC 本地风电实测**尚未冻结**。对这些项，
+本卡的结论是「**尚未验证到满足要求的数据组合**」，**不得**表述为
+「已证明不存在」或「无数据源」——两者是不同的认识论状态，混用会误导下游决策。
+它们**不得**由默认曲线、常数或重复日伪造。
 
-- 用户提供无需登录、许可证明确、连续一年价格 + 负荷 + 可再生的公开数据源；
-- 或用户另行授权账户/凭证下载（当前授权范围外）。
+## 2. 来源与权利
 
-## 6. 不作之事
+| 来源 | 用途 | 权利 / 使用限制 |
+|---|---|---|
+| [EMC NEMS Prices](https://www.nems.emcsg.com/nems-prices) | USEP 年度 ZIP、Metered Generation by Facility Type 年度 ZIP | [EMC 条款](https://www.home.emcsg.com/terms-and-conditions)：仅个人/非商业使用；不可重新分发；禁止自动化系统性收集。研究者须用网页“By Year → 2024”手工下载，脚本不会访问 EMC。 |
+| [SASEA / Zenodo](https://zenodo.org/records/17175212) | `data.zip` 内的 `data/raw/raw_SGP_demand.csv` | CC BY 4.0；原始文件和 Zenodo 包的 hash 均写入 manifest。 |
+| [Open-Meteo Historical API](https://open-meteo.com/en/docs/historical-weather-api) | ERA5 历史温度、GHI、风速 | CC BY 4.0；免费接口仅限非商业用途。查询参数及实际返回网格坐标冻结在 manifest。 |
 
-不重复日填全年、不用默认曲线/合成数据冒充真实数据、不绕过访问控制。
+本卡没有冻结可公开追溯的**半小时新加坡碳强度**、IDC 本地 PV 实测或 IDC 本地
+风电实测。它们不得由默认曲线或常数伪造；若下游需要，必须有单独的数据口径卡。
+
+## 3. 本地获取和核验
+
+将两个从 EMC 网页手工取得的 2024 年度 ZIP、Zenodo 的 `data.zip` 放在任意本地路径，
+然后运行：
+
+```bash
+uv run python scripts/fetch_singapore_data.py \
+  --usep-zip /path/to/USEP_from_01-Jan-2024_to_31-Dec-2024.zip \
+  --generation-zip /path/to/MG_from_01-Jan-2024_to_31-Dec-2024.zip \
+  --sasea-zip /path/to/data.zip \
+  --raw-dir data/raw/singapore_2024 \
+  --fetch-weather \
+  --verify \
+  --write-manifest \
+  --frozen-at-utc '2026-09-14T07:28:44+00:00'
+```
+
+`--fetch-weather` 仅发起一次明确的 Open-Meteo 非商业查询；EMC 从不由脚本下载。
+`--write-manifest` 必须显式提供冻结时刻，以防重复核验无意改写已冻结的 manifest。
+成功时 stdout 是机器可读 JSON；原始文件始终留在忽略目录。
+
+## 4. 下游边界
+
+M1.2 只负责原始数据和可审计冻结，尚不实现 `ScenarioBundle` 的正式数据读取。
+后续正式读取卡必须：校验 manifest SHA、将 USEP 除以 1000、以 SASEA 负荷作为唯一
+实际系统负荷来源，并显式解决小时到半小时、GHI/IGS 到 IDC PV、风速到风电以及碳
+因子的建模口径；不得退回合成数据。

@@ -174,7 +174,7 @@ def test_manifest_records_permissions_and_no_silent_resampling(
 ) -> None:
     report = validate_singapore_2024(complete_bundle)
     manifest_path = tmp_path / "singapore_2024.json"
-    write_manifest(report, manifest_path)
+    write_manifest(report, manifest_path, frozen_at_utc="2026-09-14T07:28:44+00:00")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert manifest["series"]["load"]["semantic"] == "actual system demand"

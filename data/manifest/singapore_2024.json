@@ -1,0 +1,133 @@
+{
+  "missing_data_policy": "reject; no imputation",
+  "not_frozen": {
+    "carbon": "No publicly sourced half-hourly Singapore carbon-intensity series is frozen by M1.2a.",
+    "local_pv_kw": "No local IDC PV measurement is claimed; weather GHI and national IGS are raw inputs only.",
+    "wind_generation_kw": "No local IDC wind-generation measurement is claimed; wind speed is retained as weather input."
+  },
+  "resampling_policy": "not performed in M1.2; later reader must declare any hourly-to-half-hour mapping",
+  "schema": "m1.2-singapore-2024-v1",
+  "series": {
+    "intermittent_generation": {
+      "raw_unit": "MWh per half-hour settlement period",
+      "rows": 17568,
+      "semantic": "metered national intermittent generation; not solar-only or a local IDC PV measurement",
+      "source": "emc_metered_generation"
+    },
+    "load": {
+      "raw_unit": "MW",
+      "rows": 17568,
+      "semantic": "actual system demand",
+      "source": "sasea_demand"
+    },
+    "price": {
+      "raw_unit": "SGD/MWh",
+      "rows": 17568,
+      "semantic": "final wholesale USEP; DEMAND column is forecast only",
+      "source": "emc_usep",
+      "stored_unit": "SGD/kWh",
+      "transform": "SGD/MWh -> SGD/kWh (/1000)"
+    },
+    "weather": {
+      "coordinates_returned": {
+        "latitude": "1.5",
+        "longitude": "103.75"
+      },
+      "model": "ERA5",
+      "raw_units": {
+        "shortwave_radiation": "W/m2 (hourly preceding-hour mean GHI)",
+        "temperature_2m": "degC",
+        "wind_speed_10m": "m/s"
+      },
+      "resampling": "not performed in M1.2",
+      "rows": 8784,
+      "timezone": "Asia/Singapore"
+    }
+  },
+  "sources": {
+    "emc_metered_generation": {
+      "automation": "manual browser download only",
+      "downloaded_product": "Metered Generation by Facility Type annual ZIP",
+      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "raw_units": {
+        "net_injection": "MWh per half-hour settlement period"
+      },
+      "rights": "EMC website terms: personal/non-commercial use only; do not redistribute",
+      "terms_url": "https://www.home.emcsg.com/terms-and-conditions",
+      "timezone": "Asia/Singapore",
+      "url": "https://www.nems.emcsg.com/nems-prices"
+    },
+    "emc_usep": {
+      "automation": "manual browser download only",
+      "downloaded_product": "USEP and Demand Forecast annual ZIP",
+      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "raw_units": {
+        "demand_forecast": "MW",
+        "usep": "SGD/MWh"
+      },
+      "rights": "EMC website terms: personal/non-commercial use only; do not redistribute",
+      "terms_url": "https://www.home.emcsg.com/terms-and-conditions",
+      "timezone": "Asia/Singapore",
+      "url": "https://www.nems.emcsg.com/nems-prices"
+    },
+    "open_meteo_weather": {
+      "license": "CC-BY-4.0; free API non-commercial use only",
+      "query": {
+        "end_date": "2024-12-31",
+        "hourly": "temperature_2m,wind_speed_10m,shortwave_radiation",
+        "latitude": 1.3521,
+        "longitude": 103.8198,
+        "models": "era5",
+        "start_date": "2024-01-01",
+        "timezone": "Asia/Singapore",
+        "wind_speed_unit": "ms"
+      },
+      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "raw_units": {
+        "shortwave_radiation": "W/m2 (hourly preceding-hour mean GHI)",
+        "temperature_2m": "degC",
+        "wind_speed_10m": "m/s"
+      },
+      "timezone": "Asia/Singapore",
+      "url": "https://archive-api.open-meteo.com/v1/archive"
+    },
+    "sasea_demand": {
+      "downloaded_product": "data.zip / data/raw/raw_SGP_demand.csv",
+      "license": "CC-BY-4.0",
+      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "raw_units": {
+        "system_demand": "MW"
+      },
+      "timezone": "Asia/Singapore",
+      "url": "https://zenodo.org/records/17175212"
+    }
+  },
+  "timezone": "Asia/Singapore",
+  "verification": {
+    "frozen_at_utc": "2026-09-14T07:28:44+00:00",
+    "missing_data_policy": "reject; no imputation",
+    "raw_files": {
+      "emc_metered_generation": {
+        "bytes": 891699,
+        "path": "data/raw/singapore_2024/emc_metered_generation_2024.zip",
+        "sha256": "4ff06ea9044d17bb24c69515cebd2c518deb0c96e169463b98a028e521ae83fd"
+      },
+      "emc_usep": {
+        "bytes": 354185,
+        "path": "data/raw/singapore_2024/emc_usep_2024.zip",
+        "sha256": "3e86e162526e2c3f499571c607c9b4d414a1648ea3e96fae65461bfaaefd306a"
+      },
+      "open_meteo_weather": {
+        "bytes": 280497,
+        "path": "data/raw/singapore_2024/open_meteo_era5_2024.csv",
+        "sha256": "9732f1b2e740da1917a191191706026c1b9a2c6b99e1eee1023642425cf1ea7d"
+      },
+      "sasea_demand": {
+        "bytes": 15176981,
+        "path": "data/raw/singapore_2024/sasea_demand_2024.zip",
+        "sha256": "1264e192171c36fb86a580974c5b0ae64b41917ab7c2330e369f1791532c3e89"
+      }
+    }
+  },
+  "year": 2024
+}
