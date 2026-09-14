@@ -564,6 +564,22 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
+        raw_write_options = [
+            option
+            for option, supplied in (
+                ("--usep-zip", args.usep_zip),
+                ("--generation-zip", args.generation_zip),
+                ("--sasea-zip", args.sasea_zip),
+                ("--fetch-weather", args.fetch_weather),
+            )
+            if supplied
+        ]
+        if args.manifest.exists() and raw_write_options:
+            options = ", ".join(raw_write_options)
+            raise ValueError(
+                "existing manifest is frozen; refusing raw-write option(s) before any I/O: "
+                f"{options}"
+            )
         _copy_input(args.usep_zip, args.raw_dir / REQUIRED_FILES["emc_usep"])
         _copy_input(args.generation_zip, args.raw_dir / REQUIRED_FILES["emc_metered_generation"])
         _copy_input(args.sasea_zip, args.raw_dir / REQUIRED_FILES["sasea_demand"])
