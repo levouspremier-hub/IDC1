@@ -1,7 +1,7 @@
 # 工程工作交接文档
 
-> 更新时间：2026-09-14（Asia/Shanghai）  
-> 当前代码工作分支：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`  
+> 更新时间：2026-09-14（Asia/Shanghai）
+> 当前代码工作分支：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -238,4 +238,3 @@ uv run python scripts/fetch_singapore_data.py \
 ```
 
 `make train` 的正式路径预期失败，直到 M1.3 完成；这是正确门禁，而不是要修掉的错误。
-
