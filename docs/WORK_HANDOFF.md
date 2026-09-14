@@ -2,9 +2,9 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4h2 返修实现终点 `15b8bdd`
-> （其后仅有本卡的证据与交接 docs 提交）；M5.4h2 已按人工复审意见返修，
-> **仍等待人工复审**。
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i 实现终点 `be26170`
+> （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
+> M5.4i **执行完成，等待人工审查**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -53,7 +53,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `15b8bdd` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链（`15b8bdd` 为 M5.4h2 **返修**实现终点）。 |
+| `p4-safeppo-m51a-rollout-contract` | `be26170` | **当前继续工作分支**；包含 M5.1–M5.4i 的累计链（`be26170` 为 M5.4i 实现终点）。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
@@ -72,7 +72,7 @@ git diff --check
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
 | M5.1–M5.3 | 已有实现，未作正式训练结论 | raw/exec buffer、三 value/GAE、Lagrangian 与状态校验。 | 无真实数据正式训练；训练性能或收敛均不得声称。 |
-| M5.4 | **blocked，正在收尾** | 训练入口、产物账本、corrector 复现与预算归因探针。 | 默认 0.05 s 在受控负载下跨进程不稳定；必须执行本文件第 8 节两卡。 |
+| M5.4 | **blocked，等待人工发布确认** | 训练入口、产物账本、corrector 复现与预算归因探针；M5.4h2 账本勘误；M5.4i 生产默认 0.25 s + 跨批发布证据。 | 默认 0.05 s 在受控负载下跨进程不稳定（M5.4h/M5.4h1/M5.4h2）；M5.4i 已把默认改为 0.25 s 并给出 3 负载 × 3 批的稳定证据。**是否发布由人工决定**，本文件不代为解除 blocked。 |
 | M6–M9 | 未作为当前继续范围 | 有早期骨架/卡片。 | 依赖 M1.3、M5.4 以及人工批准。 |
 
 ## 5. M1.2 原始数据冻结：已通过但范围有限
@@ -137,11 +137,16 @@ M5.4f（终点 `46a8acc`）曾把确定性 options 接到不被 corrector 使用
 - M5.4h：`96f3aa1` → `c842c34`，建立预算矩阵、受控 CPU hog、逐阶段探针。
 - M5.4h1：`07e2224` → `ca17d87`，修复了初版账本中的负载记录、失败状态和节点替代
   实验语义。
-- M5.4h2：`bf4b62a` → `15b8bdd`（**返修完成，仍等待人工复审**），勘误了 `options`
+- M5.4h2：`bf4b62a` → `15b8bdd`（**已通过人工审查并被接受**），勘误了 `options`
   字段名、`overall` 与 release gate 的一致性、以及未绑定节点上限的候选表述。
-- 当前默认预算仍是 **0.05 s**；在受控 hogs4/hogs8 下，独立进程 digest 可分叉，
-  release gate 因此为 blocked。
-- 在本机样本中，0.25 s 及以上没有 observed `time_limit` 且 digest 一致；这是
+- M5.4i：`d6f875b` → `be26170`（**执行完成，等待人工审查**），把生产默认预算集中到
+  唯一来源并改为 **0.25 s**；详见 §8。
+- 默认预算现为 **0.25 s**（`production_default`，唯一来源
+  `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`）；0.05 s 仍为显式 override。
+  M5.4h/M5.4h1/M5.4h2 记录的 **0.05 s blocked** 是**当时**默认值的真实结论，
+  不可用于当前 0.25 s 默认的判定，反之亦然。
+- 在本机样本中，0.25 s 在 no-load / hogs4 / hogs8 三种负载、每负载 3 批 × 36 个
+  独立进程观测下均无 observed `time_limit` 且 digest 一致（M5.4i §9.9）；这是
   **本机候选值**，不是跨机器保证。
 - `mip_max_nodes=100/10000` 的替代语义臂稳定，是因为移除了 `time_limit`；所有可行解
   `mip_node_count=1`，节点上限未实际绑定。它不能被称为“节点上限导致确定性”，
@@ -207,19 +212,42 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 8. 当前授权状态：M5.4i 已开始
+## 8. 当前授权状态：M5.4i 执行完成，等待人工审查
 
-`M5.4h2` **已通过人工审查并被接受**（2026-09-14）。`M5.4i` **已获授权并开始**
-（见 `docs/task_cards/M5.4i.md`）。
+`M5.4h2` **已通过人工审查并被接受**（2026-09-14）。
+`M5.4i` **已执行完成，等待人工审查**（`d6f875b` → `be26170`；
+见 `docs/task_cards/M5.4i.md` §9）。
 
-**M5.4 整体仍为 blocked**：只有 M5.4i 验收**并经下一轮人工审查**后才可能解除；
-在人工发布确认之前，任何产物与文档都**不得**表述为 M5.4 released。
-`M5.4h2` 的执行通过**不构成**正式训练、性能评估或收敛结论。
+**M5.4 整体仍为 blocked**：M5.4i 提供的是**发布候选证据**，是否发布必须由
+**下一轮人工审查**决定。在人工发布确认之前，任何产物与文档都**不得**表述为
+M5.4 released。`M5.4h2` 的执行通过**不构成**正式训练、性能评估或收敛结论。
 
-### M5.4i（进行中）：采纳 0.25 s 为正确器生产默认预算
+### M5.4i（执行完成，等待人工审查）：采纳 0.25 s 为正确器生产默认预算
 
-授权为“选择 B”：生产默认值从 0.05 s 改为 0.25 s；0.05 s 仍为显式 override/诊断值，
-绝不静默改写。开工基线 `cb840c0`。
+授权为“选择 B”，已实现：`planning/corrector.py` 的
+`PRODUCTION_CORRECTOR_TIME_LIMIT_S = 0.25` 是**唯一**来源，四个入口
+（train / smoke / probe_rollout_deterministic / probe_corrector_repro）全部导入它，
+不再各自硬编码。`correct()` 仍要求调用方**显式**传入 `time_limit_s`。
+
+- **provenance 三字段**：`production_corrector_time_limit_s`、
+  `effective_corrector_time_limit_s`、`corrector_time_limit_source`
+  ∈ {`production_default`, `explicit_override`, `disabled`}；source 由「**是否显式给出
+  预算**」决定，与数值无关（显式给 0.25 也记 `explicit_override`）。
+- **release gate 只认生产默认**：只有 `production_default` 观测能进
+  `release_gate.observations`；显式 override 观测进入 `override_observations`，
+  如实记录但绝不参与放行判定。M5.4h2 的 fail-closed 规则保留。
+- **Stage A/B 共享 0.25 s deadline**：由 runtime spy 证明（`planning/model.py` 未改）。
+
+**发布批次证据**（`runs/m54i_release_v2/`，全部在最终实现修订 `aa3294f` 上生成）：
+no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默认 run**
+（另 1 个显式 0.05 诊断 run）。每批 `--modes on --runs 6 --steps 8`、**不传任何显式
+预算**。三种负载的跨批聚合**全部通过**：每负载 36 个进程观测、`aggregate distinct=1`、
+每单批 `distinct=1`、`time_limit failure=0`、`production_default` 且预算 0.25。
+
+`runs/m54i_release/`（v1，修订 `61ba510`）因随后一处 **typing-only** 改动而重生成，
+标记为 **`superseded_pre_typing_fix`**，不属于最终验收证据，保留不删。
+
+**这仍不等于 M5.4 已发布**：0.25 s 是**本机**候选值，跨机器无保证；发布决定权在人工。
 
 - **允许文件**：`planning/corrector.py`（若仅为唯一常量来源所需）、
   `safe_rl_v2/train.py`、`scripts/smoke_main_chain.py`、
@@ -252,7 +280,10 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 
 - 不得说“正式训练已完成”“PPO 已收敛”“性能已评估”；目前从未完成真实数据正式训练。
 - 不得说 M1.2 已使正式训练可用；它只完成 raw freeze。
-- 不得说 M5.4 已解除 blocked；在 M5.4i 前默认 0.05 s 仍 blocked。
+- 不得说 M5.4 已解除 blocked；只有在**人工**发布确认后才可以这么说。
+- 不得把 M5.4i 的 3 负载 × 3 批稳定证据表述为「已发布」或「跨机器保证」；
+  它是**本机**候选证据，发布决定权在人工。
+- 不得把 M5.4h/M5.4h1/M5.4h2 的 0.05 s blocked 结论套用到当前的 0.25 s 默认上。
 - 不得把 `mip_max_nodes` 的未绑定实验称为确定性的根因或生产方案。
 - 不得以任务卡提交数、测试数或绿灯替代真实集成验收。
 
