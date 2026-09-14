@@ -37,6 +37,7 @@ EMC_PRICES_URL = "https://www.nems.emcsg.com/nems-prices"
 EMC_TERMS_URL = "https://www.home.emcsg.com/terms-and-conditions"
 SASEA_URL = "https://zenodo.org/records/17175212"
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_REQUESTED_COORDINATES = {"latitude": 1.3521, "longitude": 103.8198}
 
 REQUIRED_FILES = {
     "emc_usep": "emc_usep_2024.zip",
@@ -298,13 +299,24 @@ def _parse_freeze_timestamp(value: str) -> str:
     return parsed.astimezone(UTC).replace(microsecond=0).isoformat()
 
 
-def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict[str, Any]:
+def usep_sgd_mwh_to_reader_unit(value_sgd_per_mwh: float) -> float:
+    """后续 reader 所需的纯单位换算；M1.2 不以它生成任何处理数据。"""
+    return value_sgd_per_mwh * 0.001
+
+
+def build_manifest(report: dict[str, Any], *, local_frozen_at_utc: str) -> dict[str, Any]:
+    """从已核验原始报告构造不可变的 M1.2b manifest 内容。"""
+    frozen_at_utc = _parse_freeze_timestamp(local_frozen_at_utc)
+    source_time = {
+        "local_acquired_or_frozen_at_utc": frozen_at_utc,
+        "upstream_downloaded_at_utc": "unknown",
+    }
     return {
-        "schema": "m1.2-singapore-2024-v1",
+        "schema": "m1.2-singapore-2024-v2",
         "year": report["year"],
         "timezone": report["timezone"],
         "verification": {
-            "frozen_at_utc": frozen_at_utc,
+            "local_acquired_or_frozen_at_utc": frozen_at_utc,
             "missing_data_policy": "reject; no imputation",
             "raw_files": report["files"],
         },
@@ -317,9 +329,9 @@ def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict
                 "terms_url": EMC_TERMS_URL,
                 "automation": "manual browser download only",
                 "downloaded_product": "USEP and Demand Forecast annual ZIP",
-                "raw_file_frozen_at_utc": frozen_at_utc,
                 "timezone": SINGAPORE_TIMEZONE,
                 "raw_units": {"usep": "SGD/MWh", "demand_forecast": "MW"},
+                **source_time,
             },
             "emc_metered_generation": {
                 "url": EMC_PRICES_URL,
@@ -329,24 +341,23 @@ def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict
                 "terms_url": EMC_TERMS_URL,
                 "automation": "manual browser download only",
                 "downloaded_product": "Metered Generation by Facility Type annual ZIP",
-                "raw_file_frozen_at_utc": frozen_at_utc,
                 "timezone": SINGAPORE_TIMEZONE,
                 "raw_units": {"net_injection": "MWh per half-hour settlement period"},
+                **source_time,
             },
             "sasea_demand": {
                 "url": SASEA_URL,
                 "license": "CC-BY-4.0",
                 "downloaded_product": "data.zip / data/raw/raw_SGP_demand.csv",
-                "raw_file_frozen_at_utc": frozen_at_utc,
                 "timezone": SINGAPORE_TIMEZONE,
                 "raw_units": {"system_demand": "MW"},
+                **source_time,
             },
             "open_meteo_weather": {
                 "url": OPEN_METEO_URL,
                 "license": "CC-BY-4.0; free API non-commercial use only",
                 "query": {
-                    "latitude": 1.3521,
-                    "longitude": 103.8198,
+                    **OPEN_METEO_REQUESTED_COORDINATES,
                     "start_date": "2024-01-01",
                     "end_date": "2024-12-31",
                     "hourly": "temperature_2m,wind_speed_10m,shortwave_radiation",
@@ -354,9 +365,16 @@ def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict
                     "timezone": SINGAPORE_TIMEZONE,
                     "models": "era5",
                 },
-                "raw_file_frozen_at_utc": frozen_at_utc,
                 "timezone": SINGAPORE_TIMEZONE,
                 "raw_units": report["weather"]["raw_units"],
+                "requested_coordinates": OPEN_METEO_REQUESTED_COORDINATES,
+                "returned_grid_coordinates": report["weather"]["coordinates_returned"],
+                "spatial_representation": (
+                    "ERA5 grid-cell proxy for a Singapore national scenario; "
+                    "not an IDC on-site observation."
+                ),
+                "not_claimed": "Not local PV or wind generation measurement.",
+                **source_time,
             },
         },
         "series": {
@@ -364,8 +382,9 @@ def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict
                 "source": "emc_usep",
                 "semantic": report["usep"]["semantic"],
                 "raw_unit": report["usep"]["raw_unit"],
-                "stored_unit": "SGD/kWh",
-                "transform": report["usep"]["unit_conversion"],
+                "reader_required_target_unit": "SGD/kWh",
+                "scale_factor": 0.001,
+                "materialized_in_m12": False,
                 "rows": report["usep"]["rows"],
             },
             "load": {
@@ -403,19 +422,88 @@ def _manifest_from_report(report: dict[str, Any], *, frozen_at_utc: str) -> dict
     }
 
 
-def write_manifest(report: dict[str, Any], output: Path | str, *, frozen_at_utc: str) -> None:
+def _canonical_manifest_json(manifest: dict[str, Any]) -> str:
+    return json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _first_difference(expected: Any, actual: Any, path: str = "$") -> str | None:
+    """返回首个差异路径，供只读核验给出可行动的错误信息。"""
+    if type(expected) is not type(actual):
+        return path
+    if isinstance(expected, dict):
+        expected_keys = set(expected)
+        actual_keys = set(actual)
+        if expected_keys != actual_keys:
+            missing = sorted(expected_keys - actual_keys)
+            extra = sorted(actual_keys - expected_keys)
+            return f"{path} (missing={missing}, extra={extra})"
+        for key in sorted(expected_keys):
+            difference = _first_difference(expected[key], actual[key], f"{path}.{key}")
+            if difference is not None:
+                return difference
+        return None
+    if isinstance(expected, list):
+        if len(expected) != len(actual):
+            return f"{path} (length {len(actual)} != {len(expected)})"
+        for index, (expected_item, actual_item) in enumerate(zip(expected, actual, strict=True)):
+            difference = _first_difference(expected_item, actual_item, f"{path}[{index}]")
+            if difference is not None:
+                return difference
+        return None
+    return None if expected == actual else path
+
+
+def _read_manifest(path: Path) -> dict[str, Any]:
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"manifest is not valid JSON: {path}") from error
+    if not isinstance(loaded, dict):
+        raise ValueError(f"manifest root must be an object: {path}")
+    return loaded
+
+
+def _manifest_freeze_time(manifest: dict[str, Any]) -> str:
+    verification = manifest.get("verification")
+    if not isinstance(verification, dict):
+        raise ValueError("manifest verification section is missing")
+    frozen_at = verification.get("local_acquired_or_frozen_at_utc")
+    if not isinstance(frozen_at, str):
+        raise ValueError("manifest local_acquired_or_frozen_at_utc is missing")
+    return _parse_freeze_timestamp(frozen_at)
+
+
+def verify_existing_manifest(manifest_path: Path | str, report: dict[str, Any]) -> dict[str, Any]:
+    """以本轮只读 raw 核验报告逐字段校验既有冻结 manifest，绝不改写它。"""
+    path = Path(manifest_path)
+    actual = _read_manifest(path)
+    expected = build_manifest(report, local_frozen_at_utc=_manifest_freeze_time(actual))
+    difference = _first_difference(expected, actual)
+    if difference is not None:
+        raise ValueError(f"existing immutable manifest differs at {difference}")
+    return actual
+
+
+def write_or_verify_manifest(
+    report: dict[str, Any], output: Path | str, *, local_frozen_at_utc: str
+) -> bool:
+    """只在不存在 manifest 时创建；已有文件必须是同一规范内容且不改写。"""
     path = Path(output)
+    expected = build_manifest(report, local_frozen_at_utc=local_frozen_at_utc)
+    if path.exists():
+        actual = _read_manifest(path)
+        difference = _first_difference(expected, actual)
+        if difference is not None:
+            raise ValueError(f"refusing to overwrite immutable manifest; differs at {difference}")
+        return False
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            _manifest_from_report(report, frozen_at_utc=_parse_freeze_timestamp(frozen_at_utc)),
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
+    path.write_text(_canonical_manifest_json(expected), encoding="utf-8")
+    return True
+
+
+def write_manifest(report: dict[str, Any], output: Path | str, *, frozen_at_utc: str) -> None:
+    """M1.2a 入口兼容名；M1.2b 起不再覆写既有成功 manifest。"""
+    write_or_verify_manifest(report, output, local_frozen_at_utc=frozen_at_utc)
 
 
 def fetch_open_meteo_weather(output: Path, *, year: int = YEAR) -> str:
@@ -489,11 +577,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
         report = validate_singapore_2024(args.raw_dir)
+        if args.manifest.exists():
+            verify_existing_manifest(args.manifest, report)
         if args.write_manifest:
             if args.frozen_at_utc is None:
                 raise ValueError("--write-manifest requires --frozen-at-utc")
-            write_manifest(report, args.manifest, frozen_at_utc=args.frozen_at_utc)
-            print(f"[manifest] {args.manifest}", file=sys.stderr)
+            created = write_or_verify_manifest(
+                report, args.manifest, local_frozen_at_utc=args.frozen_at_utc
+            )
+            status = "created" if created else "verified existing"
+            print(f"[manifest] {status}: {args.manifest}", file=sys.stderr)
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     except (FileNotFoundError, ValueError, zipfile.BadZipFile, OSError) as error:

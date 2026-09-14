@@ -182,7 +182,8 @@ def test_manifest_records_permissions_and_no_silent_resampling(
     assert manifest["sources"]["emc_usep"]["automation"] == "manual browser download only"
     assert manifest["missing_data_policy"] == "reject; no imputation"
     for source in manifest["sources"].values():
-        assert source["raw_file_frozen_at_utc"]
+        assert source["local_acquired_or_frozen_at_utc"]
+        assert source["upstream_downloaded_at_utc"] == "unknown"
         assert source["timezone"] == SINGAPORE_TIMEZONE
         assert source["raw_units"]
 
@@ -220,3 +221,23 @@ def test_cli_refuses_to_mutate_frozen_manifest_without_explicit_freeze_time(
         ]
     ) == 2
     assert "--frozen-at-utc" in capsys.readouterr().err
+
+
+def test_cli_verify_rejects_raw_hash_mismatch_against_existing_manifest(
+    complete_bundle: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest_path = tmp_path / "singapore_2024.json"
+    write_manifest(
+        validate_singapore_2024(complete_bundle),
+        manifest_path,
+        frozen_at_utc="2026-09-14T07:28:44+00:00",
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["verification"]["raw_files"]["emc_usep"]["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert (
+        main(["--raw-dir", str(complete_bundle), "--manifest", str(manifest_path), "--verify"])
+        == 2
+    )
+    assert "sha256" in capsys.readouterr().err

@@ -6,7 +6,7 @@
     "wind_generation_kw": "No local IDC wind-generation measurement is claimed; wind speed is retained as weather input."
   },
   "resampling_policy": "not performed in M1.2; later reader must declare any hourly-to-half-hour mapping",
-  "schema": "m1.2-singapore-2024-v1",
+  "schema": "m1.2-singapore-2024-v2",
   "series": {
     "intermittent_generation": {
       "raw_unit": "MWh per half-hour settlement period",
@@ -21,12 +21,13 @@
       "source": "sasea_demand"
     },
     "price": {
+      "materialized_in_m12": false,
       "raw_unit": "SGD/MWh",
+      "reader_required_target_unit": "SGD/kWh",
       "rows": 17568,
+      "scale_factor": 0.001,
       "semantic": "final wholesale USEP; DEMAND column is forecast only",
-      "source": "emc_usep",
-      "stored_unit": "SGD/kWh",
-      "transform": "SGD/MWh -> SGD/kWh (/1000)"
+      "source": "emc_usep"
     },
     "weather": {
       "coordinates_returned": {
@@ -48,19 +49,20 @@
     "emc_metered_generation": {
       "automation": "manual browser download only",
       "downloaded_product": "Metered Generation by Facility Type annual ZIP",
-      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "local_acquired_or_frozen_at_utc": "2026-09-14T07:28:44+00:00",
       "raw_units": {
         "net_injection": "MWh per half-hour settlement period"
       },
       "rights": "EMC website terms: personal/non-commercial use only; do not redistribute",
       "terms_url": "https://www.home.emcsg.com/terms-and-conditions",
       "timezone": "Asia/Singapore",
+      "upstream_downloaded_at_utc": "unknown",
       "url": "https://www.nems.emcsg.com/nems-prices"
     },
     "emc_usep": {
       "automation": "manual browser download only",
       "downloaded_product": "USEP and Demand Forecast annual ZIP",
-      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "local_acquired_or_frozen_at_utc": "2026-09-14T07:28:44+00:00",
       "raw_units": {
         "demand_forecast": "MW",
         "usep": "SGD/MWh"
@@ -68,10 +70,13 @@
       "rights": "EMC website terms: personal/non-commercial use only; do not redistribute",
       "terms_url": "https://www.home.emcsg.com/terms-and-conditions",
       "timezone": "Asia/Singapore",
+      "upstream_downloaded_at_utc": "unknown",
       "url": "https://www.nems.emcsg.com/nems-prices"
     },
     "open_meteo_weather": {
       "license": "CC-BY-4.0; free API non-commercial use only",
+      "local_acquired_or_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "not_claimed": "Not local PV or wind generation measurement.",
       "query": {
         "end_date": "2024-12-31",
         "hourly": "temperature_2m,wind_speed_10m,shortwave_radiation",
@@ -82,29 +87,39 @@
         "timezone": "Asia/Singapore",
         "wind_speed_unit": "ms"
       },
-      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
       "raw_units": {
         "shortwave_radiation": "W/m2 (hourly preceding-hour mean GHI)",
         "temperature_2m": "degC",
         "wind_speed_10m": "m/s"
       },
+      "requested_coordinates": {
+        "latitude": 1.3521,
+        "longitude": 103.8198
+      },
+      "returned_grid_coordinates": {
+        "latitude": "1.5",
+        "longitude": "103.75"
+      },
+      "spatial_representation": "ERA5 grid-cell proxy for a Singapore national scenario; not an IDC on-site observation.",
       "timezone": "Asia/Singapore",
+      "upstream_downloaded_at_utc": "unknown",
       "url": "https://archive-api.open-meteo.com/v1/archive"
     },
     "sasea_demand": {
       "downloaded_product": "data.zip / data/raw/raw_SGP_demand.csv",
       "license": "CC-BY-4.0",
-      "raw_file_frozen_at_utc": "2026-09-14T07:28:44+00:00",
+      "local_acquired_or_frozen_at_utc": "2026-09-14T07:28:44+00:00",
       "raw_units": {
         "system_demand": "MW"
       },
       "timezone": "Asia/Singapore",
+      "upstream_downloaded_at_utc": "unknown",
       "url": "https://zenodo.org/records/17175212"
     }
   },
   "timezone": "Asia/Singapore",
   "verification": {
-    "frozen_at_utc": "2026-09-14T07:28:44+00:00",
+    "local_acquired_or_frozen_at_utc": "2026-09-14T07:28:44+00:00",
     "missing_data_policy": "reject; no imputation",
     "raw_files": {
       "emc_metered_generation": {
