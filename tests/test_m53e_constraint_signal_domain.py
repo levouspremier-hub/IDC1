@@ -238,3 +238,117 @@ def test_update_state_load_continue_is_bitwise_identical():
         resumed.update(batch)
 
     assert resumed.state_dict() == straight.state_dict()
+
+
+# --- 6. 回归：接受域恰等于物理合法域，且 update 与预检共用同一规则 ----------
+
+def _valid(values) -> bool:
+    arr = np.asarray(values, dtype=np.float64)
+    return bool(arr.ndim == 1 and arr.size > 0 and np.all(np.isfinite(arr)) and np.all(arr >= 0.0))
+
+
+def _random_batches(rng, count: int) -> list[dict[str, list[float]]]:
+    """构造混合批：含合法、含负、含非有限、含空。"""
+    batches = []
+    for _ in range(count):
+        batch = {}
+        for name in ("business", "carbon"):
+            kind = rng.integers(0, 5)
+            size = int(rng.integers(1, 5))
+            if kind == 0:
+                values = rng.uniform(0.0, 50.0, size=size)
+            elif kind == 1:
+                values = rng.uniform(-50.0, 0.0, size=size)          # 全负
+            elif kind == 2:
+                values = rng.uniform(-50.0, 50.0, size=size)          # 混合
+            elif kind == 3:
+                values = np.zeros(size)                               # 全零（合法）
+            else:
+                values = rng.uniform(0.0, 50.0, size=size)
+                values[0] = float("nan")                              # 非有限
+            batch[name] = values.tolist()
+        batches.append(batch)
+    return batches
+
+
+def test_update_accepts_exactly_the_physically_valid_batches():
+    """随机批：update() 成功 ⟺ 两个约束的序列都满足物理域（非负、有限、一维、非空）。"""
+    rng = np.random.default_rng(20240914)
+    accepted = rejected = 0
+    for batch in _random_batches(rng, 120):
+        should_accept = _valid(batch["business"]) and _valid(batch["carbon"])
+        lag = fresh()
+        before = copy.deepcopy(lag.state_dict())
+        try:
+            lag.update(batch)
+        except (ValueError, TypeError):
+            got_accept = False
+        else:
+            got_accept = True
+        assert got_accept is should_accept, f"接受域与物理合法域不一致：{batch}"
+        if got_accept:
+            accepted += 1
+            assert lag.constraints["business"].estimate >= 0.0
+            assert lag.constraints["carbon"].estimate >= 0.0
+        else:
+            rejected += 1
+            assert lag.state_dict() == before, "被拒绝的批次不得留下任何痕迹"
+    assert accepted > 0 and rejected > 0, f"样本必须同时覆盖接受与拒绝：{accepted}/{rejected}"
+
+
+def test_update_and_preflight_share_the_same_acceptance_rule():
+    """update() 与 validate_constraint_signals 的接受/拒绝必须完全一致（同一份规则）。"""
+    rng = np.random.default_rng(7)
+    for batch in _random_batches(rng, 120):
+        lag = fresh()
+        try:
+            means = lag_mod.validate_constraint_signals(batch, lag.constraints)
+        except (ValueError, TypeError) as exc:
+            preflight = ("reject", type(exc).__name__)
+        else:
+            preflight = ("accept", means)
+
+        lag2 = fresh()
+        try:
+            updated = lag2.update(batch)
+        except (ValueError, TypeError) as exc:
+            via_update = ("reject", type(exc).__name__)
+        else:
+            via_update = ("accept", updated)
+
+        assert preflight[0] == via_update[0], f"接受域不一致：{batch}"
+        if preflight[0] == "reject":
+            assert preflight[1] == via_update[1], f"拒绝类型不一致：{batch}"
+
+
+def test_preflight_never_mutates_and_matches_the_estimates_update_would_use():
+    rng = np.random.default_rng(11)
+    lag = fresh()
+    for batch in _random_batches(rng, 60):
+        snapshot = copy.deepcopy(lag.state_dict())
+        try:
+            means = lag_mod.validate_constraint_signals(batch, lag.constraints)
+        except (ValueError, TypeError):
+            assert lag.state_dict() == snapshot
+            continue
+        assert lag.state_dict() == snapshot, "预检不得改动状态"
+        lag.update(batch)
+        for name in ("business", "carbon"):
+            assert lag.constraints[name].estimate == pytest.approx(means[name])
+
+
+def test_rejection_message_is_specific_for_every_failure_kind():
+    """异常必须指出具体约束与失败原因（供训练预检报错使用）。"""
+    cases = [
+        ({"business": [-1.0], "carbon": [1.0]}, "business"),
+        ({"business": [1.0], "carbon": [-1.0]}, "carbon"),
+        ({"business": [], "carbon": [1.0]}, "business"),
+        ({"business": [float("nan")], "carbon": [1.0]}, "business"),
+        ({"business": [1.0], "carbon": [float("inf")]}, "carbon"),
+        ({"business": [[1.0]], "carbon": [1.0]}, "business"),
+        ({"business": 1.0, "carbon": [1.0]}, "business"),
+    ]
+    for batch, expected_name in cases:
+        with pytest.raises((ValueError, TypeError)) as excinfo:
+            fresh().update(batch)
+        assert expected_name in str(excinfo.value), f"{batch} 的报错未指明 {expected_name}"
