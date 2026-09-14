@@ -1,9 +1,13 @@
-"""M5.1c / M5.2b 训练入口：dry-run 更新，**唯一数据来源**是 contract-v7 `RolloutBuffer`。
+"""M5.1c–M5.3f 训练入口：dry-run 更新，**唯一数据来源**是 contract-v7 `RolloutBuffer`。
 
 定位不变：只验证「真实采集 → 一次更新」闭环可跑通，**不因短训练奖励高而宣称有效**。
 
 **本模块不是 PPO**：没有 ratio、没有 clip、没有熵项。
-拉格朗日乘子仍是 M5.4 的占位实现，按任务卡 M5.2b §3 列为 **M5.3 待重建**内容。
+**M5.3 已完成**：乘子目标接线 —— actor 有效优势为
+`A_reward − lambda_business·A_business − lambda_carbon·A_carbon`，
+乘子取自 `Lagrangian`（更新前的值），约束信号的非负物理域与状态自洽性均已强制。
+**M5.4 尚未完成**：训练入口（本模块仍无 `__main__`）、未来信息泄漏门禁、
+corrector 开/关下的可复现性。
 **不得**据此宣称训练有效、收敛或任何性能改善。
 
 红线：
@@ -27,7 +31,7 @@ import numpy as np
 import torch
 
 from safe_rl_v2.buffer import RolloutBuffer
-from safe_rl_v2.lagrangian import Lagrangian
+from safe_rl_v2.lagrangian import Lagrangian, validate_constraint_signals
 from safe_rl_v2.models import compute_three_value_targets
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.rollout import collect_rollout
@@ -106,6 +110,14 @@ def dry_run_update(
     )
     terminals = np.array([t.terminated for t in buffer.transitions], dtype=bool)
     truncations = np.array([t.truncated for t in buffer.transitions], dtype=bool)
+
+    # --- M5.3f 预检：必须在**任何** forward / backward / optimizer.step 之前 ---
+    # 复用 lagrangian 的共享校验规则（不在此处另写一套）。失败时本函数尚未产生
+    # 任何副作用：policy 参数、optimizer state、Lagrangian state 三者都不变。
+    validate_constraint_signals(
+        {"business": business_violations, "carbon": carbon_emissions},
+        lagrangian.constraints,
+    )
 
     # bootstrap：**逐 transition** 取各自 next_observation 的 critic 估计
     # （M5.2c：不得用下标 t+1，也不得只读最后一条）
