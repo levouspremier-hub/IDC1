@@ -70,6 +70,7 @@ def _write_batch(
         "corrector_time_limit_source": source,
     }]
     report = {
+        "production_corrector_time_limit_s": PRODUCTION_DEFAULT,
         "effective_corrector_time_limit_s": budget,
         "corrector_time_limit_source": source,
         "load": load,
@@ -81,7 +82,7 @@ def _write_batch(
             "observations": observations,
         },
     }
-    manifest = {
+    manifest: dict = {
         "run_id": run_id,
         "revision": revision,
         "command": "python scripts/probe_corrector_repro.py",
@@ -110,7 +111,8 @@ def _write_batch(
         columns = {"status": list(statuses)} if parquet_has_status else {"step": [0, 1]}
         pd.DataFrame(columns).to_parquet(run_dir / "summary.parquet")
     for name in omit:
-        (run_dir / name).unlink()
+        target = run_dir / name
+        target.rmdir() if target.is_dir() else target.unlink()
     return run_dir
 
 
