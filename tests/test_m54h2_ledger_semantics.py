@@ -314,6 +314,11 @@ def test_artifacts_agree_on_the_release_status(tmp_path):
 
 @pytest.mark.slow
 def test_new_run_ledger_uses_the_options_column(tmp_path):
+    """真实产物：`options` 列存在、无 `options_json`、编码规范、skipped 行为 null。
+
+    第二个 run 用极小预算**强制** Stage A 超时，从而稳定产出未执行的 Stage B 行 ——
+    以此在真实 parquet 上（而非只在纯函数上）验证 skipped 行的 null 规则。
+    """
     result = run_probe(
         "--modes", "on", "--time-limits", "0.05", "0.25",
         "--runs", "1", "--steps", "2",
@@ -328,11 +333,26 @@ def test_new_run_ledger_uses_the_options_column(tmp_path):
     executed = table.loc[table["skipped"] == False, EXPECTED_OPTIONS_COLUMN]  # noqa: E712
     assert len(executed) > 0, "必须记录已执行的阶段"
     for value in executed:
-        assert isinstance(value, str) and json.loads(value) is not None
+        assert isinstance(value, str)
+        parsed = json.loads(value)  # 必须是可解析的规范 JSON
+        assert canonical(parsed) == value, "编码必须是固定规则（键排序、无多余空白）"
 
-    skipped = table.loc[table["skipped"] == True, EXPECTED_OPTIONS_COLUMN]  # noqa: E712
-    assert len(skipped) > 0
+    forced = run_probe(
+        "--modes", "on", "--time-limits", "0.000001",
+        "--runs", "1", "--steps", "2",
+        "--base-dir", str(tmp_path), "--run-id", "m54h2_skipped",
+    )
+    assert forced.returncode in (0, 1), forced.stderr
+    forced_table = pd.read_parquet(tmp_path / "m54h2_skipped" / "summary.parquet")
+    skipped = forced_table.loc[
+        forced_table["skipped"] == True, EXPECTED_OPTIONS_COLUMN  # noqa: E712
+    ]
+    assert len(skipped) > 0, "极小预算必须稳定产出未执行的 Stage B 行"
     assert skipped.isna().all(), "skipped 阶段允许 options=null"
+    for column in ("status", "elapsed_s", "mip_node_count"):
+        assert forced_table.loc[
+            forced_table["skipped"] == True, column  # noqa: E712
+        ].isna().all(), f"skipped 行的 {column} 必须是 null"
 
 
 @pytest.mark.slow
