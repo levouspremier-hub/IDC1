@@ -263,3 +263,53 @@ def test_reproduction_attempt_is_recorded_honestly():
     assert len(record["digests"]) == 3
     if record["reproduced_instability"]:
         assert record["distinct"] > 1
+
+
+# --- 3. 回归：确定性选项不得改动可行域与目标 --------------------------------
+
+def test_deterministic_options_only_touch_the_solve_path():
+    """选项必须**只**影响求解路径：不得出现任何目标/约束/边界相关的键。"""
+    options = planning_model.deterministic_mip_options(time_limit_s=NORMAL_BUDGET_S)
+    assert set(options) == {"random_seed", "parallel", "time_limit"}
+    forbidden_substrings = ("obj", "cost", "c_", "bound", "constraint", "gap", "epsilon", "tol")
+    for key in options:
+        for token in forbidden_substrings:
+            assert token not in key.lower(), f"选项 {key!r} 涉嫌改动目标或可行域"
+
+
+def test_time_limit_is_the_only_budget_dependent_option():
+    """只有 time_limit 随预算变化；其余确定性选项必须与预算无关。"""
+    a = planning_model.deterministic_mip_options(time_limit_s=0.05)
+    b = planning_model.deterministic_mip_options(time_limit_s=2.0)
+    assert {k: v for k, v in a.items() if k != "time_limit"} == \
+           {k: v for k, v in b.items() if k != "time_limit"}
+
+
+@pytest.mark.slow
+def test_converged_solution_is_identical_at_normal_and_generous_budgets():
+    """修复的直接证据：0.05 s 与 2 s 收敛到**同一个**解，说明求解路径已固定。
+
+    （改前 0.05 s 会间歇返回边界动作或另一顶点，故与 2 s 的解不同。）
+    """
+    normal = corrector_digest(budget=NORMAL_BUDGET_S)
+    generous = corrector_digest(budget=GENEROUS_BUDGET_S)
+    assert normal == generous, (
+        "0.05 s 与 2 s 的收敛解不同 —— 求解路径仍未固定"
+    )
+
+
+@pytest.mark.slow
+def test_timeout_and_converged_outcomes_are_genuinely_different():
+    """恒超时是**退化**而非「稳定」：其结论必须与真实求解不同，不得混为一谈。"""
+    from planning.corrector import correct
+
+    snapshot, proposal = _snapshot_and_proposal()
+    timeout = correct(snapshot, proposal, time_limit_s=ALWAYS_TIMEOUT_BUDGET_S)
+    converged = correct(snapshot, proposal, time_limit_s=GENEROUS_BUDGET_S)
+
+    assert str(timeout.failure) == "timeout"
+    assert str(converged.failure) == "none"
+    assert np.array_equal(np.asarray(timeout.exec_compute_actions), np.zeros(20))
+    assert not np.array_equal(
+        np.asarray(timeout.exec_compute_actions), np.asarray(converged.exec_compute_actions)
+    ), "超时与收敛必须给出不同的动作，否则「边界动作」的语义被掩盖"

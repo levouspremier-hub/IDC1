@@ -38,6 +38,30 @@ DEGRADATION_COST_UNIT = "SGD"
 BUSINESS_SHORTFALL_PENALTY_SGD_PER_WORK = (0.05, "SGD/work-unit")
 DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 
+# --- M5.4f：确定性 MIP 配置 -------------------------------------------------
+# HiGHS 在 time_limit 下可能走到**不同最优顶点**（同代价、均通过物理校验），
+# 也可能因「预算够不够」的时序竞争而有时超时、有时收敛 —— 两者都破坏跨进程可复现。
+# 这里固定可用的确定性杠杆：
+#   random_seed=0  —— 固定内部随机化起点；
+#   parallel=False —— 关闭并行（HiGHS 内部不可复现的主要来源之一）。
+# 注意：HiGHS 的 `threads` 选项经 scipy 的 _highs_wrapper 会直接崩溃（实测 TypeError），
+# 因此**不可用**；`parallel=False` 是当前可用的最接近手段。
+# 这些选项**不改变**可行域、约束或目标函数，只影响求解路径。
+DETERMINISTIC_RANDOM_SEED = 0
+DETERMINISTIC_PARALLEL = False
+
+
+def deterministic_mip_options(*, time_limit_s: float | None) -> dict:
+    """返回传给 `scipy.optimize.milp` 的确定性选项（纯函数，与调用次数无关）。"""
+    options: dict = {
+        "random_seed": DETERMINISTIC_RANDOM_SEED,
+        "parallel": DETERMINISTIC_PARALLEL,
+    }
+    if time_limit_s is not None:
+        options["time_limit"] = float(time_limit_s)
+    return options
+
+
 SOLVER_OPTIMAL = "optimal"
 SOLVER_TIME_LIMIT = "time_limit"
 SOLVER_INFEASIBLE = "infeasible"
@@ -591,7 +615,8 @@ def _solve_time_indexed(
         integrality = np.zeros(n_vars)
         integrality[off_z:off_z + H] = 1
         rem = _remaining()
-        options = {} if rem is None else {"time_limit": float(rem)}
+        # M5.4f：固定确定性选项（不改可行域与目标，只固定求解路径）
+        options = deterministic_mip_options(time_limit_s=rem)
         res = _milp(
             c=c,
             constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
