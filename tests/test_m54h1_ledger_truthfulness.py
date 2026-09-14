@@ -19,7 +19,8 @@ from scripts import probe_corrector_repro as probe
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 REQUIRED_AUDIT_COLUMNS = (
-    "options_json", "status", "success", "message", "elapsed_s",
+    # M5.4h2 迁移：约定字段名是 `options`（规范 JSON 字符串），不再写 `options_json`。
+    "options", "status", "success", "message", "elapsed_s",
     "remaining_deadline_s", "mip_node_count", "mip_dual_bound", "mip_gap",
     "unavailable_fields", "corrector_failure", "corrector_reason", "digest",
     "skipped", "skip_reason", "wall_clock_disabled_in_probe",
@@ -301,22 +302,29 @@ def test_candidate_notes_never_claim_cross_machine_guarantees():
     assert "候选" in notes["wall_clock_candidate"]
 
 
-def test_node_cap_is_a_candidate_only_when_the_alternative_arm_is_stable():
+def test_node_cap_stability_alone_does_not_make_the_cap_a_candidate():
+    """M5.4h2 迁移：M5.4h1 曾据「替代语义臂稳定」把节点上限写成 candidate。
+
+    该结论已失效 —— 替代语义臂的稳定来自 probe 内**移除 time_limit**，而
+    `mip_node_count` 恒为 1、cap 从未绑定。故只有**实测绑定**的 cap 才可能是候选。
+    """
     unstable = probe.candidate_notes(
         None, {"blocked": True},
         {"100": {"arm": "alternative_semantics", "wall_clock_disabled_in_probe": True,
-                 "distinct": 2}},
+                 "distinct": 2, "cap_bound": True, "max_mip_node_count": 100.0}},
     )
-    assert unstable["node_cap_alternative_semantics"]["candidate"] is False
-    assert "不得" in unstable["node_cap_alternative_semantics"]["note"]
+    assert unstable["node_cap_candidate"] is False
 
-    stable = probe.candidate_notes(
+    stable_but_unbound = probe.candidate_notes(
         None, {"blocked": True},
         {"100": {"arm": "alternative_semantics", "wall_clock_disabled_in_probe": True,
-                 "distinct": 1}},
+                 "distinct": 1, "cap_bound": False, "max_mip_node_count": 1.0}},
     )
-    assert stable["node_cap_alternative_semantics"]["candidate"] is True
-    assert stable["node_cap_alternative_semantics"]["stable_caps"] == ["100"]
+    alternative = stable_but_unbound["node_cap_alternative_semantics"]
+    assert alternative["stable_caps"] == ["100"], "稳定性仍须如实记录"
+    assert alternative["node_cap_candidate"] is False, "cap 未绑定即不得称为候选"
+    assert stable_but_unbound["node_cap_effective"] is False
+    assert "不得" in alternative["note"]
 
 
 def test_wall_clock_arm_alone_does_not_make_the_node_cap_a_candidate():
@@ -379,5 +387,5 @@ def test_skipped_rows_carry_null_measurements_not_zeros():
     for row in rows:
         assert row["skipped"] is True
         for column in ("status", "success", "elapsed_s", "remaining_deadline_s",
-                       "mip_node_count", "mip_dual_bound", "mip_gap", "options_json"):
+                       "mip_node_count", "mip_dual_bound", "mip_gap", "options"):
             assert row[column] is None, f"skipped 行的 {column} 必须是 null"

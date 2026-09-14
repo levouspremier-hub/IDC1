@@ -289,8 +289,12 @@ def test_summary_artifacts_are_written_and_consistent(tmp_path):
 
     summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
-    assert summary["conclusion"] == report["attribution"]["conclusion"]
-    assert summary["conclusion"] in probe.ALLOWED_CONCLUSIONS
+    # M5.4h2 迁移：`conclusion` 现在是**阶段**结论（只由 release_gate 决定），
+    # 归因结论改名为 `attribution_conclusion` —— 不得让归因冒充放行状态。
+    assert summary["attribution_conclusion"] == report["attribution"]["conclusion"]
+    assert summary["attribution_conclusion"] in probe.ALLOWED_CONCLUSIONS
+    assert summary["conclusion"] == report["overall"]["conclusion"]
+    assert summary["overall"] == report["overall"]
     assert summary["load"]["mode"] == "none"
     assert summary["machine"]["cpu_count"]
 
