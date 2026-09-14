@@ -31,6 +31,13 @@ ALWAYS_TIMEOUT_BUDGET_S = 1.0e-6
 # 未来真值数组（均在 __init__ 中生成，reset 不重建）
 TRUTH_ATTRS = ("price_t", "T_amb", "lambda_t", "pv_t", "wt_t", "carbon_factor_t")
 
+# 其中**确实进入 observation** 的阵列。实测：窗口内突变这些阵列会改变 observation，
+# 而 `lambda_t` 不会 —— 它根本不被 observation 读取，故对它的泄漏门禁是**空真**的
+# （从不被读取的东西不可能泄漏），也无法为它构造「窗口内突变必须改变 observation」
+# 的反例。区分开来，避免用一个测不出东西的断言冒充覆盖。
+OBSERVED_TRUTH_ATTRS = ("price_t", "T_amb", "pv_t", "wt_t", "carbon_factor_t")
+NON_OBSERVED_TRUTH_ATTRS = ("lambda_t",)
+
 # 纯墙钟字段：**不得**纳入跨进程逐字节比较
 WALL_CLOCK_KEYS = (
     "correction_solve_time_s",
@@ -345,3 +352,84 @@ def test_wall_clock_fields_are_excluded_from_the_digest():
     source = pathlib.Path(__file__).read_text(encoding="utf-8")
     for key in WALL_CLOCK_KEYS:
         assert key in source
+
+
+# --- 回归：逐数组独立的泄漏门禁（整体突变可能互相掩盖） ----------------------
+
+@pytest.mark.leakage
+@pytest.mark.parametrize("attr", TRUTH_ATTRS)
+def test_each_future_truth_array_in_leak_free_on_its_own(attr):
+    """逐个数组单独突变：任一数组泄漏都必须被单独检出。
+
+    整体突变六个数组时，单一阵列的泄漏可能被其他阵列的变化掩盖在此前的一致性里；
+    逐个验证更强。
+    """
+    clean = make_env()
+    mutated = make_env()
+    arr = getattr(mutated, attr).copy()
+    arr[clean.forecast_cutoff + STEPS :] = 9999.0
+    setattr(mutated, attr, arr)
+
+    obs_clean = np.asarray(clean.reset(seed=0)[0], dtype=np.float32)
+    obs_mutated = np.asarray(mutated.reset(seed=0)[0], dtype=np.float32)
+    np.testing.assert_array_equal(
+        obs_clean, obs_mutated, err_msg=f"{attr} 的未来真值泄漏进 observation"
+    )
+
+    buf_clean = collect(clean)
+    buf_mutated = collect(mutated)
+    np.testing.assert_array_equal(
+        buf_clean.transitions[0].raw_action, buf_mutated.transitions[0].raw_action
+    )
+    assert (
+        buf_clean.transitions[0].old_raw_log_prob == buf_mutated.transitions[0].old_raw_log_prob
+    )
+
+
+@pytest.mark.leakage
+@pytest.mark.parametrize("attr", OBSERVED_TRUTH_ATTRS)
+def test_each_future_truth_array_matters_when_mutated_inside_the_window(attr):
+    """逐个数组的**反例**：窗口内突变该数组必须改变 observation（每项都有齿）。"""
+    clean = make_env()
+    mutated = make_env()
+    arr = getattr(mutated, attr).copy()
+    arr[clean.forecast_cutoff - 1] = 9999.0
+    setattr(mutated, attr, arr)
+
+    obs_clean = np.asarray(clean.reset(seed=0)[0], dtype=np.float32)
+    obs_mutated = np.asarray(mutated.reset(seed=0)[0], dtype=np.float32)
+    assert not np.array_equal(obs_clean, obs_mutated), (
+        f"{attr} 在窗口内被改动却没有影响 observation —— 该阵列未进入观测，门禁对其无意义"
+    )
+
+
+def test_leakage_gate_covers_every_declared_truth_array():
+    """门禁的覆盖面必须与声明的真值阵列集合一致（防止漏掉新加的阵列）。"""
+    env = make_env()
+    for attr in TRUTH_ATTRS:
+        arr = getattr(env, attr)
+        assert len(arr) == env.horizon, f"{attr} 长度应为 horizon={env.horizon}"
+    assert len(TRUTH_ATTRS) == len(set(TRUTH_ATTRS)) == 6
+    assert set(OBSERVED_TRUTH_ATTRS) | set(NON_OBSERVED_TRUTH_ATTRS) == set(TRUTH_ATTRS)
+    assert not set(OBSERVED_TRUTH_ATTRS) & set(NON_OBSERVED_TRUTH_ATTRS)
+
+
+@pytest.mark.leakage
+def test_non_observed_lambda_truth_never_enters_the_observation():
+    """`lambda_t` 不被 observation 读取：窗口内突变也必须**不**改变 observation。
+
+    这不是「泄漏」（从未被读取的量无法泄漏），而是一条容易误读的事实的固定：
+    若将来 lambda 被接进观测，本测试会失败，从而提醒同时补上它的窗口内反例。
+    """
+    assert NON_OBSERVED_TRUTH_ATTRS == ("lambda_t",)
+    clean = make_env()
+    inside = make_env()
+    arr = inside.lambda_t.copy()
+    arr[clean.forecast_cutoff - 1] = 9999.0  # 窗口之内
+    inside.lambda_t = arr
+
+    np.testing.assert_array_equal(
+        np.asarray(clean.reset(seed=0)[0], dtype=np.float32),
+        np.asarray(inside.reset(seed=0)[0], dtype=np.float32),
+        err_msg="lambda_t 竟然进入了 observation —— 请同时为它补上窗口内反例",
+    )
