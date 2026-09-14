@@ -528,35 +528,59 @@ def evaluate_release_gate(
             "mode_observations": [],
             "blocked": False,
             "all_qualifying": None,
+            "passed": False,
             "unstable_sources": [],
-            "reason": f"本 run 未测量默认 {budget}s corrector，也未测平台确定性",
+            "underpowered_sources": [],
+            "reason": (
+                f"本 run 未测量默认 {budget}s corrector —— 样本量不足，"
+                "**不得**据此放行该阶段（fail closed）"
+            ),
         }
     unstable_sources = [o["source"] for o in combined if int(o["distinct"]) > 1]
     blocked = bool(unstable_sources)
-    all_qualifying = all(
-        o.get("processes", 0) >= MATRIX_MIN_PROCESSES and o.get("steps", 0) >= MATRIX_MIN_STEPS
+    underpowered_sources = [
+        {"source": o["source"], "processes": o.get("processes", 0), "steps": o.get("steps", 0)}
         for o in combined
-    )
+        if o.get("processes", 0) < MATRIX_MIN_PROCESSES
+        or o.get("steps", 0) < MATRIX_MIN_STEPS
+    ]
+    all_qualifying = not underpowered_sources
+    evaluated = bool(observations)
+    # **唯一**的阶段放行判据：测过、样本量达标、且未 blocked。缺一即 fail closed。
+    passed = bool(evaluated and all_qualifying and not blocked)
     if blocked:
         reason = (
             f"发布门禁 blocked：{unstable_sources} 跨进程不一致（distinct>1）；"
             f"默认预算 {budget}s 不得放行"
         )
-    elif not observations:
+    elif not evaluated:
         reason = (
-            f"未测量默认 {budget}s corrector；平台确定性观测 distinct=1，"
-            "但不足以放行该阶段"
+            f"未测量默认 {budget}s corrector —— 样本量不足（要求每个观测 "
+            f"processes>={MATRIX_MIN_PROCESSES} 且 steps>={MATRIX_MIN_STEPS}），"
+            "**不得**据此放行该阶段（fail closed）"
+        )
+    elif underpowered_sources:
+        shortfalls = [s["source"] for s in underpowered_sources]
+        reason = (
+            f"默认预算 {budget}s 的观测样本量不足（{shortfalls} 未达 "
+            f"processes>={MATRIX_MIN_PROCESSES} 且 steps>={MATRIX_MIN_STEPS}）—— "
+            "**不得**据「distinct=1」放行该阶段（fail closed）"
         )
     else:
-        reason = f"默认预算 {budget}s 的观测全部 distinct=1"
+        reason = (
+            f"默认预算 {budget}s 的观测全部 distinct=1，且样本量达标"
+            f"（processes>={MATRIX_MIN_PROCESSES}，steps>={MATRIX_MIN_STEPS}）"
+        )
     return {
-        "evaluated": bool(observations),
+        "evaluated": evaluated,
         "default_budget_s": budget,
         "observations": observations,
         "mode_observations": mode_observations,
         "blocked": blocked,
         "all_qualifying": all_qualifying,
+        "passed": passed,
         "unstable_sources": unstable_sources,
+        "underpowered_sources": underpowered_sources,
         "reason": reason,
     }
 
@@ -571,20 +595,28 @@ def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict
     - `attribution`：只解释不稳定的原因，**绝不**决定是否放行。
 
     故 `overall["blocked"] == release_gate["blocked"]` 恒成立；`attribution` 只作为
-    上下文记录，不参与判定。返回的 `status` / `exit_code` 供 manifest 与进程退出码共用，
-    三者**不得**各自推导。
+    上下文记录，不参与判定。
+
+    **fail closed**：`manifest.status` / 退出码由 `release_gate["passed"]` 决定，
+    **不是**只看 `blocked`。未测量、样本量不足（processes/steps 不达标）与 blocked
+    一律为 `failed` / 非 0；**只有** `passed=true` 才是 `success` / 0。
+
+    返回的 `status` / `exit_code` 供 manifest 与进程退出码共用，三者**不得**各自推导。
     """
     blocked = bool(release_gate.get("blocked"))
     evaluated = bool(release_gate.get("evaluated"))
+    all_qualifying = bool(release_gate.get("all_qualifying", False))
+    passed = bool(release_gate.get("passed", False))
     if blocked:
         conclusion = "blocked"
     elif not evaluated:
         conclusion = "not_evaluated"
-    elif not release_gate.get("all_qualifying", False):
+    elif not all_qualifying:
         conclusion = "insufficient_evidence"
     else:
         # 措辞刻意保守：门禁放行**不等于** M5.4 阶段已发布（发布由 M5.4i 与人工审查决定）。
         conclusion = "not_blocked"
+    status = "success" if passed else "failed"
     return {
         "overall": {
             "blocked": blocked,
@@ -592,12 +624,13 @@ def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict
             "decided_by": "release_gate",
             "reason": release_gate.get("reason", ""),
             "unstable_sources": list(release_gate.get("unstable_sources", [])),
+            "underpowered_sources": list(release_gate.get("underpowered_sources", [])),
             "attribution_conclusion": (
                 attribution.get("conclusion") if attribution else None
             ),
         },
-        "status": "failed" if blocked else "success",
-        "exit_code": 1 if blocked else 0,
+        "status": status,
+        "exit_code": 0 if passed else 1,
     }
 
 
@@ -621,14 +654,32 @@ def node_cap_binding(rows: list[dict], *, cap: int) -> dict:
     }
 
 
+def cap_is_candidate(entry: dict) -> bool:
+    """**同一个 cap** 必须同时满足全部条件才是候选（返修要求）。
+
+    - `cap_bound`：实测 `mip_node_count` 触及该 cap；
+    - `distinct == 1`：该 cap 的独立进程 digest 一致；
+    - `processes >= MATRIX_MIN_PROCESSES` 且 `steps >= MATRIX_MIN_STEPS`：样本量达标。
+
+    不得把「某个 cap 绑定」与「另一个 cap 稳定」拼成候选。
+    """
+    return bool(
+        entry.get("cap_bound")
+        and entry.get("distinct") == 1
+        and entry.get("processes", 0) >= MATRIX_MIN_PROCESSES
+        and entry.get("steps", 0) >= MATRIX_MIN_STEPS
+    )
+
+
 def candidate_notes(
     attribution: dict | None, release_gate: dict, node_cap_matrix: dict
 ) -> dict:
     """候选值的**如实**表述。
 
     - 不得声称跨机器保证；
-    - 节点上限**只有**在「实测确实绑定」且「替代语义臂稳定」时才可能是候选；
-      未绑定时必须给出 `node_cap_effective=false` 与 `node_cap_candidate=false`。
+    - 节点上限**只有**在**同一个 cap** 上同时满足「实测确实绑定」「digest 一致」
+      「独立进程数与步数达标」时才是候选；否则 `node_cap_effective`/`node_cap_candidate`
+      与 `candidate_caps` 必须如实给出。
     """
     notes: dict = {
         "default_budget_still_blocked": bool(release_gate["blocked"]),
@@ -650,44 +701,59 @@ def candidate_notes(
     stable_caps = sorted(
         (cap for cap, m in alternatives.items() if m.get("distinct") == 1), key=int
     )
+    # 候选必须是**同一个 cap** 的证据交集，而不是两个 cap 各取一半。
+    candidate_caps = sorted(
+        (cap for cap, m in alternatives.items() if cap_is_candidate(m)), key=int
+    )
     effective = bool(bound_caps)
-    if effective:
-        reasons = ["node_cap_observed_to_bind"]
-    else:
+    is_candidate = bool(candidate_caps)
+    if not effective:
         reasons = [
             "observed_mip_node_count_below_cap",
             "stability_attributable_to_wall_clock_disabled_in_probe",
             "mip_max_nodes_not_a_production_candidate",
         ]
+    elif is_candidate:
+        reasons = ["node_cap_observed_to_bind", "candidate_cap_meets_all_conditions"]
+    else:
+        reasons = ["node_cap_observed_to_bind", "no_cap_meets_all_candidate_conditions"]
     notes["node_cap_effective"] = effective
-    notes["node_cap_candidate"] = bool(effective and stable_caps)
+    notes["node_cap_candidate"] = is_candidate
+    notes["candidate_caps"] = candidate_caps
     notes["node_cap_reasons"] = reasons
     if alternatives:
         notes["node_cap_alternative_semantics"] = {
             "caps_tested": sorted(alternatives, key=int),
             "stable_caps": stable_caps,
             "cap_bound_caps": bound_caps,
+            "candidate_caps": candidate_caps,
             "max_mip_node_count_by_cap": {
                 cap: m.get("max_mip_node_count")
                 for cap, m in sorted(alternatives.items(), key=lambda kv: int(kv[0]))
             },
             "node_cap_effective": effective,
-            "node_cap_candidate": bool(effective and stable_caps),
-            "note": _node_cap_note(effective=effective, stable_caps=stable_caps),
+            "node_cap_candidate": is_candidate,
+            "note": _node_cap_note(effective=effective, candidate_caps=candidate_caps),
         }
     return notes
 
 
-def _node_cap_note(*, effective: bool, stable_caps: list[str]) -> str:
+def _node_cap_note(*, effective: bool, candidate_caps: list[str]) -> str:
     if not effective:
         return (
             "实测 mip_node_count 未触及任何被注入的 cap，节点上限**从未绑定**；"
             "替代语义臂的稳定性只能归因于 probe 内关闭 wall-clock（移除 time_limit），"
             "**不得**把 mip_max_nodes 描述为生产候选或确定性根因 -> 不得作为候选"
         )
-    if stable_caps:
-        return "节点上限确实绑定且替代语义臂稳定 -> 仅可称为**本机**候选，不构成跨机器保证"
-    return "节点上限确实绑定但替代语义臂仍不稳定 -> **不得**作为候选"
+    if candidate_caps:
+        return (
+            f"cap {candidate_caps} 同时满足「实测绑定 + digest 一致 + 样本量达标」"
+            "-> 仅可称为**本机**候选，不构成跨机器保证"
+        )
+    return (
+        "虽有 cap 实测绑定，但**没有任何单个 cap** 同时满足「绑定 + distinct=1 + "
+        "processes>=6 + steps>=8」-> **不得**作为候选"
+    )
 
 
 def classify(matrix: dict) -> dict:
@@ -1036,6 +1102,8 @@ def main(argv: list[str] | None = None) -> int:
             "wall_clock_disabled_in_probe": bool(wall_clock_disabled),
             "distinct": len(set(cap_digests)),
             "processes": len(cap_digests),
+            # 候选判定按**单个 cap** 做交集，故每个 cap 必须自带样本量。
+            "steps": args.steps,
             "digests": cap_digests,
             "reasons": sorted({r for r in cap_reasons if r}),
             "cap_bound": binding["cap_bound"],
@@ -1141,7 +1209,8 @@ def main(argv: list[str] | None = None) -> int:
         "provenance_note": provenance_note(load),
     }
 
-    # 默认 0.05s 不稳定 -> manifest 必须 failed，**即使归因成立**
+    # 默认 0.05s 不稳定 -> manifest 必须 failed，**即使归因成立**。
+    # fail closed：blocked 之外的「未测量 / 样本量不足」同样是失败，必须归类。
     failure_classification = None
     if overall["blocked"]:
         failure_classification = (
@@ -1149,6 +1218,8 @@ def main(argv: list[str] | None = None) -> int:
             if "modes.off" in release_gate["unstable_sources"]
             else "corrector_nonreproducible"
         )
+    elif status == "failed":
+        failure_classification = "release_gate_evidence_insufficient"
     run_dir = write_run(
         run_id,
         config=config,
