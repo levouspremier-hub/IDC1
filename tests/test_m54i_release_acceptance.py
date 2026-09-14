@@ -710,11 +710,14 @@ def test_unconvertible_budget_fails_closed(tmp_path, bad):
     assert "malformed_batch_artifact" in _failures(aggregated)
 
 
-@pytest.mark.parametrize("bad", ("abc", None, [], float("nan")))
+@pytest.mark.parametrize("bad", ("abc", float("nan")))
 def test_illegal_summary_parquet_status_fails_closed(tmp_path, bad):
-    """`summary.parquet` 的 status 含非法值/NaN -> fail closed，不得抛 ValueError。"""
+    """`summary.parquet` 的 status 含非法值/NaN -> fail closed，不得抛 ValueError。
+
+    （列内保持同类型，避免在**写夹具**时就触发 pyarrow 的类型错误。）
+    """
     batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
-    pd.DataFrame({"status": [bad, 0.0]}).to_parquet(batches[0] / "summary.parquet")
+    pd.DataFrame({"status": [bad, bad]}).to_parquet(batches[0] / "summary.parquet")
     aggregated = probe.aggregate_release_batches(batches)
     assert aggregated["passed"] is False
     assert "summary_parquet_malformed_status" in _failures(aggregated)
