@@ -23,7 +23,7 @@ import pytest
 from scripts import probe_corrector_repro as probe
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-DEFAULT_BUDGET = 0.05
+DEFAULT_BUDGET = 0.25  # M5.4i：生产默认 0.05 -> 0.25
 EXPECTED_OPTIONS_COLUMN = "options"
 RETIRED_OPTIONS_COLUMN = "options_json"
 
@@ -125,8 +125,12 @@ def test_every_step_still_gets_exactly_two_stage_rows():
 # --- 2. overall 必须反映 release_gate，attribution 绝不决定放行 ---------------
 
 def _obs(distinct: int, *, processes: int = 6, steps: int = 8,
-         source: str = "matrix.0.05") -> dict:
-    return {"source": source, "distinct": distinct, "processes": processes, "steps": steps}
+         source: str = "matrix.0.25") -> dict:
+    # M5.4i 迁移：只有**生产默认**来源的观测才可能进入 release gate。
+    return {
+        "source": source, "distinct": distinct, "processes": processes, "steps": steps,
+        "corrector_time_limit_source": probe.CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT,
+    }
 
 
 def _blocked_gate() -> dict:
@@ -471,7 +475,8 @@ def test_insufficient_evidence_reason_names_the_sample_size_shortfall(gate_facto
 
 def test_underpowered_gate_names_the_offending_sources():
     gate = probe.evaluate_release_gate([_obs(1, processes=2, steps=3)])
-    assert [s["source"] for s in gate["underpowered_sources"]] == ["matrix.0.05"]
+    # M5.4i 迁移：`_obs` 的默认来源改为生产默认档 matrix.0.25。
+    assert [s["source"] for s in gate["underpowered_sources"]] == ["matrix.0.25"]
     assert gate["underpowered_sources"][0]["processes"] == 2
     assert gate["underpowered_sources"][0]["steps"] == 3
 
@@ -606,8 +611,9 @@ def test_a_run_without_a_default_budget_measurement_fails_closed(tmp_path):
 
 def test_default_budget_and_time_limit_semantics_are_untouched():
     """本卡不得改默认预算，也不得让 probe 改变求解器停止条件默认值。"""
-    assert probe.DEFAULT_CORRECTOR_TIME_LIMIT_S == pytest.approx(0.05)
-    assert probe.MODE_BUDGETS["on"] == pytest.approx(0.05)
+    assert probe.MODE_BUDGETS["on"] == pytest.approx(
+        probe.PRODUCTION_CORRECTOR_TIME_LIMIT_S
+    ), "模式预算必须与生产默认一致（M5.4i）"
     assert probe.DEFAULT_NODE_CAP is None
 
     from planning.model import deterministic_mip_options

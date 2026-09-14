@@ -212,10 +212,14 @@ def test_modes_and_runs_match_the_actual_metrics_rows(tmp_path, modes, runs):
 
     assert config["modes"] == list(modes)
     assert config["runs_per_mode"] == runs
-    assert len(metrics) == runs * len(modes), "metrics 行数必须等于 modes × runs"
-    assert sorted(metrics["mode"].unique()) == sorted(modes)
+    # M5.4i 迁移：默认路径现在也会产出**逐阶段审计行**（生产默认档），
+    # 它们没有 `mode` 列值。因此「modes × runs」的核对必须在**模式行**子集上做，
+    # 断言强度不变（config 仍必须等于真实执行的模式行数）。
+    mode_rows = metrics[metrics["mode"].notna()]
+    assert len(mode_rows) == runs * len(modes), "模式行数必须等于 modes × runs"
+    assert sorted(mode_rows["mode"].unique()) == sorted(modes)
     for mode in modes:
-        assert (metrics["mode"] == mode).sum() == runs
+        assert (mode_rows["mode"] == mode).sum() == runs
         assert report["modes"][mode]["runs"] == runs
         assert len(report["modes"][mode]["digests"]) == runs
 

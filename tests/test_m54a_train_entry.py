@@ -161,16 +161,21 @@ def test_manifest_links_seed_command_and_revision(synthetic_run):
     assert "-m safe_rl_v2.train" in manifest["command"]
 
 
-def test_corrector_on_requires_explicit_time_limit(tmp_path):
+def test_corrector_on_without_a_budget_resolves_to_the_production_default(tmp_path):
+    """M5.4i 迁移：`--corrector on` 未给预算**不再报错**，而是解析为生产默认 0.25。
+
+    改前该路径抛 `TrainEntryError`；新语义见 `docs/task_cards/M5.4i.md`。
+    """
     result = run_cli(
         "--synthetic-smoke", "--steps", "1", "--corrector", "on",
         "--base-dir", str(tmp_path), "--run-id", "on_without_limit",
     )
-    assert result.returncode != 0
-    combined = result.stdout + result.stderr
-    # 报错必须点名用户可见的那个开关
-    assert "--corrector-time-limit-s" in combined, combined
-    assert "显式" in combined or "explicit" in combined.lower(), combined
+    assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
+    config = yaml.safe_load(
+        (tmp_path / "on_without_limit" / "config.yaml").read_text(encoding="utf-8")
+    )
+    assert config["effective_corrector_time_limit_s"] == pytest.approx(0.25)
+    assert config["corrector_time_limit_source"] == "production_default"
 
 
 def test_corrector_on_with_limit_is_recorded(tmp_path):
@@ -209,12 +214,14 @@ def test_failure_after_run_id_allocation_writes_failed_manifest(tmp_path):
     注意：argparse 层面的参数错误发生在 run_id 分配**之前**，此时不存在 run_id，
     故不写 manifest（其非 0 退出由 test_invalid_arguments_fail_explicitly 覆盖）。
     """
+    # M5.4i 迁移：改用**正式数据路径**（M1.3 未完成）作为 run_id 分配后的运行期失败。
+    # 原先把「corrector on 缺预算」当作失败源，该路径现已解析为生产默认、不再失败。
     result = run_cli(
-        "--synthetic-smoke", "--steps", "1", "--corrector", "on",
-        "--base-dir", str(tmp_path), "--run-id", "on_without_limit_manifest",
+        "--steps", "1", "--corrector", "off",
+        "--base-dir", str(tmp_path), "--run-id", "real_blocked_manifest",
     )
     assert result.returncode != 0
-    manifest_path = tmp_path / "on_without_limit_manifest" / "manifest.json"
+    manifest_path = tmp_path / "real_blocked_manifest" / "manifest.json"
     assert manifest_path.exists(), "run_id 已分配后的失败必须落失败 manifest"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["status"] == "failed"

@@ -109,9 +109,10 @@ def test_train_failure_preserves_an_existing_successful_run(tmp_path):
     run_dir = tmp_path / "X"
     before = artifact_bytes(run_dir)
 
-    # 同一 id、运行期失败（corrector on 缺预算）
-    bad = run_cli("--synthetic-smoke", "--steps", "1", "--seed", "0",
-                  "--corrector", "on", "--base-dir", str(tmp_path), "--run-id", "X")
+    # 同一 id、运行期失败（M5.4i 迁移：改用正式数据路径被 M1.3 阻塞作为失败源；
+    # 原「corrector on 缺预算」路径现已解析为生产默认、不再失败）
+    bad = run_cli("--steps", "1", "--seed", "0",
+                  "--corrector", "off", "--base-dir", str(tmp_path), "--run-id", "X")
     assert bad.returncode != 0
 
     assert artifact_bytes(run_dir) == before, "失败复跑销毁了成功 run 的产物"
@@ -123,7 +124,7 @@ def test_train_failure_reports_the_conflict_explicitly(tmp_path):
     """不得把「保留了成功结果」写成「失败 manifest 已写入」。"""
     run_cli("--synthetic-smoke", "--steps", "1", "--seed", "0", "--corrector", "off",
             "--base-dir", str(tmp_path), "--run-id", "X")
-    bad = run_cli("--synthetic-smoke", "--steps", "1", "--seed", "0", "--corrector", "on",
+    bad = run_cli("--steps", "1", "--seed", "0", "--corrector", "off",
                   "--base-dir", str(tmp_path), "--run-id", "X")
     combined = bad.stdout + bad.stderr
     assert "已存在成功" in combined or "冲突" in combined, combined
@@ -132,7 +133,7 @@ def test_train_failure_reports_the_conflict_explicitly(tmp_path):
 
 def test_failed_run_is_still_written_when_there_is_no_conflict(tmp_path):
     """无冲突时失败 manifest 仍必须写（本卡不允许靠不写来避免覆盖）。"""
-    bad = run_cli("--synthetic-smoke", "--steps", "1", "--corrector", "on",
+    bad = run_cli("--steps", "1", "--corrector", "off",
                   "--base-dir", str(tmp_path), "--run-id", "fresh_fail")
     assert bad.returncode != 0
     manifest = json.loads((tmp_path / "fresh_fail" / "manifest.json").read_text(encoding="utf-8"))

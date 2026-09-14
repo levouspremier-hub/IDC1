@@ -17,7 +17,7 @@ import yaml
 from scripts import probe_corrector_repro as probe
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
-REQUIRED_BUDGETS = (0.05, 0.10, 0.25, 0.50, 2.0)
+REQUIRED_BUDGETS = (0.05, 0.10, 0.25, 0.50, 2.0)  # 矩阵档位（含 0.05 诊断档）
 REQUIRED_STAGE_FIELDS = (
     "options", "status", "success", "message", "elapsed_s",
     "remaining_deadline_s", "mip_node_count", "mip_dual_bound", "mip_gap",
@@ -40,7 +40,12 @@ def test_parser_accepts_explicit_corrector_time_limit():
     assert args.corrector_time_limit == pytest.approx(0.25)
 
     default = parser.parse_args([])
-    assert default.corrector_time_limit == pytest.approx(0.05), "默认必须仍是 0.05"
+    # M5.4i 迁移：argparse 默认改为 None（表示「未显式给出」），
+    # 由 resolve_effective_budget 解析为**生产默认** 0.25。
+    assert default.corrector_time_limit is None
+    effective, source = probe.resolve_effective_budget(default.corrector_time_limit)
+    assert effective == pytest.approx(probe.PRODUCTION_CORRECTOR_TIME_LIMIT_S)
+    assert source == "production_default"
 
 
 def test_parser_accepts_matrix_load_and_node_cap_options():
@@ -211,7 +216,9 @@ def test_probe_never_touches_planning_defaults():
                     f"探针不得给 planning 赋值：{rendered}"
                 )
     # 不得改默认预算常量
-    assert probe.DEFAULT_CORRECTOR_TIME_LIMIT_S == pytest.approx(0.05)
+    assert probe.MODE_BUDGETS["on"] == pytest.approx(
+        probe.PRODUCTION_CORRECTOR_TIME_LIMIT_S
+    )
 
 
 def test_node_cap_is_only_injected_at_runtime():
@@ -321,7 +328,15 @@ def test_config_records_matrix_load_and_machine(tmp_path):
               "--runs", "1", "--steps", "1", "--load", "hogs", "--load-concurrency", "2",
               "--base-dir", str(tmp_path), "--run-id", "meta")
     config = yaml.safe_load((tmp_path / "meta" / "config.yaml").read_text(encoding="utf-8"))
-    assert config["corrector_time_limit_s"] == pytest.approx(0.05)
+    # M5.4i 迁移：`corrector_time_limit_s` 现在记的是**有效预算**（未传 override 时
+    # 即生产默认 0.25），矩阵档位不再充当默认预算。
+    assert config["corrector_time_limit_s"] == pytest.approx(
+        probe.PRODUCTION_CORRECTOR_TIME_LIMIT_S
+    )
+    assert config["effective_corrector_time_limit_s"] == pytest.approx(
+        probe.PRODUCTION_CORRECTOR_TIME_LIMIT_S
+    )
+    assert config["corrector_time_limit_source"] == "production_default"
     assert config["time_limit_matrix_s"] == [0.05, 0.10, 0.25, 0.50, 2.0]
     assert config["load"]["mode"] == "hogs" and config["load"]["concurrency"] == 2
     assert config["machine"]["cpu_count"]

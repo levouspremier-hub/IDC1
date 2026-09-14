@@ -25,7 +25,7 @@ REQUIRED_AUDIT_COLUMNS = (
     "unavailable_fields", "corrector_failure", "corrector_reason", "digest",
     "skipped", "skip_reason", "wall_clock_disabled_in_probe",
 )
-DEFAULT_BUDGET = 0.05
+DEFAULT_BUDGET = 0.25  # M5.4i：生产默认 0.05 -> 0.25
 
 
 def run_probe(*args: str, timeout: int = 1800) -> subprocess.CompletedProcess:
@@ -123,14 +123,18 @@ def test_provenance_note_matches_the_load_condition():
 
 # --- 3. release_gate 与 attribution 分离 ------------------------------------
 
-def _obs(distinct, *, processes=6, steps=8, source="matrix.0.05"):
-    return {"source": source, "distinct": distinct, "processes": processes, "steps": steps}
+def _obs(distinct, *, processes=6, steps=8, source="matrix.0.25"):
+    # M5.4i 迁移：只有**生产默认**来源的观测才可能进入 release gate（见 M5.4i §4.6）。
+    return {
+        "source": source, "distinct": distinct, "processes": processes, "steps": steps,
+        "corrector_time_limit_source": probe.CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT,
+    }
 
 
 def test_release_gate_blocks_when_default_budget_is_unstable():
     gate = probe.evaluate_release_gate([_obs(2)])
     assert gate["blocked"] is True
-    assert gate["default_budget_s"] == DEFAULT_BUDGET
+    assert gate["default_budget_s"] == pytest.approx(DEFAULT_BUDGET)
     assert gate["all_qualifying"] is True
 
 
@@ -231,7 +235,7 @@ def test_probe_never_writes_planning_defaults():
     for options in (deterministic_mip_options(time_limit_s=0.05),
                     deterministic_mip_options(time_limit_s=None)):
         assert "mip_max_nodes" not in options
-    assert probe.DEFAULT_CORRECTOR_TIME_LIMIT_S == pytest.approx(DEFAULT_BUDGET)
+    assert probe.MODE_BUDGETS["on"] == pytest.approx(DEFAULT_BUDGET)
 
 
 # --- 6. 真实产物（slow） ----------------------------------------------------

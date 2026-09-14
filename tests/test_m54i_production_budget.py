@@ -102,10 +102,11 @@ def test_source_is_decided_by_whether_a_budget_was_given_not_by_its_value():
     """显式给出 0.25 也必须记成 explicit_override（source 描述来源，不是数值）。"""
     from scripts import probe_corrector_repro as probe
 
-    assert probe.resolve_budget_source(None) == "explicit_override"
+    assert probe.resolve_budget_source(None) == "production_default"
     assert probe.resolve_budget_source(0.05) == "explicit_override"
     assert probe.resolve_budget_source(0.25) == "explicit_override"
     assert probe.resolve_budget_source(None, disabled=True) == "disabled"
+    assert probe.resolve_budget_source(0.05, disabled=True) == "disabled"
 
 
 def test_default_resolution_reports_the_production_default():
