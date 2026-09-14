@@ -286,3 +286,98 @@ def test_unstable_default_budget_forces_a_failed_manifest(tmp_path):
         assert result.returncode != 0
     else:
         assert manifest["status"] == "success"
+
+
+# --- 7. 回归：候选值表述必须如实 --------------------------------------------
+
+def test_candidate_notes_never_claim_cross_machine_guarantees():
+    notes = probe.candidate_notes(
+        {"conclusion": "wall_clock_budget_dominant"}, {"blocked": True}, {}
+    )
+    assert notes["machine_local"] is True
+    assert "本机" in notes["disclaimer"]
+    assert "跨机器" in notes["disclaimer"]
+    assert notes["default_budget_still_blocked"] is True
+    assert "候选" in notes["wall_clock_candidate"]
+
+
+def test_node_cap_is_a_candidate_only_when_the_alternative_arm_is_stable():
+    unstable = probe.candidate_notes(
+        None, {"blocked": True},
+        {"100": {"arm": "alternative_semantics", "wall_clock_disabled_in_probe": True,
+                 "distinct": 2}},
+    )
+    assert unstable["node_cap_alternative_semantics"]["candidate"] is False
+    assert "不得" in unstable["node_cap_alternative_semantics"]["note"]
+
+    stable = probe.candidate_notes(
+        None, {"blocked": True},
+        {"100": {"arm": "alternative_semantics", "wall_clock_disabled_in_probe": True,
+                 "distinct": 1}},
+    )
+    assert stable["node_cap_alternative_semantics"]["candidate"] is True
+    assert stable["node_cap_alternative_semantics"]["stable_caps"] == ["100"]
+
+
+def test_wall_clock_arm_alone_does_not_make_the_node_cap_a_candidate():
+    """只做了 with_wall_clock 臂时，不得把节点上限说成候选。"""
+    notes = probe.candidate_notes(
+        None, {"blocked": True},
+        {"100": {"arm": "with_wall_clock", "wall_clock_disabled_in_probe": False,
+                 "distinct": 1}},
+    )
+    assert "node_cap_alternative_semantics" not in notes
+
+
+def test_alternative_arm_notes_are_absent_when_no_node_cap_was_tested():
+    notes = probe.candidate_notes(None, {"blocked": True}, {})
+    assert "node_cap_alternative_semantics" not in notes
+    assert "wall_clock_candidate" not in notes
+
+
+# --- 8. 回归：审计表结构完整性（纯函数） ------------------------------------
+
+def test_every_step_gets_exactly_two_stage_rows_even_with_skips():
+    rows = probe.build_stage_rows(
+        entry={"steps_detail": [
+            {"step": 0, "digest": "d0", "corrector_reason": "none", "calls": [
+                {"stage": "A", "options": {}, "status": 0, "success": True, "message": "",
+                 "elapsed_s": 0.0, "remaining_deadline_s": None, "mip_node_count": None,
+                 "mip_dual_bound": None, "mip_gap": None, "unavailable_fields": {},
+                 "corrector_failure": "none", "corrector_reason": "none",
+                 "node_cap_injected": None},
+                {"stage": "B", "options": {}, "status": 0, "success": True, "message": "",
+                 "elapsed_s": 0.0, "remaining_deadline_s": None, "mip_node_count": None,
+                 "mip_dual_bound": None, "mip_gap": None, "unavailable_fields": {},
+                 "corrector_failure": "none", "corrector_reason": "none",
+                 "node_cap_injected": None},
+            ]},
+            {"step": 1, "digest": "d1", "corrector_reason": "timeout", "calls": [
+                {"stage": "A", "options": {}, "status": 1, "success": False, "message": "",
+                 "elapsed_s": 0.0, "remaining_deadline_s": 0.0, "mip_node_count": None,
+                 "mip_dual_bound": None, "mip_gap": None, "unavailable_fields": {},
+                 "corrector_failure": "timeout", "corrector_reason": "timeout",
+                 "node_cap_injected": None},
+            ]},
+        ]},
+        budget=0.05, pid=1, node_cap=None, wall_clock_disabled=False,
+    )
+    counts = {}
+    for row in rows:
+        counts[row["step"]] = counts.get(row["step"], 0) + 1
+    assert counts == {0: 2, 1: 2}, f"每步必须恰好 A、B 两行：{counts}"
+    assert sum(1 for r in rows if r["skipped"]) == 1
+
+
+def test_skipped_rows_carry_null_measurements_not_zeros():
+    """skipped 行的数值必须是 null —— 不得写成 0 冒充「测到了 0」。"""
+    rows = probe.build_stage_rows(
+        entry={"steps_detail": [{"step": 0, "digest": "d", "corrector_reason": "x",
+                                 "calls": []}]},
+        budget=0.05, pid=1, node_cap=None, wall_clock_disabled=False,
+    )
+    for row in rows:
+        assert row["skipped"] is True
+        for column in ("status", "success", "elapsed_s", "remaining_deadline_s",
+                       "mip_node_count", "mip_dual_bound", "mip_gap", "options_json"):
+            assert row[column] is None, f"skipped 行的 {column} 必须是 null"
