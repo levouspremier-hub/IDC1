@@ -180,3 +180,7 @@ def test_manifest_records_permissions_and_no_silent_resampling(
     assert manifest["series"]["weather"]["resampling"] == "not performed in M1.2"
     assert manifest["sources"]["emc_usep"]["automation"] == "manual browser download only"
     assert manifest["missing_data_policy"] == "reject; no imputation"
+    for source in manifest["sources"].values():
+        assert source["raw_file_frozen_at_utc"]
+        assert source["timezone"] == SINGAPORE_TIMEZONE
+        assert source["raw_units"]
