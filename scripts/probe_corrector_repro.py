@@ -156,8 +156,21 @@ def solver_evidence(*, budget: float) -> dict:
     }
 
 
-def run_once(mode: str, *, steps: int = STEPS) -> dict:
-    """在当前进程中跑一次采集，返回 digest 与进程来源信息。"""
+def _check_steps(steps) -> int:
+    """`steps` 必须为正整数。**不得**有静默默认 —— 参数不真实是本卡要修的缺陷。"""
+    if isinstance(steps, bool) or not isinstance(steps, int):
+        raise TypeError(f"steps 必须为整数，got {type(steps).__name__}={steps!r}")
+    if steps <= 0:
+        raise ValueError(f"steps 必须为正整数，got {steps}")
+    return int(steps)
+
+
+def run_once(mode: str, *, steps: int) -> dict:
+    """在当前进程中跑一次采集，返回 digest 与进程来源信息。
+
+    `steps` 为**必填关键字参数**：调用方必须显式给出实际步数。
+    """
+    steps = _check_steps(steps)
     budget = MODE_BUDGETS[mode]
     env = IDCPriceEnv20D(horizon=HORIZON, **ENV_SEED_KWARGS)
     policy = make_policy(env)
@@ -221,14 +234,18 @@ def overall_conclusion(decisions: dict[str, dict]) -> dict:
 _CHILD_SNIPPET = (
     "import json,sys;"
     "from scripts.probe_corrector_repro import run_once;"
-    "print(json.dumps(run_once(sys.argv[1])))"
+    "print(json.dumps(run_once(sys.argv[1], steps=int(sys.argv[2]))))"
 )
 
 
-def run_in_subprocess(mode: str) -> dict:
-    """在**独立 Python 进程**中跑一次采集（不注入负载、不重试）。"""
+def run_in_subprocess(mode: str, *, steps: int) -> dict:
+    """在**独立 Python 进程**中跑一次采集（不注入负载、不重试）。
+
+    `steps` 必须真正传给子进程 —— 否则子进程会用默认值，产物自相矛盾。
+    """
+    steps = _check_steps(steps)
     result = subprocess.run(
-        [sys.executable, "-c", _CHILD_SNIPPET, mode],
+        [sys.executable, "-c", _CHILD_SNIPPET, mode, str(steps)],
         cwd=REPO_ROOT, capture_output=True, text=True, timeout=900,
     )
     if result.returncode != 0:
@@ -248,6 +265,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.runs < 1:
         parser.error(f"--runs 必须 >= 1，got {args.runs}")
+    if args.steps <= 0:
+        parser.error(f"--steps 必须为正整数，got {args.steps}")
 
     base_dir = Path(args.base_dir)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
@@ -259,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
     for mode in args.modes:
         digests: list[str] = []
         for _ in range(args.runs):
-            entry = run_in_subprocess(mode)
+            entry = run_in_subprocess(mode, steps=args.steps)
             digests.append(entry["digest"])
             provenance.append({**entry, "mode": mode})
             rows.append({
@@ -274,9 +293,16 @@ def main(argv: list[str] | None = None) -> int:
     overall = overall_conclusion(decisions)
     blocked = overall["blocked_modes"]
 
-    command = shlex.join(["python", "scripts/probe_corrector_repro.py", *(
-        ["--modes", *args.modes, "--runs", str(args.runs), "--run-id", run_id]
-    )])
+    # 命令账本：用 shlex.join 完整记录**全部有效参数**（M5.4c 的标准）
+    _argv = ["python", "scripts/probe_corrector_repro.py",
+             "--modes", *args.modes,
+             "--runs", str(args.runs),
+             "--steps", str(args.steps),
+             "--base-dir", str(args.base_dir),
+             "--run-id", run_id]
+    if args.emit_provenance:
+        _argv.append("--emit-provenance")
+    command = shlex.join(_argv)
     config = {
         "probe": "m54d_corrector_reproducibility",
         "trained": False,
@@ -298,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     report = {
         "probe": "m54d_corrector_reproducibility",
         "trained": False,
+        "steps": int(args.steps),
         "statement": REPORT_STATEMENT,
         "claims": {"trained": False, "performance_evaluated": False, "convergence_claimed": False},
         "modes": decisions,
