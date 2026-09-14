@@ -2,8 +2,9 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4h2 实现终点 `0ee844d`
-> （其后仅有本卡的证据与交接 docs 提交）；M5.4h2 **执行完成，等待人工审查**。
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4h2 返修实现终点 `15b8bdd`
+> （其后仅有本卡的证据与交接 docs 提交）；M5.4h2 已按人工复审意见返修，
+> **仍等待人工复审**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -52,7 +53,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `0ee844d` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链（`0ee844d` 为 M5.4h2 实现终点）。 |
+| `p4-safeppo-m51a-rollout-contract` | `15b8bdd` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链（`15b8bdd` 为 M5.4h2 **返修**实现终点）。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
@@ -136,7 +137,7 @@ M5.4f（终点 `46a8acc`）曾把确定性 options 接到不被 corrector 使用
 - M5.4h：`96f3aa1` → `c842c34`，建立预算矩阵、受控 CPU hog、逐阶段探针。
 - M5.4h1：`07e2224` → `ca17d87`，修复了初版账本中的负载记录、失败状态和节点替代
   实验语义。
-- M5.4h2：`bf4b62a` → `0ee844d`（**执行完成，等待人工审查**），勘误了 `options`
+- M5.4h2：`bf4b62a` → `15b8bdd`（**返修完成，仍等待人工复审**），勘误了 `options`
   字段名、`overall` 与 release gate 的一致性、以及未绑定节点上限的候选表述。
 - 当前默认预算仍是 **0.05 s**；在受控 hogs4/hogs8 下，独立进程 digest 可分叉，
   release gate 因此为 blocked。
@@ -169,21 +170,47 @@ M5.4h2 已修正下列三项，专项测试 22 项、`tests/test_m54h*.py` 67 �
 3. `candidate_notes` 固定输出 `node_cap_effective=false` 与 `node_cap_candidate=false`
    （实测未绑定），并将稳定性归因于 probe 内关闭 wall clock。
 
-新增证据路径：`runs/m54h2_matrix/m54h2_hogs4_gate_20260914T114439Z`、
-`runs/m54h2_matrix/m54h2_nodealt_20260914T114439Z`、
-`runs/m54h2_matrix/m54h2_hogs4_attribution_20260914T121500Z`、
-`runs/m54h2_matrix/m54h2_hogs4_attribution_20260914T114439Z`（见
-`docs/task_cards/M5.4h2.md` §9.5）。
+### 7.1 人工复审后的返修（2026-09-14，仍等待复审）
 
-**必须留意的既有事实**：release gate 的判定来自**单次抽样**。M5.4h2 有一次 hogs4
-运行在 0.05 s 下抽到全部 `distinct=1`，该 run 的 manifest 因此为 `success` ——
-这只说明**该次样本**的门禁已清，**不表示** M5.4 已发布；0.05 s 的不稳定是间歇的。
-是否引入跨 run 证据合并或最小样本量策略，属 M5.4h2 范围之外，**待人工决定**。
+复审指出两处语义仍不正确，已返修（`f8a548a` → `15b8bdd`，见
+`docs/task_cards/M5.4h2.md` §10）：
+
+1. **node-cap 候选必须是同一个 cap 的证据交集**。原先把「任意 cap 绑定」与
+   「任意另一个 cap 稳定」拼成 `node_cap_candidate=true`；现在由纯函数
+   `cap_is_candidate` 要求**同一个 cap** 同时满足 `cap_bound`、`distinct==1`、
+   `processes>=6`、`steps>=8`，并输出 `candidate_caps` 列表。
+2. **证据不足必须 fail closed**。`release_gate` 新增 `passed = evaluated and
+   all_qualifying and not blocked`；`manifest.status` 与退出码改由 `passed` 决定
+   （原先只看 `blocked`，于是未测量默认预算、`processes<6`、`steps<8` 都会得到
+   `success`/退出码 0）。`overall.blocked == release_gate.blocked` 仍恒成立；
+   证据不足时 `reason` 必须写明样本量不足。
+
+最终验收证据路径（返修后，`runs/m54h2r1_matrix/`）：
+
+```text
+runs/m54h2r1_matrix/m54h2r1_hogs4_attribution    # attribution=wall_clock_budget_dominant 且门禁 blocked
+runs/m54h2r1_matrix/m54h2r1_nodealt             # cap 100/10000 均未绑定 -> candidate_caps=[]
+runs/m54h2r1_matrix/m54h2r1_not_evaluated       # evaluated=false -> not_evaluated / failed / exit 1
+runs/m54h2r1_matrix/m54h2r1_not_evaluated_ledger # 同上，且含完整七类产物
+runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_evidence / failed / exit 1
+```
+
+旧产物 `runs/m54h2_matrix/**`：修订早于返修，**`superseded_pre_fix`**，
+**不属于最终验收证据**。其中
+`runs/m54h2_matrix/m54h2_hogs4_attribution_20260914T114439Z` 的
+`manifest=success` **必须读作**「该次样本的门禁恰好是清的」——
+**它不是**当前有效的 `released` 产物，也**不表示** M5.4 已发布。
+按「不挑选重试结果」的要求，这些 run 全部**保留**，未删除、未覆盖。
+
+**必须留意的既有事实**：release gate 的判定来自**单次抽样**。0.05 s 的不稳定是间歇的，
+一次抽到全部 `distinct=1` 就能让门禁通过。返修消除了「证据不足却放行」（fail open），
+但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
+属 M5.4h2 范围之外，**待人工决定**。
 
 ## 8. 当前授权状态：M5.4i 未开始
 
-`M5.4h2` **执行完成，等待人工审查**；尚未被人工接受。
-`M5.4i` **尚未开始，尚未获得本轮审查放行** —— 在人工审阅 M5.4h2 的 diff 并明确
+`M5.4h2` 已按人工复审意见返修（见 §7.1），**仍等待人工复审**；尚未被人工接受。
+`M5.4i` **尚未开始，尚未获得本轮复审放行** —— 在人工复审 M5.4h2 返修 diff 并明确
 放行之前不得开工。默认预算仍为 0.05 s，M5.4 状态仍为 blocked，**不得**表述为 released。
 
 ### M5.4i（未开始）：采纳 0.25 s 为正确器生产默认预算
