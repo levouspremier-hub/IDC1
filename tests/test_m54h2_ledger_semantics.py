@@ -157,24 +157,31 @@ def test_attribution_never_decides_the_phase_status():
     assert phase["exit_code"] != 0
 
 
-def test_phase_status_only_releases_when_the_gate_is_clear():
+def test_phase_status_is_not_blocked_only_when_the_gate_is_clear():
     phase = probe.phase_status(
         release_gate=_clear_gate(),
         attribution={"conclusion": "insufficient_evidence"},
     )
     assert phase["overall"]["blocked"] is False
-    assert phase["overall"]["conclusion"] == "released"
+    assert phase["overall"]["conclusion"] == "not_blocked"
     assert phase["status"] == "success"
     assert phase["exit_code"] == 0
 
 
-def test_phase_status_does_not_claim_release_without_a_default_budget_measurement():
-    """未测默认预算时不得声称已放行（也不得判 blocked）。"""
+def test_phase_status_never_claims_the_phase_was_released():
+    """门禁放行不等于阶段已发布：结论词不得出现 released/发布。"""
+    for gate in (_clear_gate(), _blocked_gate(), probe.evaluate_release_gate([])):
+        conclusion = probe.phase_status(release_gate=gate)["overall"]["conclusion"]
+        assert conclusion != "released", "不得用 released 表述阶段状态"
+
+
+def test_phase_status_does_not_claim_a_clear_gate_without_a_budget_measurement():
+    """未测默认预算时不得声称门禁已清（也不得判 blocked）。"""
     gate = probe.evaluate_release_gate([])
     phase = probe.phase_status(release_gate=gate)
     assert gate["evaluated"] is False
     assert phase["overall"]["blocked"] is False
-    assert phase["overall"]["conclusion"] != "released"
+    assert phase["overall"]["conclusion"] == "not_evaluated"
 
 
 def test_phase_status_is_decided_by_the_release_gate_alone():

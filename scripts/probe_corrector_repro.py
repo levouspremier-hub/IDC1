@@ -583,7 +583,8 @@ def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict
     elif not release_gate.get("all_qualifying", False):
         conclusion = "insufficient_evidence"
     else:
-        conclusion = "released"
+        # 措辞刻意保守：门禁放行**不等于** M5.4 阶段已发布（发布由 M5.4i 与人工审查决定）。
+        conclusion = "not_blocked"
     return {
         "overall": {
             "blocked": blocked,
