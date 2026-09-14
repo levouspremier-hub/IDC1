@@ -146,9 +146,8 @@ COMMAND_ARGV_SCRIPT = """
 import json, sys
 from safe_rl_v2.train import build_parser, _effective_argv
 
-parser = build_parser()
-args = parser.parse_args(sys.argv[1:])
-print(json.dumps(_effective_argv(parser, args, "the_run_id")))
+args = build_parser().parse_args(sys.argv[1:])
+print(json.dumps(_effective_argv(args, args.run_id or "generated_run_id")))
 """
 
 
@@ -188,10 +187,7 @@ def test_effective_argv_round_trips_through_the_parser():
     rep = parser.parse_args(argv[3:])
     original = parser.parse_args(cli_args)
     for key, value in vars(original).items():
-        if key == "run_id":
-            assert rep.run_id == "the_run_id"  # 由账本显式覆盖为真实 run_id
-        else:
-            assert getattr(rep, key) == value, f"{key} 未被账本完整保留"
+        assert getattr(rep, key) == value, f"{key} 未被账本完整保留"
 
 
 def test_effective_argv_is_shell_safe():
@@ -199,8 +195,10 @@ def test_effective_argv_is_shell_safe():
     argv = _effective_argv(["--synthetic-smoke", "--base-dir", "dir with spaces",
                             "--run-id", "id;rm -rf /", "--steps", "1"])
     joined = shlex.join(argv)
-    assert shlex.split(joined) == argv, "command 未经安全转义"
-    assert shlex.split(joined)[4] == "dir with spaces"
+    restored = shlex.split(joined)
+    assert restored == argv, "command 未经安全转义"
+    assert restored[restored.index("--base-dir") + 1] == "dir with spaces"
+    assert restored[restored.index("--run-id") + 1] == "id;rm -rf /"
 
 
 def test_manifest_command_records_every_parameter(tmp_path):

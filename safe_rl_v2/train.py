@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -320,6 +321,51 @@ class TrainEntryError(RuntimeError):
     """入口级失败（参数、数据阻塞、运行期错误）；用于写失败 manifest。"""
 
 
+class RunIdConflictError(RuntimeError):
+    """run_id 撞上已有成功 run：保留成功结果，不写失败 manifest。"""
+
+
+# 命令账本：`(flag, dest, kind)`。kind ∈ {"flag", "value"}。
+# 必须覆盖 `build_parser()` 的**全部** action —— 由
+# `tests/test_m54c_run_artifact_integrity.py::test_command_ledger_covers_every_cli_action`
+# 结构性地断言，新增 CLI 参数而忘记登记时该测试会失败。
+COMMAND_ARGV_SPEC: tuple[tuple[str, str, str], ...] = (
+    ("--synthetic-smoke", "synthetic_smoke", "flag"),
+    ("--steps", "steps", "value"),
+    ("--seed", "seed", "value"),
+    ("--corrector", "corrector", "value"),
+    ("--corrector-time-limit-s", "corrector_time_limit_s", "value"),
+    ("--base-dir", "base_dir", "value"),
+    ("--run-id", "run_id", "value"),
+    ("--task-seed", "task_seed", "value"),
+    ("--server-seed", "server_seed", "value"),
+    ("--forecast-seed", "forecast_seed", "value"),
+    ("--horizon", "horizon", "value"),
+)
+
+
+def _effective_argv(args: argparse.Namespace, run_id: str) -> list[str]:
+    """由**解析后的 namespace** 重建完整调用 argv（结构上不可能遗漏参数）。
+
+    `run_id` 单独传入：默认 run_id 是运行时生成的，未必等于 `args.run_id`，
+    但账本必须记录**真正使用**的那个。
+    """
+    argv = ["python", "-m", "safe_rl_v2.train"]
+    for flag, dest, kind in COMMAND_ARGV_SPEC:
+        if dest == "run_id":
+            argv += [flag, run_id]
+            continue
+        value = getattr(args, dest)
+        if kind == "flag":
+            if value:
+                argv.append(flag)
+        elif value is None:
+            continue  # 未给出的可选参数不进账本
+        else:
+            argv += [flag, str(value)]
+    return argv
+
+
 def _dependency_lock_hash() -> str | None:
     import hashlib
 
@@ -327,10 +373,16 @@ def _dependency_lock_hash() -> str | None:
     return hashlib.sha256(lock.read_bytes()).hexdigest() if lock.exists() else None
 
 
-def _unique_run_id(base_dir: Path, seed: int) -> str:
-    """默认 run_id 每次调用唯一，使重复运行不覆盖既有成功结果。"""
+def _unique_run_id(base_dir: Path, seed: int, *, kind: str) -> str:
+    """默认 run_id 每次调用唯一，使重复运行不覆盖既有成功结果。
+
+    `kind` 决定前缀：`"synthetic"` / `"real"`。默认真实路径**不得**写成 synthetic
+    —— 它因 M1.2 阻塞而失败，从未使用合成数据（M5.4c 修复）。
+    """
+    if kind not in ("synthetic", "real"):
+        raise ValueError(f"kind 必须为 'synthetic' 或 'real'，got {kind!r}")
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    base = f"train_synthetic_s{seed}_{stamp}"
+    base = f"train_{kind}_s{seed}_{stamp}"
     candidate, suffix = base, 1
     while (base_dir / candidate / "manifest.json").exists():
         candidate = f"{base}_{suffix}"
@@ -486,7 +538,11 @@ def _metrics_for(result: dict) -> pd.DataFrame:
 def _write_failed_run(
     run_id: str, base_dir: Path, command: str, seed: int, error: Exception
 ) -> None:
-    """已获得 run_id 的失败也必须落一个失败 manifest。"""
+    """已获得 run_id 的失败也必须落一个失败 manifest。
+
+    若该 run_id 已有**成功**结果，则**保留它**并抛 `RunIdConflictError` ——
+    绝不覆盖，也绝不把它说成「失败 manifest 已写入」（M5.4c）。
+    """
     try:
         write_run(
             run_id,
@@ -511,7 +567,12 @@ def _write_failed_run(
             status="failed",
             failure_classification=type(error).__name__,
         )
-    except Exception as exc:  # pragma: no cover - 失败写失败 manifest 本身失败时不再掩盖
+    except FileExistsError as exc:
+        raise RunIdConflictError(
+            f"run_id {run_id!r} 已存在成功结果；**保留该成功结果**，未写入失败 manifest。"
+            f"原始错误：{exc}"
+        ) from exc
+    except Exception as exc:  # pragma: no cover - 写失败 manifest 本身失败时不再掩盖
         print(f"警告：写失败 manifest 时又出错：{exc}", file=sys.stderr)
 
 
@@ -541,12 +602,10 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"--{key.replace('_', '-')} 不得为空（env 会用熵源，导致不可复现）")
 
     base_dir = Path(args.base_dir)
-    run_id = args.run_id or _unique_run_id(base_dir, args.seed)
-    command = " ".join(
-        ["python -m safe_rl_v2.train", f"--steps {args.steps}", f"--seed {args.seed}",
-         f"--corrector {args.corrector}", f"--run-id {run_id}"]
-        + (["--synthetic-smoke"] if args.synthetic_smoke else [])
-    )
+    run_kind = "synthetic" if args.synthetic_smoke else "real"
+    run_id = args.run_id or _unique_run_id(base_dir, args.seed, kind=run_kind)
+    # 命令账本：由 argv 列表 + shell 安全转义构造，结构上不可能遗漏参数
+    command = shlex.join(_effective_argv(args, run_id))
 
     try:
         if not args.synthetic_smoke:
@@ -561,7 +620,12 @@ def main(argv: list[str] | None = None) -> int:
         metrics = _metrics_for(result)
     except Exception as exc:
         print(f"训练入口失败：{type(exc).__name__}: {exc}", file=sys.stderr)
-        _write_failed_run(run_id, base_dir, command, args.seed, exc)
+        try:
+            _write_failed_run(run_id, base_dir, command, args.seed, exc)
+        except RunIdConflictError as conflict:
+            # 保留已有成功结果；**不得**声称写了失败 manifest
+            print(f"训练入口失败且未写失败 manifest：{conflict}", file=sys.stderr)
+            return 3
         return 1
 
     try:

@@ -41,8 +41,12 @@ def write_run(
 
     if manifest_path.exists():
         existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if existing.get("status") == "success" and status == "success":
-            raise FileExistsError(f"run {run_id} 已存在成功结果，不覆盖")
+        # 已有**成功**结果不得被**任何**后续状态覆盖（含 status="failed"）。
+        # 仅拦 success→success 会让一次失败的复跑销毁此前的成功产物（M5.4c 修复）。
+        if existing.get("status") == "success":
+            raise FileExistsError(
+                f"run {run_id} 已存在成功结果，不得被 status={status!r} 覆盖"
+            )
 
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "figures").mkdir(exist_ok=True)
