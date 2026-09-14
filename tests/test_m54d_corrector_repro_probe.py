@@ -243,3 +243,60 @@ def test_probe_evidence_records_solver_and_reproducibility_inputs(tmp_path):
     assert config["horizon"] and config["budget_s"] == probe.MODE_BUDGETS["on"]
     assert config["modes"] == ["off"]
     assert config["runs_per_mode"] == 2
+
+
+# --- 5. 回归：跨模式汇总结论（纯函数，支撑 M5.4 §8） ------------------------
+
+def test_overall_is_blocked_if_any_mode_is_blocked():
+    decisions = {
+        "off": probe.decide("off", ["a", "a"]),
+        "on": probe.decide("on", ["a", "b"]),
+    }
+    overall = probe.overall_conclusion(decisions)
+    assert overall["blocked"] is True
+    assert overall["blocked_modes"] == ["on"]
+    assert overall["conclusion"] == "blocked"
+
+
+def test_overall_is_reproducible_only_when_every_mode_is():
+    decisions = {
+        "off": probe.decide("off", ["a", "a", "a"]),
+        "on": probe.decide("on", ["b", "b", "b"]),
+    }
+    overall = probe.overall_conclusion(decisions)
+    assert overall["blocked"] is False
+    assert overall["blocked_modes"] == []
+    assert overall["conclusion"] == "reproducible"
+
+
+def test_overall_rejects_an_empty_measurement_set():
+    with pytest.raises(ValueError):
+        probe.overall_conclusion({})
+
+
+def test_decide_rejects_an_empty_measurement_set():
+    with pytest.raises(ValueError):
+        probe.decide("on", [])
+    with pytest.raises(ValueError):
+        probe.decide("nonexistent_mode", ["a"])
+
+
+@pytest.mark.slow
+def test_probe_config_declares_no_load_and_no_retry_selection(tmp_path):
+    """探针必须自证：未注入负载、未重试挑选取样（要求 7）。"""
+    import yaml
+
+    probe.main(["--modes", "off", "--runs", "1", "--base-dir", str(tmp_path), "--run-id", "decl"])
+    config = yaml.safe_load((tmp_path / "decl" / "config.yaml").read_text(encoding="utf-8"))
+    assert config["load_injected"] is False
+    assert config["retry_selection"] is False
+    assert config["wall_clock_keys_excluded"] == list(probe.WALL_CLOCK_KEYS)
+    assert config["policy_seed"] is not None and config["generator_seed"] is not None
+
+
+def test_probe_documents_its_own_detection_power():
+    """间歇性不稳定必须被如实写在探针文档里，避免单次 reproducible 被过度解读。"""
+    docstring = (probe.__doc__ or "")
+    assert "间歇" in docstring
+    assert "单次" in docstring
+    assert "--runs" in docstring

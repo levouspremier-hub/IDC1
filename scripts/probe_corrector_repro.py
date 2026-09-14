@@ -6,6 +6,12 @@
 - `off`：corrector 关闭 —— **期望**跨进程逐位一致；
 - `on` ：corrector 开启、明确固定且**非恒超时**的预算 —— 结论**由测量决定**。
 
+**检测力说明（实测）**：`on` 的不稳定是**间歇**的。以 `--runs 4` 连做 5 次调用，
+其中 1 次得到 `distinct=2`（blocked）、4 次得到 `distinct=1`。
+也就是说**单次调用**在 `--runs 4` 下只有约 1/5 的概率撞上不稳定 ——
+因此**单次 `reproducible` 不足以断言正确**，需要多次调用或更大的 `--runs`
+（每个子进程约 10 s，`--runs` 越大越慢）。`off` 在同 5 次调用中始终 `distinct=1`。
+
 本探针**不**注入 CPU hog、**不**重试挑选取样、**不**把 timeout 当作正常求解成功，
 源码中**不含**任何预设 digest 或预设布尔结论。
 
@@ -195,6 +201,21 @@ def decide(mode: str, digests: list[str]) -> dict:
     }
 
 
+def overall_conclusion(decisions: dict[str, dict]) -> dict:
+    """跨模式汇总：**任一**模式被 blocked，整体即为 blocked（纯函数）。
+
+    依据任务卡 M5.4d §8：只要 corrector 开启仍不一致，M5.4 阶段结论必须是 blocked。
+    """
+    if not decisions:
+        raise ValueError("decisions 不得为空：没有测量就没有结论")
+    blocked = sorted(mode for mode, decision in decisions.items() if decision["blocked"])
+    return {
+        "blocked": bool(blocked),
+        "blocked_modes": blocked,
+        "conclusion": "blocked" if blocked else "reproducible",
+    }
+
+
 # --- 独立进程执行 -----------------------------------------------------------
 
 _CHILD_SNIPPET = (
@@ -250,12 +271,8 @@ def main(argv: list[str] | None = None) -> int:
             })
         decisions[mode] = decide(mode, digests)
 
-    blocked = [m for m, d in decisions.items() if d["blocked"]]
-    overall = {
-        "blocked": bool(blocked),
-        "blocked_modes": sorted(blocked),
-        "conclusion": "blocked" if blocked else "reproducible",
-    }
+    overall = overall_conclusion(decisions)
+    blocked = overall["blocked_modes"]
 
     command = shlex.join(["python", "scripts/probe_corrector_repro.py", *(
         ["--modes", *args.modes, "--runs", str(args.runs), "--run-id", run_id]
