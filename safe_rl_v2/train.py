@@ -430,6 +430,16 @@ def _require_frozen_real_scenario(args) -> None:
         ) from exc
 
 
+def _manifest_metadata(args) -> dict:
+    """写入 manifest 的 provenance（M5.4i）——与 config/report **同一份**推导。"""
+    effective, source = _budget_resolution(args)
+    return {
+        "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+        "effective_corrector_time_limit_s": effective,
+        "corrector_time_limit_source": source,
+    }
+
+
 def _budget_resolution(args) -> tuple[float | None, str]:
     """解析本次调用的 `(有效预算, 来源)`；来源由**是否显式给出**决定。
 
@@ -657,6 +667,7 @@ def main(argv: list[str] | None = None) -> int:
             data_hash=None,
             dependency_lock_hash=_dependency_lock_hash(),
             status="success",
+            manifest_metadata=_manifest_metadata(args),
         )
     except FileExistsError as exc:
         print(f"拒绝覆盖既有成功 run：{exc}", file=sys.stderr)

@@ -328,6 +328,11 @@ def main(argv: list[str] | None = None) -> int:
             dependency_lock_hash=_dependency_lock_hash(),
             status=status,
             failure_classification=None if failure is None else "smoke_check_failed",
+            manifest_metadata={
+                "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                "effective_corrector_time_limit_s": effective_budget,
+                "corrector_time_limit_source": budget_source,
+            },
         )
     except FileExistsError as exc:
         print(f"拒绝覆盖既有成功 run：{exc}", file=sys.stderr)

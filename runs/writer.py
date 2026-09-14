@@ -21,6 +21,21 @@ def git_revision() -> str:
         return "unknown"
 
 
+# M5.4i：writer 自己写入 manifest 的字段。调用方**不得**通过 manifest_metadata
+# 覆盖它们 —— 否则账本的可信度就交给调用方了。
+RESERVED_MANIFEST_FIELDS = (
+    "run_id",
+    "revision",
+    "dependency_lock_hash",
+    "data_hash",
+    "scenario_hash",
+    "seed",
+    "command",
+    "status",
+    "failure_classification",
+)
+
+
 def write_run(
     run_id: str,
     *,
@@ -35,7 +50,19 @@ def write_run(
     dependency_lock_hash: str | None = None,
     status: str = "success",
     failure_classification: str | None = None,
+    manifest_metadata: dict | None = None,
 ) -> Path:
+    """写一个标准 run。`manifest_metadata` 是**受控**扩展：只能新增字段。
+
+    不得覆盖 `RESERVED_MANIFEST_FIELDS`；冲突时**明确失败**而不是静默改写。
+    """
+    metadata = dict(manifest_metadata or {})
+    clashes = sorted(set(metadata) & set(RESERVED_MANIFEST_FIELDS))
+    if clashes:
+        raise ValueError(
+            f"manifest_metadata 不得覆盖 writer 保留字段：{clashes}"
+        )
+
     run_dir = Path(base_dir) / run_id
     manifest_path = run_dir / "manifest.json"
 
@@ -65,5 +92,6 @@ def write_run(
         "status": status,
         "failure_classification": failure_classification,
     }
+    manifest.update(metadata)
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return run_dir

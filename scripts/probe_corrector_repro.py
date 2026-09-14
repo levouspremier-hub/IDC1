@@ -38,6 +38,7 @@ if __package__ in (None, ""):
 import numpy as np
 import pandas as pd
 import torch
+import yaml
 
 from envs.idc_price_env import IDCPriceEnv20D
 from planning.corrector import (
@@ -630,73 +631,244 @@ def evaluate_release_gate(
     }
 
 
-def aggregate_release_batches(run_dirs: list) -> dict:
-    """把**同一负载**的多个独立批次 run 聚合起来（M5.4i §10）。
+MIN_RELEASE_BATCHES = 3
+# 一批发布证据必须完整的标准产物（缺任一即 fail closed）
+REQUIRED_BATCH_ARTIFACTS = (
+    "config.yaml", "metrics.parquet", "report.json", "figures",
+    "manifest.json", "summary.json", "summary.parquet",
+)
+PROVENANCE_KEYS = (
+    "production_corrector_time_limit_s",
+    "effective_corrector_time_limit_s",
+    "corrector_time_limit_source",
+)
 
-    单次抽样可能是幸运的（0.05 s 的不稳定是间歇的），因此发布证据必须跨批次聚合：
-    每个单批 `distinct=1` **且** 跨批 `aggregate distinct=1` 才算通过。
-    只读各 run 已落盘的 `report.json` / `summary.parquet`，不改写任何 run。
+
+def _aggregation_failure(failures: list, reason: str, *, batch, detail: str = "") -> None:
+    failures.append({"batch": batch, "reason": reason, "detail": detail})
+
+
+def _read_batch(path: Path, failures: list) -> dict | None:
+    """读取一个批次；**任何**缺失/不可解析都 fail closed 并记录原因。"""
+    batch = path.name
+    artifacts: dict = {}
+    missing = [
+        name for name in REQUIRED_BATCH_ARTIFACTS if not (path / name).exists()
+    ]
+    if missing:
+        _aggregation_failure(failures, "missing_or_unreadable_artifact",
+                             batch=batch, detail=f"缺少 {missing}")
+        return None
+    try:
+        artifacts["config"] = yaml.safe_load((path / "config.yaml").read_text(encoding="utf-8"))
+        artifacts["report"] = json.loads((path / "report.json").read_text(encoding="utf-8"))
+        artifacts["manifest"] = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        artifacts["summary"] = json.loads((path / "summary.json").read_text(encoding="utf-8"))
+        table = pd.read_parquet(path / "summary.parquet")
+    except Exception as exc:  # noqa: BLE001 - 解析失败必须 fail closed，不得默认通过
+        _aggregation_failure(failures, "missing_or_unreadable_artifact",
+                             batch=batch, detail=f"{type(exc).__name__}: {exc}")
+        return None
+    if "status" not in table.columns:
+        _aggregation_failure(failures, "summary_parquet_missing_status_column", batch=batch)
+        return None
+    artifacts["stage_statuses"] = [
+        s for s in table["status"].tolist() if s is not None
+    ]
+    artifacts["path"] = path
+    return artifacts
+
+
+def _check_batch(batch: str, artifacts: dict, failures: list) -> dict:
+    """逐批核验；返回该批的机器可读摘要（即使失败也保留）。"""
+    manifest = artifacts["manifest"]
+    report = artifacts["report"]
+    config = artifacts["config"]
+    gate = report.get("release_gate") or {}
+
+    if manifest.get("status") != "success":
+        _aggregation_failure(failures, "manifest_status_not_success",
+                             batch=batch, detail=str(manifest.get("status")))
+    run_id = manifest.get("run_id")
+    if not run_id:
+        _aggregation_failure(failures, "manifest_run_id_missing", batch=batch)
+    revision = manifest.get("revision")
+    if not revision:
+        _aggregation_failure(failures, "manifest_revision_missing", batch=batch)
+
+    # provenance：三处（config/report/manifest）必须都存在且恒等
+    for obj, label in ((config, "config"), (report, "report"), (manifest, "manifest")):
+        absent = [k for k in PROVENANCE_KEYS if k not in (obj or {})]
+        if absent:
+            _aggregation_failure(failures, "manifest_provenance_missing",
+                                 batch=batch, detail=f"{label} 缺少 {absent}")
+    if all(k in manifest and k in report for k in PROVENANCE_KEYS):
+        if any(manifest[k] != report[k] for k in PROVENANCE_KEYS):
+            _aggregation_failure(failures, "provenance_inconsistent",
+                                 batch=batch, detail="manifest 与 report 不一致")
+
+    if gate.get("evaluated") is not True:
+        _aggregation_failure(failures, "release_gate_not_evaluated", batch=batch)
+    if gate.get("all_qualifying") is not True:
+        _aggregation_failure(failures, "release_gate_not_all_qualifying", batch=batch)
+    if gate.get("passed") is not True:
+        _aggregation_failure(failures, "release_gate_not_passed", batch=batch)
+
+    digests: list[str] = []
+    for observation in gate.get("observations") or []:
+        source = str(observation.get("source"))
+        processes = int(observation.get("processes") or 0)
+        steps = int(observation.get("steps") or 0)
+        observed = list(observation.get("digests") or [])
+        if processes < MATRIX_MIN_PROCESSES or steps < MATRIX_MIN_STEPS:
+            _aggregation_failure(failures, "observation_underpowered", batch=batch,
+                                 detail=f"{source} processes={processes} steps={steps}")
+        if not observed:
+            _aggregation_failure(failures, "digests_empty", batch=batch, detail=source)
+        elif len(observed) != processes:
+            _aggregation_failure(failures, "digest_count_mismatch", batch=batch,
+                                 detail=f"{source} len={len(observed)} processes={processes}")
+        if observation.get("corrector_time_limit_source") != (
+            CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT
+        ):
+            _aggregation_failure(failures, "override_observation_in_release_evidence",
+                                 batch=batch, detail=source)
+        budget = observation.get("effective_corrector_time_limit_s")
+        if budget is None or abs(float(budget) - PRODUCTION_CORRECTOR_TIME_LIMIT_S) > 1e-12:
+            _aggregation_failure(failures, "budget_not_production_default",
+                                 batch=batch, detail=f"{source} budget={budget}")
+        digests.extend(observed)
+
+    time_limit_failures = sum(
+        1 for s in artifacts["stage_statuses"] if int(s) == 1
+    )
+    if time_limit_failures:
+        _aggregation_failure(failures, "time_limit_failure", batch=batch,
+                             detail=f"{time_limit_failures} 次")
+    distinct = len(set(digests))
+    if distinct != 1:
+        _aggregation_failure(failures, "batch_distinct_not_one", batch=batch,
+                             detail=f"distinct={distinct}")
+
+    return {
+        "batch": batch,
+        "path": str(artifacts["path"]),
+        "manifest_run_id": run_id,
+        "manifest_revision": revision,
+        "manifest_status": manifest.get("status"),
+        "release_gate_passed": gate.get("passed"),
+        "observed_processes": len(digests),
+        "observed_distinct": distinct,
+        "observations": [str(o.get("source")) for o in gate.get("observations") or []],
+        "time_limit_failures": time_limit_failures,
+        "effective_corrector_time_limit_s": report.get("effective_corrector_time_limit_s"),
+        "corrector_time_limit_source": report.get("corrector_time_limit_source"),
+        "digests": digests,
+    }
+
+
+def aggregate_release_batches(run_dirs: list) -> dict:
+    """把**同一负载**的多个**独立批次** run 聚合起来（M5.4i §10）。
+
+    **fail closed**：批次不足、路径/run_id 重复、批间负载或机器不一致、任一批次
+    manifest 非 success、revision 缺失或不一致、门禁未通过、样本量不足、
+    `summary.parquet` 缺失或不可读、输入产物不完整 —— 一律 `passed=false`，
+    并在 `failures` 里给出**具体批次与原因**。任何字段/文件缺失都**不得**默认通过。
     """
+    failures: list[dict] = []
+    normalized: list[Path] = []
     batches: list[dict] = []
     all_digests: list[str] = []
-    time_limit_failures = 0
+
     for raw in run_dirs:
         path = Path(raw)
-        report = json.loads((path / "report.json").read_text(encoding="utf-8"))
-        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-        gate = report["release_gate"]
-        digests = [d for o in gate["observations"] for d in o.get("digests", [])]
-        all_digests.extend(digests)
-        parquet = path / "summary.parquet"
-        stage_statuses: list[float] = []
-        if parquet.exists():
-            stage_statuses = [
-                s for s in pd.read_parquet(parquet)["status"].tolist() if s is not None
-            ]
-        # scipy milp：status==1 即 time limit。
-        time_limit_failures += sum(1 for s in stage_statuses if int(s) == 1)
-        batches.append({
-            "run_id": manifest.get("run_id", path.name),
-            "manifest_status": manifest.get("status"),
-            "passed": bool(gate["passed"]),
-            "observed_distinct": len(set(digests)),
-            "observed_processes": len(digests),
-            "observations": [o.get("source") for o in gate["observations"]],
-            "time_limit_failures": sum(1 for s in stage_statuses if int(s) == 1),
-            "effective_corrector_time_limit_s": report.get(
-                "effective_corrector_time_limit_s"
-            ),
-            "corrector_time_limit_source": report.get("corrector_time_limit_source"),
-        })
+        try:
+            key = Path(os.path.realpath(path))
+        except OSError:
+            key = path
+        if key in normalized:
+            _aggregation_failure(failures, "duplicate_input_path",
+                                 batch=path.name, detail=str(key))
+        normalized.append(key)
+
+        artifacts = _read_batch(path, failures)
+        if artifacts is None:
+            continue
+        batches.append(_check_batch(path.name, artifacts, failures))
+        all_digests.extend(batches[-1]["digests"])
+
+    if len(run_dirs) < MIN_RELEASE_BATCHES:
+        _aggregation_failure(
+            failures, "too_few_batches", batch=None,
+            detail=f"{len(run_dirs)} < {MIN_RELEASE_BATCHES}",
+        )
+
+    run_ids = [b["manifest_run_id"] for b in batches if b["manifest_run_id"]]
+    if len(run_ids) != len(set(run_ids)):
+        _aggregation_failure(failures, "duplicate_run_id", batch=None,
+                             detail=str(sorted(run_ids)))
+
+    revisions = {b["manifest_revision"] for b in batches if b["manifest_revision"]}
+    if len(revisions) > 1:
+        _aggregation_failure(failures, "inconsistent_revision", batch=None,
+                             detail=str(sorted(revisions)))
+
+    # 负载 / 机器签名必须完全一致（保持「本机候选」语义）
+    signatures: dict[str, set] = {"load": set(), "machine": set()}
+    for raw in run_dirs:
+        try:
+            report = json.loads((Path(raw) / "report.json").read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001 - 已在 _read_batch 记录
+            continue
+        signatures["load"].add(
+            json.dumps(report.get("load") or {}, sort_keys=True, ensure_ascii=False)
+        )
+        signatures["machine"].add(
+            json.dumps(report.get("machine") or {}, sort_keys=True, ensure_ascii=False)
+        )
+    if len(signatures["load"]) > 1:
+        _aggregation_failure(failures, "inconsistent_load_signature", batch=None,
+                             detail=json.dumps(sorted(signatures["load"]), ensure_ascii=False))
+    if len(signatures["machine"]) > 1:
+        _aggregation_failure(failures, "inconsistent_machine_signature", batch=None)
+
     sources = sorted({b["corrector_time_limit_source"] for b in batches})
     budgets = sorted(
-        {b["effective_corrector_time_limit_s"] for b in batches}, key=lambda x: (x is None, x)
+        {b["effective_corrector_time_limit_s"] for b in batches},
+        key=lambda x: (x is None, x),
     )
-    every_batch_distinct_one = all(b["observed_distinct"] == 1 for b in batches)
-    every_batch_passed = all(b["passed"] for b in batches)
+    every_batch_distinct_one = bool(batches) and all(
+        b["observed_distinct"] == 1 for b in batches
+    )
+    every_batch_passed = bool(batches) and all(b["release_gate_passed"] for b in batches)
     production_default_only = sources == [CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT]
+    time_limit_failures = sum(b["time_limit_failures"] for b in batches)
+    aggregate_distinct = len(set(all_digests))
+    if batches and aggregate_distinct != 1:
+        _aggregation_failure(failures, "aggregate_distinct_not_one", batch=None,
+                             detail=f"distinct={aggregate_distinct}")
+    if budgets != [PRODUCTION_CORRECTOR_TIME_LIMIT_S]:
+        _aggregation_failure(failures, "budget_not_production_default", batch=None,
+                             detail=str(budgets))
+
     return {
         "batches": len(batches),
+        "min_batches": MIN_RELEASE_BATCHES,
         "per_batch": batches,
         "aggregate_processes": len(all_digests),
-        "aggregate_distinct": len(set(all_digests)),
+        "aggregate_distinct": aggregate_distinct,
         "every_batch_distinct_one": every_batch_distinct_one,
         "every_batch_passed": every_batch_passed,
         "time_limit_failures": time_limit_failures,
         "corrector_time_limit_sources": sources,
         "effective_corrector_time_limit_s": budgets,
         "production_default_only": production_default_only,
-        # 发布候选判据：跨批聚合一致 **且** 单批全一致 **且** 零 time_limit **且**
-        # 全部批次确实来自生产默认（不得用显式 override 伪造默认）。
-        "passed": bool(
-            batches
-            and every_batch_distinct_one
-            and every_batch_passed
-            and time_limit_failures == 0
-            and len(set(all_digests)) == 1
-            and production_default_only
-            and budgets == [PRODUCTION_CORRECTOR_TIME_LIMIT_S]
-        ),
+        "load_signatures": sorted(signatures["load"]),
+        "machine_signatures": sorted(signatures["machine"]),
+        "revisions": sorted(revisions),
+        "failures": failures,
+        # 发布候选判据：**无任何失败原因**才算通过（fail closed）。
+        "passed": not failures,
     }
 
 
@@ -1148,15 +1320,116 @@ def main(argv: list[str] | None = None) -> int:
     run_id = args.run_id or f"correctorrepro_{stamp}"
 
     if args.aggregate_runs:
-        # 跨批聚合：只读既有 run，不测量、不覆盖任何 run（M5.4i §10）。
+        # 跨批聚合：只读既有 run，不测量；产物本身也必须是**标准 run**
+        # （M5.4i 返修），且不得覆盖既有成功聚合 run。
         aggregated = aggregate_release_batches(args.aggregate_runs)
-        out_dir = base_dir / run_id
-        out_dir.mkdir(parents=True, exist_ok=True)
+        status = "success" if aggregated["passed"] else "failed"
+        aggregate_command = shlex.join(
+            ["python", "scripts/probe_corrector_repro.py", "--aggregate-runs",
+             *[str(r) for r in args.aggregate_runs],
+             "--base-dir", str(args.base_dir), "--run-id", run_id]
+        )
+        batch_rows = [
+            {
+                "batch": b["batch"],
+                "path": b["path"],
+                "manifest_run_id": b["manifest_run_id"],
+                "manifest_revision": b["manifest_revision"],
+                "manifest_status": b["manifest_status"],
+                "release_gate_passed": b["release_gate_passed"],
+                "observed_processes": b["observed_processes"],
+                "observed_distinct": b["observed_distinct"],
+                "time_limit_failures": b["time_limit_failures"],
+                "effective_corrector_time_limit_s": b["effective_corrector_time_limit_s"],
+                "corrector_time_limit_source": b["corrector_time_limit_source"],
+            }
+            for b in aggregated["per_batch"]
+        ]
+        unified_budget = (
+            aggregated["effective_corrector_time_limit_s"][0]
+            if len(aggregated["effective_corrector_time_limit_s"]) == 1 else None
+        )
+        unified_source = (
+            aggregated["corrector_time_limit_sources"][0]
+            if len(aggregated["corrector_time_limit_sources"]) == 1 else None
+        )
+        try:
+            out_dir = write_run(
+                run_id,
+                config={
+                    "probe": "m54i_release_batch_aggregation",
+                    "trained": False,
+                    "input_paths": [str(r) for r in args.aggregate_runs],
+                    "input_run_ids": [b["manifest_run_id"] for b in aggregated["per_batch"]],
+                    "batches": aggregated["batches"],
+                    "min_batches": aggregated["min_batches"],
+                    "unified_revisions": aggregated["revisions"],
+                    "unified_load_signatures": aggregated["load_signatures"],
+                    "unified_machine_signatures": aggregated["machine_signatures"],
+                    "criteria": {
+                        "min_batches": MIN_RELEASE_BATCHES,
+                        "unique_input_paths": True,
+                        "unique_run_ids": True,
+                        "manifest_status_success": True,
+                        "consistent_revision": True,
+                        "consistent_load_signature": True,
+                        "consistent_machine_signature": True,
+                        "release_gate_evaluated_allqualifying_passed": True,
+                        "min_processes_per_observation": MATRIX_MIN_PROCESSES,
+                        "min_steps_per_observation": MATRIX_MIN_STEPS,
+                        "digest_count_equals_processes": True,
+                        "production_default_only": True,
+                        "summary_parquet_required": True,
+                        "time_limit_failures_zero": True,
+                        "aggregate_distinct_one": True,
+                    },
+                    "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                    "effective_corrector_time_limit_s": unified_budget,
+                    "corrector_time_limit_source": unified_source,
+                },
+                metrics=pd.DataFrame(batch_rows),
+                report={
+                    "probe": "m54i_release_batch_aggregation",
+                    "trained": False,
+                    "claims": {"trained": False, "performance_evaluated": False,
+                               "convergence_claimed": False},
+                    "aggregated": aggregated,
+                    "failures": aggregated["failures"],
+                    "passed": aggregated["passed"],
+                    "statement": (
+                        "本产物只聚合既有多批次 run 的账本；不代表训练、性能或收敛结论，"
+                        "也不等于 M5.4 已发布。"
+                    ),
+                },
+                base_dir=str(base_dir),
+                seed=POLICY_SEED,
+                command=aggregate_command,
+                dependency_lock_hash=_dependency_lock_hash(),
+                status=status,
+                failure_classification=(
+                    None if aggregated["passed"] else "release_evidence_insufficient"
+                ),
+                manifest_metadata={
+                    "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                    "effective_corrector_time_limit_s": unified_budget,
+                    "corrector_time_limit_source": unified_source,
+                    "aggregate_kind": "m54i_release_batch_aggregation",
+                    "aggregate_batches": aggregated["batches"],
+                    "aggregate_input_run_ids": [
+                        b["manifest_run_id"] for b in aggregated["per_batch"]
+                    ],
+                    "aggregate_failures": [f["reason"] for f in aggregated["failures"]],
+                },
+            )
+        except FileExistsError as exc:
+            print(f"拒绝覆盖既有成功聚合 run：{exc}", file=sys.stderr)
+            return 2
+        # 附加机器可读摘要（标准 run 之外的可选补充）
         (out_dir / "aggregate.json").write_text(
             json.dumps(aggregated, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         print(json.dumps(aggregated, indent=2, ensure_ascii=False))
-        print(f"\n聚合产物：{out_dir / 'aggregate.json'}")
+        print(f"\n聚合产物：{out_dir}")
         return 0 if aggregated["passed"] else 1
 
     load = load_info(args)
@@ -1391,6 +1664,11 @@ def main(argv: list[str] | None = None) -> int:
         command=command,
         dependency_lock_hash=_dependency_lock_hash(),
         status=status,
+        manifest_metadata={
+            "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+            "effective_corrector_time_limit_s": float(effective_budget),
+            "corrector_time_limit_source": budget_source,
+        },
         failure_classification=failure_classification,
     )
     if args.emit_provenance:

@@ -242,6 +242,11 @@ def main() -> None:
             base_dir=args.base_dir,
             seed=args.seed,
             command=_command_ledger(args, run_id),
+            manifest_metadata={
+                "production_corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                "effective_corrector_time_limit_s": effective_budget,
+                "corrector_time_limit_source": budget_source,
+            },
         )
         print(f"\nrun 产物：{run_dir}")
 
