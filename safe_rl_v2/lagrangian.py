@@ -1,7 +1,8 @@
-"""M5.3a 多约束乘子状态：每约束独立、带单位、可验证、可恢复。
+"""M5.3a–e 多约束乘子状态：每约束独立、带单位、可验证、可恢复。
 
-本模块是**纯状态机**：`update()` 只消费每 transition 的量并维护乘子，
-**不把 multiplier 接入任何损失**（λ 加权优势属 M5.3b）。
+本模块是**纯状态机**：`update()` 只消费每 transition 的量并维护乘子。
+乘子由 `safe_rl_v2.train` 在 actor objective 中以
+`A_reward − λ_business·A_business − λ_carbon·A_carbon` 消费（M5.3b）。
 
 单位（每 transition）：
 - `business` → `violation_task_steps`（每步活跃逾期 SLA 违规计数，见
@@ -9,18 +10,20 @@
   同一任务在持续逾期的每一步都计 1，故 rollout 内累计为「违规任务·步」）；
 - `carbon`   → `kgCO2e`（每步电网购电的排放质量）。
 **电费（SGD）不是约束**，既不能作为新约束加入，也不能顶替上述任一单位。
+两者在物理上**非负**：负信号必须被明确拒绝，**不得**裁剪为 0。
 
 聚合口径固定为**每 transition mean**，由本模块内部计算：
 调用方只能传入逐 transition 的序列，**不能**绕过聚合直接塞标量。
 
 持久化 schema（`state_dict`）包含版本、聚合口径、全局更新序号与每约束的
-完整定义与历史，`load_state_dict` 对**全部字段**做严格校验，缺字段、单位不符、
-约束集合不符、版本不符（含旧 `contract-v6`）一律显式拒绝，且拒绝是原子的。
+完整定义与历史，`load_state_dict` 对**全部字段**做严格校验，且拒绝是原子的：
+缺字段、单位不符、约束集合不符、版本不符（含旧 `contract-v6`）、
+状态内部不自洽（M5.3c）、`estimate` 为负（M5.3e）一律显式拒绝。
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -86,6 +89,60 @@ def _as_non_negative_int(value: Any, name: str) -> int:
     if value < 0:
         raise ValueError(f"{name} 必须非负，got {value!r}")
     return int(value)
+
+
+def validate_constraint_signals(
+    batch_signals: Mapping[str, ArrayLike], expected: Iterable[str]
+) -> dict[str, float]:
+    """**纯**预检：校验每约束的逐 transition 信号，并返回 per-transition mean。
+
+    本函数不接触任何实例状态，因此可安全地用作训练轮次的前置检查
+    （见 M5.3f）：`update()` 与训练预检**共用同一份规则**。
+
+    对每个约束要求：序列（非标量）、一维、非空、全有限、**全非负**。
+    负值必须被明确拒绝而**不得**裁剪为 0：`business` 的单位是
+    `violation_task_steps`（违规任务·步计数）、`carbon` 的单位是 `kgCO2e`
+    （排放质量），两者物理上不可能为负；裁剪会把上游缺陷掩盖成被改写的数据，
+    并让乘子按错误的量更新。
+    """
+    expected_names = sorted(expected)
+    if not isinstance(batch_signals, Mapping):
+        raise TypeError(
+            f"batch_signals 必须为 Mapping（每约束一个逐 transition 序列），"
+            f"got {type(batch_signals).__name__}"
+        )
+    if set(batch_signals) != set(expected_names):
+        raise ValueError(
+            f"batch_signals 的 constraints 集合必须恰为 {expected_names}，"
+            f"got {sorted(batch_signals)}"
+        )
+
+    estimates: dict[str, float] = {}
+    for name in expected_names:
+        raw = batch_signals[name]
+        if isinstance(raw, (str, bytes)) or np.isscalar(raw):
+            raise TypeError(
+                f"batch_signals[{name!r}] 必须是逐 transition 的序列，"
+                "不得直接传标量（聚合口径固定为 per-transition mean）"
+            )
+        values = np.asarray(raw, dtype=np.float64)
+        if values.ndim != 1:
+            raise ValueError(f"batch_signals[{name!r}] 必须为一维，got ndim={values.ndim}")
+        if values.size == 0:
+            raise ValueError(f"batch_signals[{name!r}] 不得为空")
+        if not np.all(np.isfinite(values)):
+            raise ValueError(f"batch_signals[{name!r}] 含非有限数值")
+        # 逐 transition 校验非负（不能只看均值：[-1, 1] 的均值恰为 0）
+        negative = np.flatnonzero(values < 0.0)
+        if negative.size:
+            index = int(negative[0])
+            raise ValueError(
+                f"batch_signals[{name!r}] 含负值："
+                f"第 {index} 个 transition 为 {float(values[index])!r}，"
+                f"但约束 {name!r} 的物理域非负（不得裁剪为 0）"
+            )
+        estimates[name] = float(np.mean(values))
+    return estimates
 
 
 @dataclass(frozen=True)
@@ -179,33 +236,8 @@ class Lagrangian:
 
         返回更新后的乘子。传入标量、空序列、非有限值或键集不符一律报错。
         """
-        if not isinstance(batch_signals, Mapping):
-            raise TypeError(
-                f"batch_signals 必须为 Mapping（每约束一个逐 transition 序列），"
-                f"got {type(batch_signals).__name__}"
-            )
-        if set(batch_signals) != set(self.constraints):
-            raise ValueError(
-                f"batch_signals 的 constraints 集合必须恰为 {sorted(self.constraints)}，"
-                f"got {sorted(batch_signals)}"
-            )
-
-        estimates: dict[str, float] = {}
-        for name in sorted(self.constraints):
-            raw = batch_signals[name]
-            if isinstance(raw, (str, bytes)) or np.isscalar(raw):
-                raise TypeError(
-                    f"batch_signals[{name!r}] 必须是逐 transition 的序列，"
-                    "不得直接传标量（聚合口径固定为 per-transition mean）"
-                )
-            values = np.asarray(raw, dtype=np.float64)
-            if values.ndim != 1:
-                raise ValueError(f"batch_signals[{name!r}] 必须为一维，got ndim={values.ndim}")
-            if values.size == 0:
-                raise ValueError(f"batch_signals[{name!r}] 不得为空")
-            if not np.all(np.isfinite(values)):
-                raise ValueError(f"batch_signals[{name!r}] 含非有限数值")
-            estimates[name] = float(np.mean(values))
+        # 校验全部完成后才进入下面的写入循环，故失败是原子的
+        estimates = validate_constraint_signals(batch_signals, self.constraints)
 
         updated: dict[str, float] = {}
         for name in sorted(self.constraints):
@@ -319,6 +351,12 @@ class Lagrangian:
                 )
 
             estimate = _as_finite_float(entry["estimate"], f"constraints[{name!r}].estimate")
+            # 物理域：estimate 是每 transition mean，单位决定其不可能为负
+            if estimate < 0.0:
+                raise ValueError(
+                    f"constraints[{name!r}].estimate 必须非负"
+                    f"（{current.unit} 的物理域非负），got {estimate!r}"
+                )
             multiplier = _as_finite_float(
                 entry["multiplier"], f"constraints[{name!r}].multiplier"
             )

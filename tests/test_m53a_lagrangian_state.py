@@ -470,7 +470,11 @@ def test_recovery_then_continue_matches_uninterrupted_run():
 
 
 def test_one_constraint_never_influences_the_other():
-    """改动 business 的批次序列，carbon 的全部轨迹必须逐位不变（反之亦然）。"""
+    """改动 business 的批次序列，carbon 的全部轨迹必须逐位不变（反之亦然）。
+
+    M5.3e 迁移：`business`/`carbon` 的物理域非负，故极值信号改用**非负**的
+    0 与 1e6（而非此前的 -1000.0 / -1.0）。**断言与测试意图未改动**。
+    """
     carbon_batches = [[13.0], [17.0, 19.0], [1.0]]
 
     def run(business_batches):
@@ -480,7 +484,7 @@ def test_one_constraint_never_influences_the_other():
         return lag
 
     a = run([[9.0], [7.0], [5.0]])
-    b = run([[999.0], [0.0, 0.0, 0.0], [-1000.0]])
+    b = run([[999.0], [0.0, 0.0, 0.0], [1.0e6]])
 
     assert a.constraints["carbon"].log == b.constraints["carbon"].log
     assert a.constraints["carbon"].estimate == b.constraints["carbon"].estimate
@@ -488,7 +492,7 @@ def test_one_constraint_never_influences_the_other():
 
     # 反向：改动 carbon 批次，business 轨迹不变
     c = make_lagrangian()
-    for car in [[13.0], [999.0], [-1.0]]:
+    for car in [[13.0], [999.0], [1.0e6]]:
         c.update({"business": [9.0], "carbon": car})
     d = make_lagrangian()
     for car in [[13.0], [0.0], [0.0]]:
