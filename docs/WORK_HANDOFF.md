@@ -2,9 +2,9 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i **返修**实现终点 `771a33d`
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i **第二次返修**实现终点 `4f759fb`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
-> **M5.4i 首轮人工审核未通过**，已按审核意见返修，**仍等待再次人工审核**。
+> **M5.4i 首轮与第二轮人工审核均未通过**，已两轮返修，**仍等待再次人工审核**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -53,7 +53,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `771a33d` | **当前继续工作分支**；包含 M5.1–M5.4i 的累计链（`771a33d` 为 M5.4i **返修**实现终点）。 |
+| `p4-safeppo-m51a-rollout-contract` | `4f759fb` | **当前继续工作分支**；包含 M5.1–M5.4i 的累计链（`4f759fb` 为 M5.4i **第二次返修**实现终点）。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
@@ -213,7 +213,7 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 8. 当前授权状态：M5.4i 首轮审核未通过，返修后等待再次审核
+## 8. 当前授权状态：M5.4i 两轮审核均未通过，第二次返修后等待再次审核
 
 `M5.4h2` **已通过人工审查并被接受**（2026-09-14）。
 
@@ -221,7 +221,28 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 （`d6f875b` → `771a33d`；见 `docs/task_cards/M5.4i.md` §9 与 §10）。
 **返修仍等待再次人工审核。**
 
-**本轮审核未通过的三个原因**（详见任务卡 §10.1）：
+**第二轮审核未通过的三个原因**（详见任务卡 §11.1）：
+
+1. **config provenance 未参与「三处恒等」校验**：只比较了 manifest 与 report，
+   config 里的矛盾值不会被发现（实测 `passed=true`）。
+2. **`production_default_only=false` 仍可能 `passed=true`**：顶层
+   `production_corrector_time_limit_s` / `effective_corrector_time_limit_s` /
+   顶层 `corrector_time_limit_source` 与 `production_default_only` 从未进入判据；
+   三批**全部缺** `load`/`machine` 时三个空签名互相相等，同样通过。
+3. **合法 JSON/YAML/Parquet 中的错误类型会抛异常**：`report`/`manifest` 是 list →
+   `AttributeError`；`processes="abc"` → `ValueError`；`summary.parquet` 的
+   `status=NaN` → `ValueError` —— 异常从 `aggregate_release_batches` 泄漏。
+
+**第二轮返修要点**：三方恒等改为 config/report/manifest 逐字段比较；
+`passed` 显式依赖 `failures` 为空 ∧ batch 数达标 ∧ `production_default_only` ∧
+每批与跨批 `distinct=1` ∧ `time_limit_failures=0` ∧ `every_batch_passed` ∧
+`production_default_satisfied`；`load`/`machine` 必须是非空 dict 且键完整；
+每个输入**只读一次**，签名比较基于已验证摘要；所有类型/数值异常转成 fail-closed
+结果（新增 `malformed_batch_artifact`、`load_signature_invalid`、
+`machine_signature_invalid`、`summary_parquet_malformed_status`、
+`production_default_not_satisfied`）。
+
+**首轮审核未通过的三个原因**（详见任务卡 §10.1）：
 
 1. **跨批聚合器 fail-open**：只要求批次非空，于是「单批次」「同一 run 传三次」
    「三种负载混合」都能冒充三个独立同负载批次。
@@ -258,7 +279,14 @@ M5.4 released。`M5.4h2` 的执行通过**不构成**正式训练、性能评估
   如实记录但绝不参与放行判定。M5.4h2 的 fail-closed 规则保留。
 - **Stage A/B 共享 0.25 s deadline**：由 runtime spy 证明（`planning/model.py` 未改）。
 
-**发布批次证据（返修后，`runs/m54i_release_v3/`，全部修订 `771a33d`）**：
+**发布批次证据（第二次返修后，`runs/m54i_release_v4/`，全部修订 `4f759fb`）**：
+no-load / hogs4 / hogs8 各 3 个独立批次 + 1 个显式 0.05 诊断 run +
+每种负载 1 个标准聚合 run（共 13 个 run）。三组聚合均 `passed=true`、
+`failures=[]`、`production_default_satisfied=true`、每负载 36 个进程观测、
+`aggregate distinct=1`、`time_limit failures=0`。
+`runs/m54i_release_v3/` 标记 `superseded_pre_second_aggregation_gate_fix`（保留不删）。
+
+**上一代（已作废的）发布批次证据**（`runs/m54i_release_v3/`，修订 `771a33d`）：
 no-load / hogs4 / hogs8 各 3 个独立批次 + 1 个显式 0.05 诊断 run +
 每种负载 1 个**标准聚合 run**（共 13 个 run）。三组聚合均 `passed=true`、
 `failures=[]`、每负载 36 个进程观测、`aggregate distinct=1`、`time_limit failures=0`。
@@ -310,8 +338,9 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得说 M5.4 已解除 blocked；只有在**人工**发布确认后才可以这么说。
 - 不得把 M5.4i 的 3 负载 × 3 批稳定证据表述为「已发布」或「跨机器保证」；
   它是**本机**候选证据，发布决定权在人工。
-- 不得引用 `runs/m54i_release_v2/`（`superseded_pre_aggregation_gate_fix`）
-  作为发布证据；最终证据是 `runs/m54i_release_v3/`。
+- 不得引用 `runs/m54i_release_v2/`（`superseded_pre_aggregation_gate_fix`）或
+  `runs/m54i_release_v3/`（`superseded_pre_second_aggregation_gate_fix`）
+  作为发布证据；最终证据是 `runs/m54i_release_v4/`。
 - 不得把 M5.4h/M5.4h1/M5.4h2 的 0.05 s blocked 结论套用到当前的 0.25 s 默认上。
 - 不得把 `mip_max_nodes` 的未绑定实验称为确定性的根因或生产方案。
 - 不得以任务卡提交数、测试数或绿灯替代真实集成验收。
