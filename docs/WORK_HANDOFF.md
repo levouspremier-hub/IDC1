@@ -1,7 +1,7 @@
 # 工程工作交接文档
 
 > 更新时间：2026-09-14（Asia/Shanghai）
-> 当前代码工作分支：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`
+> M5.4 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`；本交接文档在其上提交。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
