@@ -198,7 +198,25 @@ def test_cli_verification_output_is_machine_readable_json(
             str(tmp_path / "singapore_2024.json"),
             "--verify",
             "--write-manifest",
+            "--frozen-at-utc",
+            "2026-09-14T07:28:44+00:00",
         ]
     ) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["year"] == 2024
+
+
+def test_cli_refuses_to_mutate_frozen_manifest_without_explicit_freeze_time(
+    complete_bundle: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(
+        [
+            "--raw-dir",
+            str(complete_bundle),
+            "--manifest",
+            str(tmp_path / "singapore_2024.json"),
+            "--verify",
+            "--write-manifest",
+        ]
+    ) == 2
+    assert "--frozen-at-utc" in capsys.readouterr().err
