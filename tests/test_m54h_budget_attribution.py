@@ -247,9 +247,13 @@ def test_no_node_cap_by_default():
 def test_load_metadata_records_program_and_concurrency():
     parser = probe.build_parser()
     none_args = parser.parse_args([])
-    assert probe.load_info(none_args) == {
-        "mode": "none", "concurrency": 0, "program": None
-    }
+    # M5.4h1 迁移：load_info 新增**推导**出来的 load_injected（不再硬编码），
+    # 故改为逐键断言而非整字典相等。
+    none_info = probe.load_info(none_args)
+    assert none_info["mode"] == "none"
+    assert none_info["concurrency"] == 0
+    assert none_info["program"] is None
+    assert none_info["load_injected"] is False
 
     hogs_args = parser.parse_args(["--load", "hogs", "--load-concurrency", "4"])
     info = probe.load_info(hogs_args)

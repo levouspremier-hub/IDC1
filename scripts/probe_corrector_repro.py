@@ -196,7 +196,7 @@ def _check_steps(steps) -> int:
     return int(steps)
 
 
-def _stage_recorder(node_cap: int | None):
+def _stage_recorder(node_cap: int | None, *, wall_clock_disabled: bool = False):
     """在**当前进程内**用 runtime wrapper 观测每次 milp 调用。
 
     只在探针内生效：不写 planning、不改默认配置。node_cap 非 None 时，
@@ -211,6 +211,11 @@ def _stage_recorder(node_cap: int | None):
         options = dict(kwargs.get("options") or {})
         if node_cap is not None:
             options["mip_max_nodes"] = int(node_cap)
+        if wall_clock_disabled:
+            # 替代语义臂：**移除** time_limit，让停止判据只由节点上限决定。
+            # 仅在 probe 的 runtime wrapper 内生效，绝不写入 planning/ 或默认配置。
+            options.pop("time_limit", None)
+        if node_cap is not None or wall_clock_disabled:
             kwargs["options"] = options
         started = time.perf_counter()
         res = real_milp(*args, **kwargs)
@@ -234,6 +239,7 @@ def _stage_recorder(node_cap: int | None):
                 float(options["time_limit"]) if "time_limit" in options else None
             ),
             "node_cap_injected": node_cap,
+            "wall_clock_disabled_in_probe": bool(wall_clock_disabled),
             **values,
             "unavailable_fields": unavailable,
         })
@@ -270,6 +276,7 @@ def run_once(
     budget: float | None = None,
     record_stages: bool = False,
     node_cap: int | None = DEFAULT_NODE_CAP,
+    wall_clock_disabled: bool = False,
 ) -> dict:
     """在当前进程中跑一次采集。
 
@@ -296,7 +303,9 @@ def run_once(
 
     import planning.corrector as corrector_module
 
-    records, real_milp = _stage_recorder(node_cap)
+    records, real_milp = _stage_recorder(
+        node_cap, wall_clock_disabled=wall_clock_disabled
+    )
     real_collect = collect
 
     def collect_with_bracket(*args, **kwargs):
@@ -386,6 +395,169 @@ def _step_digest(transition) -> str:
     return hashlib.sha256(blob).hexdigest()
 
 
+def _skipped_row(*, step, stage, budget, pid, entry, node_cap, wall_clock_disabled, reason):
+    """未执行的阶段也必须有一条显式行 —— 不得静默少行。"""
+    return {
+        "budget_s": budget, "node_cap": node_cap, "pid": pid, "step": step,
+        "stage": stage, "skipped": True, "skip_reason": reason,
+        "options_json": None, "status": None, "success": None, "message": None,
+        "elapsed_s": None, "remaining_deadline_s": None,
+        "mip_node_count": None, "mip_dual_bound": None, "mip_gap": None,
+        "unavailable_fields": None,
+        "corrector_failure": entry.get("corrector_failure"),
+        "corrector_reason": entry.get("corrector_reason"),
+        "digest": entry.get("digest"),
+        "node_cap_injected": node_cap,
+        "wall_clock_disabled_in_probe": bool(wall_clock_disabled),
+    }
+
+
+def build_stage_rows(
+    *, entry: dict, budget: float, pid: int, node_cap: int | None,
+    wall_clock_disabled: bool = False,
+) -> list[dict]:
+    """把一条 rollout 的逐步 × 逐阶段记录摊平成审计行。
+
+    每个 `step × {A, B}` **恰好一行**；未执行的阶段写 `skipped=true` 与原因。
+    """
+    rows: list[dict] = []
+    for step in entry.get("steps_detail", []):
+        calls = step.get("calls") or []
+        by_stage = {call.get("stage"): call for call in calls}
+        for stage in ("A", "B"):
+            call = by_stage.get(stage)
+            if call is None:
+                rows.append(_skipped_row(
+                    step=step["step"], stage=stage, budget=budget, pid=pid,
+                    entry=step, node_cap=node_cap,
+                    wall_clock_disabled=wall_clock_disabled,
+                    reason=(
+                        f"Stage {stage} 未执行"
+                        + (
+                            f"（该步实际执行 {sorted(by_stage)}）"
+                            if by_stage else "（该步无求解调用）"
+                        )
+                    ),
+                ))
+                continue
+            rows.append({
+                "budget_s": budget, "node_cap": node_cap, "pid": pid,
+                "step": step["step"], "stage": stage, "skipped": False,
+                "skip_reason": None,
+                "options_json": json.dumps(call.get("options") or {}, sort_keys=True),
+                "status": call.get("status"),
+                "success": call.get("success"),
+                "message": call.get("message"),
+                "elapsed_s": call.get("elapsed_s"),
+                "remaining_deadline_s": call.get("remaining_deadline_s"),
+                "mip_node_count": call.get("mip_node_count"),
+                "mip_dual_bound": call.get("mip_dual_bound"),
+                "mip_gap": call.get("mip_gap"),
+                "unavailable_fields": json.dumps(
+                    call.get("unavailable_fields") or {}, sort_keys=True
+                ),
+                "corrector_failure": call.get("corrector_failure"),
+                "corrector_reason": call.get("corrector_reason"),
+                "digest": call.get("digest"),
+                "node_cap_injected": call.get("node_cap_injected"),
+                "wall_clock_disabled_in_probe": bool(
+                    call.get("wall_clock_disabled_in_probe", wall_clock_disabled)
+                ),
+            })
+        extra = [c for c in calls if c.get("stage") == "extra"]
+        for call in extra:
+            rows.append({
+                "budget_s": budget, "node_cap": node_cap, "pid": pid,
+                "step": step["step"], "stage": "extra", "skipped": False,
+                "skip_reason": None,
+                "options_json": json.dumps(call.get("options") or {}, sort_keys=True),
+                "status": call.get("status"), "success": call.get("success"),
+                "message": call.get("message"), "elapsed_s": call.get("elapsed_s"),
+                "remaining_deadline_s": call.get("remaining_deadline_s"),
+                "mip_node_count": call.get("mip_node_count"),
+                "mip_dual_bound": call.get("mip_dual_bound"),
+                "mip_gap": call.get("mip_gap"),
+                "unavailable_fields": json.dumps(
+                    call.get("unavailable_fields") or {}, sort_keys=True
+                ),
+                "corrector_failure": call.get("corrector_failure"),
+                "corrector_reason": call.get("corrector_reason"),
+                "digest": call.get("digest"),
+                "node_cap_injected": call.get("node_cap_injected"),
+                "wall_clock_disabled_in_probe": bool(
+                    call.get("wall_clock_disabled_in_probe", wall_clock_disabled)
+                ),
+            })
+    return rows
+
+
+def evaluate_release_gate(observations: list[dict], *, default_budget: float | None = None) -> dict:
+    """**发布门禁**：默认 0.05 s corrector 是否可跨进程复现。
+
+    与 `classify`（预算**归因**）是两个概念：归因成立**不能**让本门禁放行。
+    """
+    budget = DEFAULT_CORRECTOR_TIME_LIMIT_S if default_budget is None else default_budget
+    if not observations:
+        return {
+            "evaluated": False,
+            "default_budget_s": budget,
+            "observations": [],
+            "blocked": False,
+            "all_qualifying": None,
+            "reason": f"本 run 未测量默认 {budget}s corrector（只测了 corrector 关闭）",
+        }
+    blocked = any(int(o["distinct"]) > 1 for o in observations)
+    all_qualifying = all(
+        o.get("processes", 0) >= MATRIX_MIN_PROCESSES and o.get("steps", 0) >= MATRIX_MIN_STEPS
+        for o in observations
+    )
+    unstable = [o["source"] for o in observations if int(o["distinct"]) > 1]
+    return {
+        "evaluated": True,
+        "default_budget_s": budget,
+        "observations": observations,
+        "blocked": blocked,
+        "all_qualifying": all_qualifying,
+        "reason": (
+            f"默认预算 {budget}s 在 {unstable} 上跨进程不一致（distinct>1）"
+            if blocked else f"默认预算 {budget}s 的观测全部 distinct=1"
+        ),
+    }
+
+
+def candidate_notes(
+    attribution: dict | None, release_gate: dict, node_cap_matrix: dict
+) -> dict:
+    """候选值的**如实**表述：不得声称跨机器保证；节点上限仅在替代语义臂稳定时才是候选。"""
+    notes: dict = {
+        "default_budget_still_blocked": bool(release_gate["blocked"]),
+        "machine_local": True,
+        "disclaimer": "以下候选值均为**本机**观测，不构成跨机器保证；M5.4 默认状态仍为 blocked。",
+    }
+    if attribution and attribution.get("conclusion") == "wall_clock_budget_dominant":
+        notes["wall_clock_candidate"] = (
+            "存在「较大预算档稳定、较小档不稳定」的证据；"
+            "可采用经证明非绑定的 wall-clock 预算（候选值随机器变化）"
+        )
+    alternatives = {
+        cap: m for cap, m in node_cap_matrix.items()
+        if m.get("wall_clock_disabled_in_probe")
+    }
+    if alternatives:
+        stable = [cap for cap, m in alternatives.items() if m["distinct"] == 1]
+        notes["node_cap_alternative_semantics"] = {
+            "caps_tested": sorted(alternatives, key=int),
+            "stable_caps": sorted(stable, key=int),
+            "candidate": bool(stable),
+            "note": (
+                "替代语义臂（移除 time_limit）稳定 -> 可作为候选"
+                if stable else
+                "替代语义臂仍不稳定 -> **不得**作为候选"
+            ),
+        }
+    return notes
+
+
 def classify(matrix: dict) -> dict:
     """由测量矩阵推导结论 —— 只允许三选一，规则见 M5.4h 卡 §4.7。
 
@@ -394,8 +566,16 @@ def classify(matrix: dict) -> dict:
     - 有不稳定且**最大档稳定** -> wall_clock_budget_dominant
     - 有不稳定且**最大档也不稳定** -> node_or_solve_path_problem
     """
-    budgets = matrix.get("budgets") or {}
-    missing = [b for b in DEFAULT_TIME_LIMIT_MATRIX if str(b) not in budgets]
+    raw_budgets = matrix.get("budgets") or {}
+    try:
+        budgets = {float(k): v for k, v in raw_budgets.items()}
+    except (TypeError, ValueError):
+        return {
+            "conclusion": "insufficient_evidence",
+            "reason": f"预算键无法解析为数值：{sorted(raw_budgets)}",
+            "unstable_budgets": [],
+        }
+    missing = [b for b in DEFAULT_TIME_LIMIT_MATRIX if b not in budgets]
     if missing:
         return {
             "conclusion": "insufficient_evidence",
@@ -420,7 +600,7 @@ def classify(matrix: dict) -> dict:
             }
 
     unstable = sorted(
-        (float(key) for key, entry in budgets.items() if entry.get("distinct", 1) > 1)
+        key for key, entry in budgets.items() if entry.get("distinct", 1) > 1
     )
     if not unstable:
         return {
@@ -429,8 +609,8 @@ def classify(matrix: dict) -> dict:
             "unstable_budgets": [],
         }
 
-    largest = max(float(key) for key in budgets)
-    largest_stable = budgets[str(largest)].get("distinct", 1) == 1
+    largest = max(budgets)
+    largest_stable = budgets[largest].get("distinct", 1) == 1
     if largest_stable:
         return {
             "conclusion": "wall_clock_budget_dominant",
@@ -500,7 +680,8 @@ _CHILD_SNIPPET = (
     "print(json.dumps(run_once(sys.argv[1], steps=int(sys.argv[2]),"
     " budget=None if sys.argv[3] == 'none' else float(sys.argv[3]),"
     " record_stages=sys.argv[4] == '1',"
-    " node_cap=None if sys.argv[5] == 'none' else int(sys.argv[5]))))"
+    " node_cap=None if sys.argv[5] == 'none' else int(sys.argv[5]),"
+    " wall_clock_disabled=sys.argv[6] == '1')))"
 )
 
 
@@ -529,6 +710,7 @@ def run_in_subprocess(
     budget: float | None = None,
     record_stages: bool = False,
     node_cap: int | None = DEFAULT_NODE_CAP,
+    wall_clock_disabled: bool = False,
     load: dict | None = None,
 ) -> dict:
     """在**独立 Python 进程**中跑一次采集。
@@ -544,7 +726,8 @@ def run_in_subprocess(
             [sys.executable, "-c", _CHILD_SNIPPET, mode, str(steps),
              "none" if budget is None else str(budget),
              "1" if record_stages else "0",
-             "none" if node_cap is None else str(node_cap)],
+             "none" if node_cap is None else str(node_cap),
+             "1" if wall_clock_disabled else "0"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800,
         )
     finally:
@@ -575,6 +758,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help="--load hogs 时的并发进程数")
     parser.add_argument("--node-caps", type=int, nargs="+", default=None,
                         help="节点上限候选（**仅探针内 runtime 注入**，不写 planning/默认配置）")
+    parser.add_argument(
+        "--node-cap-arm", choices=("with_wall_clock", "alternative_semantics"),
+        default="with_wall_clock",
+        help="节点上限臂：with_wall_clock 保留 time_limit；"
+             "alternative_semantics **移除** time_limit（仅探针 runtime）",
+    )
     parser.add_argument("--base-dir", default="runs")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--emit-provenance", action="store_true")
@@ -594,14 +783,29 @@ def machine_info() -> dict:
 
 
 def load_info(args) -> dict:
-    """负载口径 —— **不得**把 make check 并发当成唯一实验条件。"""
+    """负载口径 —— **不得**把 make check 并发当成唯一实验条件。
+
+    `load_injected` 由口径**推导**（不得硬编码），否则账本会自相矛盾。
+    """
     if args.load == "hogs":
         return {
             "mode": "hogs",
             "concurrency": int(args.load_concurrency),
             "program": "sys.executable -c 'x=0\\nfor i in range(10**9): x+=i'",
+            "load_injected": True,
         }
-    return {"mode": "none", "concurrency": 0, "program": None}
+    return {"mode": "none", "concurrency": 0, "program": None, "load_injected": False}
+
+
+def provenance_note(load: dict) -> str:
+    """溯源说明必须与**实际**负载口径一致（不得写死「未注入」）。"""
+    if load.get("load_injected"):
+        return (
+            f"每个 digest 来自一个独立 Python 进程；"
+            f"**已注入受控 CPU 负载**（program={load['program']}，"
+            f"concurrency={load['concurrency']}）；未重试挑选取样"
+        )
+    return "每个 digest 来自一个独立 Python 进程；未注入 CPU 负载、未重试挑选取样"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -663,20 +867,10 @@ def main(argv: list[str] | None = None) -> int:
                 "pid": entry["pid"], "python": entry["python"],
                 "started_at": entry["started_at"], "steps": entry["steps"],
             })
-            for step in entry["steps_detail"]:
-                for call in step["calls"]:
-                    stage_rows.append({
-                        "budget_s": budget, "pid": entry["pid"], "step": step["step"],
-                        "stage": call["stage"], "status": call["status"],
-                        "success": call["success"], "elapsed_s": call["elapsed_s"],
-                        "remaining_deadline_s": call["remaining_deadline_s"],
-                        "mip_node_count": call["mip_node_count"],
-                        "mip_dual_bound": call["mip_dual_bound"],
-                        "mip_gap": call["mip_gap"],
-                        "corrector_reason": call["corrector_reason"],
-                        "node_cap_injected": call["node_cap_injected"],
-                        "options_json": json.dumps(call["options"], sort_keys=True),
-                    })
+            stage_rows.extend(build_stage_rows(
+                entry=entry, budget=budget, pid=entry["pid"],
+                node_cap=None, wall_clock_disabled=False,
+            ))
         matrix["budgets"][str(budget)] = {
             "distinct": len(set(budget_digests)),
             "processes": len(budget_digests),
@@ -689,37 +883,46 @@ def main(argv: list[str] | None = None) -> int:
     for cap in (args.node_caps or []):
         cap_digests: list[str] = []
         cap_reasons: list[str] = []
+        wall_clock_disabled = args.node_cap_arm == "alternative_semantics"
         for _ in range(args.runs):
             entry = run_in_subprocess(
                 "on", steps=args.steps, budget=args.corrector_time_limit,
                 record_stages=True, node_cap=cap, load=load,
+                wall_clock_disabled=wall_clock_disabled,
             )
             cap_digests.append(entry["digest"])
-            for step in entry["steps_detail"]:
-                for call in step["calls"]:
-                    cap_reasons.append(call["corrector_reason"])
-                    stage_rows.append({
-                        "budget_s": args.corrector_time_limit,
-                        "node_cap": cap,
-                        "pid": entry["pid"], "step": step["step"],
-                        "stage": call["stage"], "status": call["status"],
-                        "success": call["success"], "elapsed_s": call["elapsed_s"],
-                        "remaining_deadline_s": call["remaining_deadline_s"],
-                        "mip_node_count": call["mip_node_count"],
-                        "mip_dual_bound": call["mip_dual_bound"],
-                        "mip_gap": call["mip_gap"],
-                        "corrector_reason": call["corrector_reason"],
-                        "node_cap_injected": call["node_cap_injected"],
-                        "options_json": json.dumps(call["options"], sort_keys=True),
-                    })
+            rows_for_cap = build_stage_rows(
+                entry=entry, budget=args.corrector_time_limit, pid=entry["pid"],
+                node_cap=cap, wall_clock_disabled=wall_clock_disabled,
+            )
+            stage_rows.extend(rows_for_cap)
+            cap_reasons.extend(r["corrector_reason"] for r in rows_for_cap)
         node_cap_matrix[str(cap)] = {
+            "arm": args.node_cap_arm,
+            "wall_clock_disabled_in_probe": bool(wall_clock_disabled),
             "distinct": len(set(cap_digests)),
             "processes": len(cap_digests),
             "digests": cap_digests,
-            "reasons": sorted(set(cap_reasons)),
+            "reasons": sorted({r for r in cap_reasons if r}),
         }
 
     attribution = classify(matrix) if args.time_limits else None
+
+    # --- release_gate（与 attribution **分离**）---
+    gate_observations: list[dict] = []
+    if "on" in decisions:
+        gate_observations.append({
+            "source": "modes.on", "distinct": decisions["on"]["distinct"],
+            "processes": args.runs, "steps": args.steps,
+        })
+    _key = str(DEFAULT_CORRECTOR_TIME_LIMIT_S)
+    if _key in matrix["budgets"]:
+        _entry = matrix["budgets"][_key]
+        gate_observations.append({
+            "source": f"matrix.{_key}", "distinct": _entry["distinct"],
+            "processes": _entry["processes"], "steps": _entry["steps"],
+        })
+    release_gate = evaluate_release_gate(gate_observations)
     if attribution is not None:
         overall = {
             "blocked": attribution["conclusion"] != "wall_clock_budget_dominant",
@@ -766,11 +969,11 @@ def main(argv: list[str] | None = None) -> int:
         "node_caps": list(args.node_caps) if args.node_caps else [],
         "node_cap_default": DEFAULT_NODE_CAP,
         "load": load,
+        "load_injected": bool(load["load_injected"]),
         "machine": machine,
         "budget_s": MODE_BUDGETS["on"],
         "wall_clock_keys_excluded": list(WALL_CLOCK_KEYS),
         "digest_fields": list(DIGEST_FIELDS) + list(DIGEST_INFO_FIELDS),
-        "load_injected": False,
         "retry_selection": False,
     }
     report = {
@@ -780,7 +983,9 @@ def main(argv: list[str] | None = None) -> int:
         "corrector_time_limit_s": float(args.corrector_time_limit),
         "time_limit_matrix_s": [float(b) for b in budgets],
         "load": load,
+        "load_injected": bool(load["load_injected"]),
         "machine": machine,
+        "release_gate": release_gate,
         "statement": REPORT_STATEMENT,
         "claims": {"trained": False, "performance_evaluated": False, "convergence_claimed": False},
         "modes": decisions,
@@ -788,10 +993,11 @@ def main(argv: list[str] | None = None) -> int:
         "node_cap_matrix": node_cap_matrix,
         "attribution": attribution,
         "overall": overall,
-        "provenance_note": "每个 digest 来自一个独立 Python 进程；未注入 CPU 负载、未重试挑选取样",
+        "provenance_note": provenance_note(load),
     }
 
-    status = "failed" if overall["blocked"] else "success"
+    # 默认 0.05s 不稳定 -> manifest 必须 failed，**即使归因成立**
+    status = "failed" if release_gate["blocked"] else "success"
     run_dir = write_run(
         run_id,
         config=config,
@@ -818,8 +1024,11 @@ def main(argv: list[str] | None = None) -> int:
         "conclusion": attribution["conclusion"] if attribution else overall["conclusion"],
         "reason": attribution["reason"] if attribution else "（未请求矩阵；见 modes 结论）",
         "load": load,
+        "load_injected": bool(load["load_injected"]),
         "machine": machine,
+        "release_gate": release_gate,
         "stage_field_count": len(stage_rows),
+        "candidate_notes": candidate_notes(attribution, release_gate, node_cap_matrix),
     }
     (run_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -832,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
     for mode, decision in decisions.items():
         print(f"  {mode:>3}: runs={decision['runs']} distinct={decision['distinct']} "
               f"-> {decision['conclusion']}")
-    return 1 if overall["blocked"] else 0
+    return 1 if release_gate["blocked"] else 0
 
 
 def _git_revision() -> str:
