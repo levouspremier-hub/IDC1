@@ -2,20 +2,59 @@
 
 from __future__ import annotations
 
-import hashlib
-import shutil
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from scripts import fetch_singapore_data as singapore_data  # type: ignore[import-not-found]
-from tests.test_m12_singapore_data_freeze import _write_complete_raw_bundle
-from tests.test_m12b_manifest_immutability import FROZEN_AT, _report
+
+FROZEN_AT = "2026-09-14T07:28:44+00:00"
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _report() -> dict[str, object]:
+    return {
+        "year": 2024,
+        "timezone": singapore_data.SINGAPORE_TIMEZONE,
+        "files": {
+            "emc_usep": {"path": "raw/usep.zip", "sha256": "a" * 64, "bytes": 101},
+            "emc_metered_generation": {"path": "raw/mg.zip", "sha256": "b" * 64, "bytes": 102},
+            "sasea_demand": {"path": "raw/demand.zip", "sha256": "c" * 64, "bytes": 103},
+            "open_meteo_weather": {"path": "raw/weather.csv", "sha256": "d" * 64, "bytes": 104},
+        },
+        "usep": {
+            "rows": 17_568,
+            "raw_unit": "SGD/MWh",
+            "timezone": singapore_data.SINGAPORE_TIMEZONE,
+            "semantic": "final wholesale USEP; DEMAND column is forecast only",
+        },
+        "actual_system_load": {
+            "rows": 17_568,
+            "raw_unit": "MW",
+            "timezone": singapore_data.SINGAPORE_TIMEZONE,
+            "semantic": "actual system demand",
+            "source": "SASEA raw_SGP_demand.csv",
+        },
+        "intermittent_generation": {
+            "rows": 17_568,
+            "raw_unit": "MWh per half-hour settlement period",
+            "timezone": singapore_data.SINGAPORE_TIMEZONE,
+            "facility_type": "IGS",
+            "semantic": "metered national intermittent generation; not solar-only",
+        },
+        "weather": {
+            "rows": 8_784,
+            "timezone": singapore_data.SINGAPORE_TIMEZONE,
+            "model": "ERA5",
+            "raw_units": {
+                "temperature_2m": "degC",
+                "wind_speed_10m": "m/s",
+                "shortwave_radiation": "W/m2 (hourly preceding-hour mean GHI)",
+            },
+            "coordinates_returned": {"latitude": "1.5", "longitude": "103.75"},
+            "resampling": "not performed in M1.2",
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -58,23 +97,25 @@ def test_existing_manifest_rejects_every_raw_write_option_before_any_write_call(
 
 
 def test_existing_manifest_verify_and_idempotent_write_are_read_only(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    raw_dir = tmp_path / "raw"
-    _write_complete_raw_bundle(raw_dir)
     manifest = tmp_path / "singapore_2024.json"
-    singapore_data.write_or_verify_manifest(
-        singapore_data.validate_singapore_2024(raw_dir),
-        manifest,
-        local_frozen_at_utc=FROZEN_AT,
-    )
-    manifest_hash_before = _sha256(manifest)
-    raw_hashes_before = sorted(_sha256(path) for path in raw_dir.iterdir())
+    report = _report()
+    singapore_data.write_or_verify_manifest(report, manifest, local_frozen_at_utc=FROZEN_AT)
+    before = manifest.read_bytes()
+    validate = Mock(return_value=report)
+    copy_input = Mock()
+    fetch_weather = Mock()
+    monkeypatch.setattr(singapore_data, "validate_singapore_2024", validate)
+    monkeypatch.setattr(singapore_data, "_copy_input", copy_input)
+    monkeypatch.setattr(singapore_data, "fetch_open_meteo_weather", fetch_weather)
 
     assert singapore_data.main(
         [
             "--raw-dir",
-            str(raw_dir),
+            str(tmp_path / "raw"),
             "--manifest",
             str(manifest),
             "--verify",
@@ -84,19 +125,23 @@ def test_existing_manifest_verify_and_idempotent_write_are_read_only(
         ]
     ) == 0
     assert "verified existing" in capsys.readouterr().err
-    assert _sha256(manifest) == manifest_hash_before
-    assert sorted(_sha256(path) for path in raw_dir.iterdir()) == raw_hashes_before
+    validate.assert_called_once()
+    copy_input.assert_not_called()
+    fetch_weather.assert_not_called()
+    assert manifest.read_bytes() == before
 
 
 def test_missing_manifest_keeps_first_freeze_copy_then_verify_flow(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "source"
     raw_dir = tmp_path / "raw"
-    _write_complete_raw_bundle(source)
-    raw_dir.mkdir()
-    shutil.copyfile(source / "open_meteo_era5_2024.csv", raw_dir / "open_meteo_era5_2024.csv")
     manifest = tmp_path / "singapore_2024.json"
+    report = _report()
+    copy_input = Mock()
+    validate = Mock(return_value=report)
+    monkeypatch.setattr(singapore_data, "_copy_input", copy_input)
+    monkeypatch.setattr(singapore_data, "validate_singapore_2024", validate)
 
     assert singapore_data.main(
         [
@@ -105,15 +150,17 @@ def test_missing_manifest_keeps_first_freeze_copy_then_verify_flow(
             "--manifest",
             str(manifest),
             "--usep-zip",
-            str(source / "emc_usep_2024.zip"),
+            "candidate-usep.zip",
             "--generation-zip",
-            str(source / "emc_metered_generation_2024.zip"),
+            "candidate-generation.zip",
             "--sasea-zip",
-            str(source / "sasea_demand_2024.zip"),
+            "candidate-demand.zip",
             "--verify",
             "--write-manifest",
             "--frozen-at-utc",
             FROZEN_AT,
         ]
     ) == 0
+    assert copy_input.call_count == 3
+    validate.assert_called_once_with(raw_dir)
     assert manifest.is_file()
