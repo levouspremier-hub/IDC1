@@ -630,6 +630,76 @@ def evaluate_release_gate(
     }
 
 
+def aggregate_release_batches(run_dirs: list) -> dict:
+    """把**同一负载**的多个独立批次 run 聚合起来（M5.4i §10）。
+
+    单次抽样可能是幸运的（0.05 s 的不稳定是间歇的），因此发布证据必须跨批次聚合：
+    每个单批 `distinct=1` **且** 跨批 `aggregate distinct=1` 才算通过。
+    只读各 run 已落盘的 `report.json` / `summary.parquet`，不改写任何 run。
+    """
+    batches: list[dict] = []
+    all_digests: list[str] = []
+    time_limit_failures = 0
+    for raw in run_dirs:
+        path = Path(raw)
+        report = json.loads((path / "report.json").read_text(encoding="utf-8"))
+        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+        gate = report["release_gate"]
+        digests = [d for o in gate["observations"] for d in o.get("digests", [])]
+        all_digests.extend(digests)
+        parquet = path / "summary.parquet"
+        stage_statuses: list[float] = []
+        if parquet.exists():
+            stage_statuses = [
+                s for s in pd.read_parquet(parquet)["status"].tolist() if s is not None
+            ]
+        # scipy milp：status==1 即 time limit。
+        time_limit_failures += sum(1 for s in stage_statuses if int(s) == 1)
+        batches.append({
+            "run_id": manifest.get("run_id", path.name),
+            "manifest_status": manifest.get("status"),
+            "passed": bool(gate["passed"]),
+            "observed_distinct": len(set(digests)),
+            "observed_processes": len(digests),
+            "observations": [o.get("source") for o in gate["observations"]],
+            "time_limit_failures": sum(1 for s in stage_statuses if int(s) == 1),
+            "effective_corrector_time_limit_s": report.get(
+                "effective_corrector_time_limit_s"
+            ),
+            "corrector_time_limit_source": report.get("corrector_time_limit_source"),
+        })
+    sources = sorted({b["corrector_time_limit_source"] for b in batches})
+    budgets = sorted(
+        {b["effective_corrector_time_limit_s"] for b in batches}, key=lambda x: (x is None, x)
+    )
+    every_batch_distinct_one = all(b["observed_distinct"] == 1 for b in batches)
+    every_batch_passed = all(b["passed"] for b in batches)
+    production_default_only = sources == [CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT]
+    return {
+        "batches": len(batches),
+        "per_batch": batches,
+        "aggregate_processes": len(all_digests),
+        "aggregate_distinct": len(set(all_digests)),
+        "every_batch_distinct_one": every_batch_distinct_one,
+        "every_batch_passed": every_batch_passed,
+        "time_limit_failures": time_limit_failures,
+        "corrector_time_limit_sources": sources,
+        "effective_corrector_time_limit_s": budgets,
+        "production_default_only": production_default_only,
+        # 发布候选判据：跨批聚合一致 **且** 单批全一致 **且** 零 time_limit **且**
+        # 全部批次确实来自生产默认（不得用显式 override 伪造默认）。
+        "passed": bool(
+            batches
+            and every_batch_distinct_one
+            and every_batch_passed
+            and time_limit_failures == 0
+            and len(set(all_digests)) == 1
+            and production_default_only
+            and budgets == [PRODUCTION_CORRECTOR_TIME_LIMIT_S]
+        ),
+    }
+
+
 def phase_status(release_gate: dict, *, attribution: dict | None = None) -> dict:
     """阶段放行状态 —— **只**由 `release_gate` 决定。
 
@@ -1008,6 +1078,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="节点上限臂：with_wall_clock 保留 time_limit；"
              "alternative_semantics **移除** time_limit（仅探针 runtime）",
     )
+    parser.add_argument(
+        "--aggregate-runs", nargs="+", default=None,
+        help="只聚合给定的多个 batch run 目录（跨批发布证据），不做新测量",
+    )
     parser.add_argument("--base-dir", default="runs")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--emit-provenance", action="store_true")
@@ -1072,6 +1146,18 @@ def main(argv: list[str] | None = None) -> int:
     base_dir = Path(args.base_dir)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     run_id = args.run_id or f"correctorrepro_{stamp}"
+
+    if args.aggregate_runs:
+        # 跨批聚合：只读既有 run，不测量、不覆盖任何 run（M5.4i §10）。
+        aggregated = aggregate_release_batches(args.aggregate_runs)
+        out_dir = base_dir / run_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / "aggregate.json").write_text(
+            json.dumps(aggregated, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        print(json.dumps(aggregated, indent=2, ensure_ascii=False))
+        print(f"\n聚合产物：{out_dir / 'aggregate.json'}")
+        return 0 if aggregated["passed"] else 1
 
     load = load_info(args)
     machine = machine_info()
@@ -1174,6 +1260,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_observations.append({
             "source": "modes.on", "distinct": decisions["on"]["distinct"],
             "processes": args.runs, "steps": args.steps,
+            "digests": list(decisions["on"]["digests"]),
             "effective_corrector_time_limit_s": effective_budget,
             "corrector_time_limit_source": budget_source,
         })
@@ -1183,6 +1270,7 @@ def main(argv: list[str] | None = None) -> int:
         gate_observations.append({
             "source": f"matrix.{_key}", "distinct": _entry["distinct"],
             "processes": _entry["processes"], "steps": _entry["steps"],
+            "digests": list(_entry["digests"]),
             "effective_corrector_time_limit_s": float(_key),
             # 显式 `--time-limits` 给出的档位是**诊断 override**，不得充当生产默认证据。
             "corrector_time_limit_source": (
