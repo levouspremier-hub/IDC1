@@ -518,3 +518,252 @@ def test_the_override_batch_is_recorded_and_excluded_from_the_release_gate(tmp_p
 
     aggregated = probe.aggregate_release_batches([run_dir])
     assert aggregated["passed"] is False
+
+
+# --- 7. 第二次审核返修：三方恒等、生产默认判据、类型 fail closed ------------
+
+def _mutate(path: pathlib.Path, name: str, mutate) -> pathlib.Path:
+    """按文件类型读写并改写一个批次产物。"""
+    target = path / name
+    if name.endswith(".json"):
+        obj = json.loads(target.read_text(encoding="utf-8"))
+        obj = mutate(obj)
+        target.write_text(json.dumps(obj), encoding="utf-8")
+    else:
+        obj = yaml.safe_load(target.read_text(encoding="utf-8"))
+        obj = mutate(obj)
+        target.write_text(yaml.safe_dump(obj), encoding="utf-8")
+    return path
+
+
+def _set_provenance(path: pathlib.Path, name: str, **fields) -> pathlib.Path:
+    return _mutate(path, name, lambda obj: (obj.update(fields), obj)[1])
+
+
+@pytest.mark.parametrize("filename", ("config.yaml", "report.json", "manifest.json"))
+@pytest.mark.parametrize("field", (
+    "production_corrector_time_limit_s",
+    "effective_corrector_time_limit_s",
+    "corrector_time_limit_source",
+))
+def test_any_provenance_mismatch_in_any_file_fails(tmp_path, filename, field):
+    """config/report/manifest 任意一处、任意字段不一致 -> 聚合必须失败。"""
+    a, b, c = (_write_batch(tmp_path, n) for n in ("a", "b", "c"))
+    tampered = {"effective_corrector_time_limit_s": 99.0}.get(field, "tampered")
+    _set_provenance(a, filename, **{field: tampered})
+    aggregated = probe.aggregate_release_batches([a, b, c])
+    assert aggregated["passed"] is False, f"{filename}:{field} 不一致必须失败"
+    assert "provenance_inconsistent" in _failures(aggregated)
+
+
+def test_top_level_production_budget_must_be_the_default(tmp_path):
+    a, b, c = (_write_batch(tmp_path, n) for n in ("a", "b", "c"))
+    for name in ("config.yaml", "report.json", "manifest.json"):
+        _set_provenance(a, name, production_corrector_time_limit_s=0.05)
+    aggregated = probe.aggregate_release_batches([a, b, c])
+    assert aggregated["passed"] is False
+    assert "production_default_not_satisfied" in _failures(aggregated)
+
+
+def test_top_level_effective_budget_must_be_the_default(tmp_path):
+    a, b, c = (_write_batch(tmp_path, n) for n in ("a", "b", "c"))
+    for name in ("config.yaml", "report.json", "manifest.json"):
+        _set_provenance(a, name, effective_corrector_time_limit_s=0.05)
+    aggregated = probe.aggregate_release_batches([a, b, c])
+    assert aggregated["passed"] is False
+    assert "production_default_not_satisfied" in _failures(aggregated)
+
+
+def test_top_level_source_must_be_production_default(tmp_path):
+    """即使观测伪装成 production_default，顶层 source=explicit_override 仍必须失败。"""
+    a, b, c = (_write_batch(tmp_path, n) for n in ("a", "b", "c"))
+    for name in ("config.yaml", "report.json", "manifest.json"):
+        _set_provenance(a, name, corrector_time_limit_source="explicit_override")
+    aggregated = probe.aggregate_release_batches([a, b, c])
+    assert aggregated["passed"] is False
+    assert aggregated["production_default_only"] is False
+    assert "production_default_not_satisfied" in _failures(aggregated)
+
+
+def test_production_default_only_false_alone_blocks_passing(tmp_path):
+    """`production_default_only=false` 必须**直接**导致 passed=false 并给出 reason。"""
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", source="explicit_override", passed=False,
+                     manifest_status="failed"),
+    ])
+    assert aggregated["passed"] is False
+    assert aggregated["production_default_only"] is False
+    assert "production_default_not_satisfied" in _failures(aggregated)
+
+
+def test_all_batches_missing_load_fails(tmp_path):
+    """三批**全部**缺 load 时，空签名互相相等也不得通过。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _mutate(d, "report.json", lambda obj: (obj.pop("load", None), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "load_signature_invalid" in _failures(aggregated)
+
+
+def test_all_batches_missing_machine_fails(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _mutate(d, "report.json", lambda obj: (obj.pop("machine", None), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "machine_signature_invalid" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("key", ("mode", "concurrency", "program", "load_injected"))
+def test_incomplete_load_keys_fail(tmp_path, key):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _mutate(d, "report.json", lambda obj, k=key: (
+            obj.__setitem__("load", {kk: vv for kk, vv in obj["load"].items() if kk != k}), obj
+        )[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "load_signature_invalid" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("key", ("platform", "machine", "python", "cpu_count"))
+def test_incomplete_machine_keys_fail(tmp_path, key):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _mutate(d, "report.json", lambda obj, k=key: (
+            obj.__setitem__("machine",
+                            {kk: vv for kk, vv in obj["machine"].items() if kk != k}), obj
+        )[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "machine_signature_invalid" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("filename", ("report.json", "manifest.json"))
+def test_non_dict_top_level_json_fails_closed_without_raising(tmp_path, filename):
+    """合法 JSON 但顶层不是 dict -> passed=false，**不得**抛异常。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    (batches[0] / filename).write_text("[]", encoding="utf-8")
+    aggregated = probe.aggregate_release_batches(batches)  # 不得抛
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+def test_non_dict_release_gate_fails_closed(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj.__setitem__("release_gate", "nope"), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+def test_non_list_observations_fails_closed(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj["release_gate"].__setitem__("observations", "nope"), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+def test_non_dict_observation_fails_closed(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj["release_gate"].__setitem__("observations", ["not-a-dict"]), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", ("abc", [], {}))
+def test_unconvertible_processes_fails_closed(tmp_path, bad):
+    """`processes` 不可转换为整数 -> fail closed，**不得**抛 ValueError/TypeError。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj["release_gate"]["observations"][0].__setitem__("processes", bad), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", ("abc", {}, []))
+def test_unconvertible_steps_fails_closed(tmp_path, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj["release_gate"]["observations"][0].__setitem__("steps", bad), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", ("abc", [], {}))
+def test_unconvertible_budget_fails_closed(tmp_path, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (
+        obj["release_gate"]["observations"][0].__setitem__(
+            "effective_corrector_time_limit_s", bad), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "malformed_batch_artifact" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", ("abc", None, [], float("nan")))
+def test_illegal_summary_parquet_status_fails_closed(tmp_path, bad):
+    """`summary.parquet` 的 status 含非法值/NaN -> fail closed，不得抛 ValueError。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    pd.DataFrame({"status": [bad, 0.0]}).to_parquet(batches[0] / "summary.parquet")
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "summary_parquet_malformed_status" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("field", ("processes", "steps", "effective_corrector_time_limit_s"))
+def test_missing_numeric_field_fails_closed(tmp_path, field):
+    """字段缺失（None）也必须 fail closed，且**不得**抛异常。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj, f=field: (
+        obj["release_gate"]["observations"][0].__setitem__(f, None), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert aggregated["failures"], "缺值必须产生失败原因"
+
+
+def test_every_failure_carries_batch_reason_and_detail(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "report.json", lambda obj: (obj.pop("load", None), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["failures"], "必须有失败原因"
+    for failure in aggregated["failures"]:
+        assert "batch" in failure and "reason" in failure and "detail" in failure, failure
+        assert isinstance(failure["reason"], str) and failure["reason"]
+        assert isinstance(failure["detail"], str), failure
+    assert any(f["batch"] == "a" for f in aggregated["failures"])
+
+
+def test_complete_independent_batches_still_pass(tmp_path):
+    """正例不得被返修误伤。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is True, aggregated["failures"]
+    assert aggregated["failures"] == []
+    assert aggregated["production_default_only"] is True
+
+
+def test_batches_are_read_once_per_input(tmp_path, monkeypatch):
+    """每个输入只应读取一次 report.json（避免二次读取产生不一致）。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    reads: list[str] = []
+    original = pathlib.Path.read_text
+
+    def counting_read_text(self, *args, **kwargs):
+        if self.name == "report.json":
+            reads.append(str(self))
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", counting_read_text)
+    probe.aggregate_release_batches(batches)
+    monkeypatch.undo()
+    assert len(reads) == len(set(reads)) == 3, f"report.json 被重复读取：{reads}"
