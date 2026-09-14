@@ -158,3 +158,68 @@ def test_default_steps_still_works(tmp_path):
     config = yaml.safe_load((tmp_path / "default" / "config.yaml").read_text(encoding="utf-8"))
     metrics = pd.read_parquet(tmp_path / "default" / "metrics.parquet")
     assert config["steps"] == probe.STEPS == int(metrics["steps"].iloc[0])
+
+
+# --- 5. 回归：**每个**记录下来的参数都必须与实际执行一致 --------------------
+
+def _config_of(tmp_path, result):
+    return yaml.safe_load((result / "config.yaml").read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("modes", [("off",), ("on",), ("off", "on")])
+@pytest.mark.parametrize("runs", [1, 2])
+def test_modes_and_runs_match_the_actual_metrics_rows(tmp_path, modes, runs):
+    """config 里的 modes / runs_per_mode 必须等于 metrics 里真实的行数。"""
+    run_id = f"mr_{'_'.join(modes)}_{runs}"
+    result = run_probe("--modes", *modes, "--runs", str(runs), "--steps", "1",
+                       "--base-dir", str(tmp_path), "--run-id", run_id)
+    assert result.returncode == 0, result.stderr
+
+    run_dir = tmp_path / run_id
+    config = _config_of(tmp_path, run_dir)
+    metrics = pd.read_parquet(run_dir / "metrics.parquet")
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+
+    assert config["modes"] == list(modes)
+    assert config["runs_per_mode"] == runs
+    assert len(metrics) == runs * len(modes), "metrics 行数必须等于 modes × runs"
+    assert sorted(metrics["mode"].unique()) == sorted(modes)
+    for mode in modes:
+        assert (metrics["mode"] == mode).sum() == runs
+        assert report["modes"][mode]["runs"] == runs
+        assert len(report["modes"][mode]["digests"]) == runs
+
+
+def test_probe_has_no_silent_default_for_steps_anywhere():
+    """结构性保证：源码里不得出现 `steps=` 的默认值。"""
+    import ast
+
+    tree = ast.parse(pathlib.Path(probe.__file__).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "run_once":
+            steps_arg = next(a for a in node.args.kwonlyargs if a.arg == "steps")
+            default = node.args.kw_defaults[node.args.kwonlyargs.index(steps_arg)]
+            assert default is None, "run_once 的 steps 不得有默认值"
+        if isinstance(node, ast.FunctionDef) and node.name == "run_in_subprocess":
+            steps_arg = next(a for a in node.args.kwonlyargs if a.arg == "steps")
+            default = node.args.kw_defaults[node.args.kwonlyargs.index(steps_arg)]
+            assert default is None, "run_in_subprocess 的 steps 不得有默认值"
+
+
+def test_recorded_parameters_are_the_ones_actually_executed(tmp_path):
+    """端到端：changed 参数必须同时出现在产物里 —— 不能只写不执行。"""
+    for steps in STEPS_CASES:
+        run_id = f"exec_{steps}"
+        result = run_probe("--modes", "off", "--runs", "1", "--steps", str(steps),
+                           "--base-dir", str(tmp_path), "--run-id", run_id,
+                           "--emit-provenance")
+        assert result.returncode == 0, result.stderr
+        run_dir = tmp_path / run_id
+        metrics = pd.read_parquet(run_dir / "metrics.parquet")
+        provenance = json.loads((run_dir / "provenance.json").read_text(encoding="utf-8"))
+        # metrics/provenance 的 steps 来自**实际采集到的 transition 数**，
+        # 而题设 `--steps` 必须与之相等 —— 这正是「写的就是跑的」。
+        assert int(metrics["steps"].iloc[0]) == steps
+        assert provenance[0]["steps"] == steps
+        # 每个模式的 digest 数也要与 runs 一致
+        assert len(provenance) == 1
