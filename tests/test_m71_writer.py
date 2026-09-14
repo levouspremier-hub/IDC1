@@ -90,3 +90,51 @@ def test_failed_run_may_be_retried(tmp_path):
     run_dir = write_run("r7", config={}, metrics=_metrics(), report={},
                         base_dir=str(tmp_path), status="success")
     assert json.loads((run_dir / "manifest.json").read_text())["status"] == "success"
+
+
+# --- M5.4i 返修：受控的 manifest 扩展 ---------------------------------------
+
+RESERVED_MANIFEST_FIELDS = (
+    "run_id", "revision", "dependency_lock_hash", "data_hash", "scenario_hash",
+    "seed", "command", "status", "failure_classification",
+)
+
+
+def test_manifest_metadata_is_merged_into_the_manifest(tmp_path):
+    run_dir = write_run(
+        "ext", config={"a": 1}, metrics=pd.DataFrame({"x": [1]}), report={"ok": True},
+        base_dir=str(tmp_path),
+        manifest_metadata={"effective_corrector_time_limit_s": 0.25,
+                           "corrector_time_limit_source": "production_default"},
+    )
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["effective_corrector_time_limit_s"] == 0.25
+    assert manifest["corrector_time_limit_source"] == "production_default"
+    # writer 自己的字段仍在
+    assert manifest["run_id"] == "ext" and manifest["revision"]
+
+
+def test_manifest_metadata_defaults_to_no_extra_fields(tmp_path):
+    run_dir = write_run("plain", config={}, metrics=pd.DataFrame({"x": [1]}),
+                        report={}, base_dir=str(tmp_path))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest) == set(RESERVED_MANIFEST_FIELDS)
+
+
+@pytest.mark.parametrize("reserved", RESERVED_MANIFEST_FIELDS)
+def test_manifest_metadata_cannot_override_a_reserved_field(tmp_path, reserved):
+    with pytest.raises(ValueError, match="保留"):
+        write_run(
+            "clash", config={}, metrics=pd.DataFrame({"x": [1]}), report={},
+            base_dir=str(tmp_path), status="success",
+            manifest_metadata={reserved: "hijacked"},
+        )
+
+
+def test_manifest_metadata_does_not_leak_between_calls(tmp_path):
+    write_run("first", config={}, metrics=pd.DataFrame({"x": [1]}), report={},
+              base_dir=str(tmp_path), manifest_metadata={"extra": 1})
+    second = write_run("second", config={}, metrics=pd.DataFrame({"x": [2]}), report={},
+                       base_dir=str(tmp_path))
+    manifest = json.loads((second / "manifest.json").read_text(encoding="utf-8"))
+    assert "extra" not in manifest

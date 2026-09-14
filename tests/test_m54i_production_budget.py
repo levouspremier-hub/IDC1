@@ -379,3 +379,71 @@ def test_corrector_probe_override_run_cannot_pass_the_production_gate(tmp_path):
     assert report["release_gate"]["observations"] == []
     assert manifest["status"] == "failed"
     assert summary["status"] == "failed"
+
+
+# --- 7. 返修：manifest 也必须记录 provenance --------------------------------
+
+MANIFEST_PROVENANCE_FIELDS = (
+    "production_corrector_time_limit_s",
+    "effective_corrector_time_limit_s",
+    "corrector_time_limit_source",
+)
+
+
+@pytest.mark.slow
+def test_train_records_provenance_in_config_report_and_manifest(tmp_path):
+    """三处必须**恒等**（首轮审核：manifest 缺这三个字段）。"""
+    run_cli("-m", "safe_rl_v2.train", "--synthetic-smoke", "--steps", "1", "--seed", "0",
+            "--corrector", "on", "--base-dir", str(tmp_path), "--run-id", "prov")
+    run_dir = tmp_path / "prov"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    for field in MANIFEST_PROVENANCE_FIELDS:
+        assert field in manifest, f"manifest 缺少 {field}"
+        assert manifest[field] == config[field] == report[field], field
+    assert manifest["corrector_time_limit_source"] == "production_default"
+
+
+@pytest.mark.slow
+def test_train_disabled_source_is_recorded_in_all_three(tmp_path):
+    run_cli("-m", "safe_rl_v2.train", "--synthetic-smoke", "--steps", "1", "--seed", "0",
+            "--corrector", "off", "--base-dir", str(tmp_path), "--run-id", "disabled")
+    run_dir = tmp_path / "disabled"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    for obj in (config, report, manifest):
+        assert obj["corrector_time_limit_source"] == "disabled"
+        assert obj["effective_corrector_time_limit_s"] is None
+
+
+@pytest.mark.slow
+def test_smoke_and_rollout_record_provenance_in_their_manifests(tmp_path):
+    run_cli("scripts/smoke_main_chain.py", "--base-dir", str(tmp_path),
+            "--run-id", "smoke_prov")
+    run_cli("scripts/probe_rollout_deterministic.py", "--steps", "2",
+            "--base-dir", str(tmp_path), "--run-id", "rollout_prov")
+    for run_id in ("smoke_prov", "rollout_prov"):
+        run_dir = tmp_path / run_id
+        config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+        report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+        manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+        for field in MANIFEST_PROVENANCE_FIELDS:
+            assert field in manifest, f"{run_id} 的 manifest 缺少 {field}"
+            assert manifest[field] == config[field] == report[field], (run_id, field)
+
+
+@pytest.mark.slow
+def test_corrector_probe_records_provenance_in_its_manifest(tmp_path):
+    run_cli("scripts/probe_corrector_repro.py", "--modes", "on", "--runs", "6",
+            "--steps", "8", "--base-dir", str(tmp_path), "--run-id", "probe_prov")
+    run_dir = tmp_path / "probe_prov"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    for field in MANIFEST_PROVENANCE_FIELDS:
+        assert field in manifest, f"manifest 缺少 {field}"
+        assert manifest[field] == config[field] == report[field], field

@@ -1,10 +1,11 @@
-"""M5.4i 发布验收：跨批聚合的机器可读判据。
+"""M5.4i 发布验收：跨批聚合的**fail-closed** 判据。
 
-单次抽样可能是幸运的（0.05 s 的不稳定是间歇的，见 M5.4h2 §9.9），因此 M5.4 发布
-证据必须按负载做**多批聚合**：每个单批 `distinct=1` **且** 跨批 `aggregate distinct=1`
-**且** 零 `time_limit` **且** 全部批次确实来自**生产默认**（不得用显式 override 伪造默认）。
+首轮审核判定不通过：聚合器只要求 `batches` 非空，于是
+「单批次」「同一 run 传三次」「三种负载混合」都能冒充三个独立同负载批次；
+且聚合器读 `manifest` 却不校验它，`summary.parquet` 缺失时反而被当成零次 time-limit。
 
-本文件的慢速用例会真实跑批次；快速用例只验证聚合器的**判据**是否如实。
+本文件固定返修后的判据：任何字段缺失、文件缺失、样本不足、批间不一致或解析异常
+一律 **fail closed**，并给出机器可读的失败原因（具体批次 + 原因码）。
 """
 
 import json
@@ -14,116 +15,406 @@ import sys
 
 import pandas as pd
 import pytest
+import yaml
 
 from scripts import probe_corrector_repro as probe
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRODUCTION_DEFAULT = 0.25
+MIN_BATCHES = 3
+
+REQUIRED_ARTIFACTS = (
+    "config.yaml", "metrics.parquet", "report.json", "figures",
+    "manifest.json", "summary.json", "summary.parquet",
+)
 
 
-def _fake_run(root: pathlib.Path, run_id: str, *, digests, passed=True,
-              source="production_default", budget=PRODUCTION_DEFAULT,
-              manifest_status=None, statuses=(0,)) -> pathlib.Path:
-    """构造一个最小 run 目录（只含聚合器需要的产物），用于判据测试。"""
+def _write_batch(
+    root: pathlib.Path,
+    run_id: str,
+    *,
+    digests=("a", "a", "a", "a", "a", "a"),
+    steps: int = 8,
+    passed: bool = True,
+    evaluated: bool = True,
+    all_qualifying: bool = True,
+    source: str = "production_default",
+    budget: float = PRODUCTION_DEFAULT,
+    manifest_status: str | None = None,
+    revision: str | None = "rev-0001",
+    load: dict | None = None,
+    machine: dict | None = None,
+    statuses=(0, 0, 0),
+    with_parquet: bool = True,
+    parquet_has_status: bool = True,
+    provenance_in_manifest: bool = True,
+    omit: tuple[str, ...] = (),
+) -> pathlib.Path:
+    """构造一个**完整**的标准 batch run（默认全部判据满足）。"""
     run_dir = root / run_id
-    (run_dir).mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "figures").mkdir(exist_ok=True)
+    load = load if load is not None else {
+        "mode": "none", "concurrency": 0, "program": None, "load_injected": False,
+    }
+    machine = machine if machine is not None else {
+        "platform": "test", "machine": "arm64", "python": "3.12", "cpu_count": 10,
+    }
+    observations = [] if not evaluated else [{
+        "source": "modes.on",
+        "digests": list(digests),
+        "distinct": len(set(digests)),
+        "processes": len(digests),
+        "steps": steps,
+        "effective_corrector_time_limit_s": budget,
+        "corrector_time_limit_source": source,
+    }]
     report = {
         "effective_corrector_time_limit_s": budget,
         "corrector_time_limit_source": source,
+        "load": load,
+        "machine": machine,
         "release_gate": {
+            "evaluated": evaluated,
+            "all_qualifying": all_qualifying,
             "passed": passed,
-            "observations": [{
-                "source": "modes.on", "digests": list(digests),
-                "distinct": len(set(digests)), "processes": len(digests), "steps": 8,
-            }],
+            "observations": observations,
         },
     }
-    (run_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
-    (run_dir / "manifest.json").write_text(
-        json.dumps({"run_id": run_id,
-                    "status": manifest_status or ("success" if passed else "failed")}),
-        encoding="utf-8",
+    manifest = {
+        "run_id": run_id,
+        "revision": revision,
+        "command": "python scripts/probe_corrector_repro.py",
+        "status": manifest_status or ("success" if passed else "failed"),
+    }
+    if provenance_in_manifest:
+        manifest |= {
+            "production_corrector_time_limit_s": PRODUCTION_DEFAULT,
+            "effective_corrector_time_limit_s": budget,
+            "corrector_time_limit_source": source,
+        }
+    config = {
+        "probe": "m54d_corrector_reproducibility",
+        "production_corrector_time_limit_s": PRODUCTION_DEFAULT,
+        "effective_corrector_time_limit_s": budget,
+        "corrector_time_limit_source": source,
+    }
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    pd.DataFrame([{"step": i, "status": 0} for i in range(3)]).to_parquet(
+        run_dir / "metrics.parquet"
     )
-    pd.DataFrame([{"status": s} for s in statuses]).to_parquet(run_dir / "summary.parquet")
+    (run_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (run_dir / "summary.json").write_text(json.dumps({"run_id": run_id}), encoding="utf-8")
+    if with_parquet:
+        columns = {"status": list(statuses)} if parquet_has_status else {"step": [0, 1]}
+        pd.DataFrame(columns).to_parquet(run_dir / "summary.parquet")
+    for name in omit:
+        (run_dir / name).unlink()
     return run_dir
 
 
-# --- 1. 聚合判据（纯函数） ---------------------------------------------------
+def _failures(aggregated: dict) -> set[str]:
+    return {f["reason"] for f in aggregated["failures"]}
 
-def test_aggregation_passes_only_when_every_batch_and_the_pool_agree(tmp_path):
-    # 可复现的批次：同一批次内 6 个独立进程给出**同一个** digest。
-    runs = [_fake_run(tmp_path, f"b{i}", digests=["a"] * 6) for i in range(3)]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["batches"] == 3
-    assert aggregated["aggregate_processes"] == 18
+
+# --- 1. 批次数量与独立性 -----------------------------------------------------
+
+def test_one_batch_is_not_cross_batch_evidence(tmp_path):
+    aggregated = probe.aggregate_release_batches([_write_batch(tmp_path, "b0")])
+    assert aggregated["passed"] is False
+    assert "too_few_batches" in _failures(aggregated)
+
+
+def test_two_batches_are_not_enough(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "b0"), _write_batch(tmp_path, "b1"),
+    ])
+    assert aggregated["passed"] is False
+    assert "too_few_batches" in _failures(aggregated)
+
+
+def test_the_same_path_three_times_is_not_three_independent_batches(tmp_path):
+    same = _write_batch(tmp_path, "b0")
+    aggregated = probe.aggregate_release_batches([same, same, same])
+    assert aggregated["passed"] is False, "同一个 run 重复三次不得冒充三个独立批次"
+    assert "duplicate_input_path" in _failures(aggregated)
+
+
+def test_same_path_via_different_spellings_is_still_a_duplicate(tmp_path):
+    same = _write_batch(tmp_path, "b0")
+    spelled = pathlib.Path(str(same) + "/.")
+    aggregated = probe.aggregate_release_batches([same, spelled, same])
+    assert aggregated["passed"] is False
+    assert "duplicate_input_path" in _failures(aggregated)
+
+
+def test_duplicate_run_ids_across_different_dirs_fail(tmp_path):
+    a = _write_batch(tmp_path / "x", "same_id")
+    b = _write_batch(tmp_path / "y", "same_id")
+    c = _write_batch(tmp_path / "z", "other_id")
+    aggregated = probe.aggregate_release_batches([a, b, c])
+    assert aggregated["passed"] is False
+    assert "duplicate_run_id" in _failures(aggregated)
+
+
+def test_mixed_loads_fail(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "nl", load={"mode": "none", "concurrency": 0,
+                                           "program": None, "load_injected": False}),
+        _write_batch(tmp_path, "h4", load={"mode": "hogs", "concurrency": 4,
+                                           "program": "prog", "load_injected": True}),
+        _write_batch(tmp_path, "h8", load={"mode": "hogs", "concurrency": 8,
+                                           "program": "prog", "load_injected": True}),
+    ])
+    assert aggregated["passed"] is False, "三种负载混合不得通过"
+    assert "inconsistent_load_signature" in _failures(aggregated)
+
+
+def test_different_concurrency_under_the_same_mode_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a", load={"mode": "hogs", "concurrency": 4,
+                                          "program": "p", "load_injected": True}),
+        _write_batch(tmp_path, "b", load={"mode": "hogs", "concurrency": 8,
+                                          "program": "p", "load_injected": True}),
+        _write_batch(tmp_path, "c", load={"mode": "hogs", "concurrency": 4,
+                                          "program": "p", "load_injected": True}),
+    ])
+    assert aggregated["passed"] is False
+    assert "inconsistent_load_signature" in _failures(aggregated)
+
+
+def test_inconsistent_machine_signature_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"),
+        _write_batch(tmp_path, "b", machine={"platform": "other", "machine": "x86",
+                                             "python": "3.12", "cpu_count": 10}),
+        _write_batch(tmp_path, "c"),
+    ])
+    assert aggregated["passed"] is False, "批间机器不一致不得声称为同一个本机候选"
+    assert "inconsistent_machine_signature" in _failures(aggregated)
+
+
+# --- 2. manifest 校验 --------------------------------------------------------
+
+def test_a_failed_batch_manifest_fails_the_aggregate(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", manifest_status="failed", passed=False),
+    ])
+    assert aggregated["passed"] is False
+    assert "manifest_status_not_success" in _failures(aggregated)
+
+
+def test_missing_revision_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", revision=None),
+    ])
+    assert aggregated["passed"] is False
+    assert "manifest_revision_missing" in _failures(aggregated)
+
+
+def test_inconsistent_revisions_fail(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a", revision="rev-A"),
+        _write_batch(tmp_path, "b", revision="rev-B"),
+        _write_batch(tmp_path, "c", revision="rev-A"),
+    ])
+    assert aggregated["passed"] is False
+    assert "inconsistent_revision" in _failures(aggregated)
+
+
+def test_missing_run_id_in_manifest_fails(tmp_path):
+    run_dir = _write_batch(tmp_path, "a")
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest.pop("run_id")
+    (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    aggregated = probe.aggregate_release_batches([
+        run_dir, _write_batch(tmp_path, "b"), _write_batch(tmp_path, "c"),
+    ])
+    assert aggregated["passed"] is False
+    assert "manifest_run_id_missing" in _failures(aggregated)
+
+
+# --- 3. 门禁与样本量 ---------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "overrides,expected_reason",
+    [
+        ({"evaluated": False}, "release_gate_not_evaluated"),
+        ({"all_qualifying": False}, "release_gate_not_all_qualifying"),
+        ({"passed": False}, "release_gate_not_passed"),
+    ],
+)
+def test_any_non_passing_release_gate_fails(tmp_path, overrides, expected_reason):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", manifest_status="success", **overrides),
+    ])
+    assert aggregated["passed"] is False
+    assert expected_reason in _failures(aggregated)
+
+
+def test_underpowered_observations_fail(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", digests=("a", "a")),  # 只有 2 个进程
+    ])
+    assert aggregated["passed"] is False
+    assert "observation_underpowered" in _failures(aggregated)
+
+
+def test_short_rollouts_fail(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", steps=4),
+    ])
+    assert aggregated["passed"] is False
+    assert "observation_underpowered" in _failures(aggregated)
+
+
+def test_digest_count_must_match_processes(tmp_path):
+    """`processes` 与实际 digest 个数不符 -> 证据不可信。"""
+    run_dir = _write_batch(tmp_path, "a")
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    report["release_gate"]["observations"][0]["processes"] = 6
+    report["release_gate"]["observations"][0]["digests"] = ["a", "a", "a"]
+    (run_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    aggregated = probe.aggregate_release_batches([
+        run_dir, _write_batch(tmp_path, "b"), _write_batch(tmp_path, "c"),
+    ])
+    assert aggregated["passed"] is False
+    assert "digest_count_mismatch" in _failures(aggregated)
+
+
+def test_empty_digests_fail(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", digests=()),
+    ])
+    assert aggregated["passed"] is False
+    assert "digests_empty" in _failures(aggregated)
+
+
+def test_override_observations_cannot_be_release_evidence(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", source="explicit_override"),
+    ])
+    assert aggregated["passed"] is False
+    assert "override_observation_in_release_evidence" in _failures(aggregated)
+
+
+def test_a_non_production_budget_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", budget=0.05),
+    ])
+    assert aggregated["passed"] is False
+    assert "budget_not_production_default" in _failures(aggregated)
+
+
+# --- 4. summary.parquet 与输入产物完整性（fail closed） ----------------------
+
+def test_missing_summary_parquet_fails_closed(tmp_path):
+    """缺 summary.parquet **不得**被当成「零次 time-limit」。"""
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", with_parquet=False),
+    ])
+    assert aggregated["passed"] is False
+    assert "missing_or_unreadable_artifact" in _failures(aggregated)
+
+
+def test_summary_parquet_without_status_column_fails_closed(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", parquet_has_status=False),
+    ])
+    assert aggregated["passed"] is False
+    assert "summary_parquet_missing_status_column" in _failures(aggregated)
+
+
+def test_any_time_limit_failure_fails_closed(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", statuses=(1, 0, 0)),
+    ])
+    assert aggregated["passed"] is False
+    assert "time_limit_failure" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("missing", REQUIRED_ARTIFACTS)
+def test_missing_standard_artifact_fails(tmp_path, missing):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", omit=(missing,)),
+    ])
+    assert aggregated["passed"] is False
+    assert "missing_or_unreadable_artifact" in _failures(aggregated)
+
+
+def test_unreadable_report_fails_closed(tmp_path):
+    run_dir = _write_batch(tmp_path, "a")
+    (run_dir / "report.json").write_text("{ not json", encoding="utf-8")
+    aggregated = probe.aggregate_release_batches([
+        run_dir, _write_batch(tmp_path, "b"), _write_batch(tmp_path, "c"),
+    ])
+    assert aggregated["passed"] is False
+    assert "missing_or_unreadable_artifact" in _failures(aggregated)
+
+
+def test_missing_provenance_in_manifest_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", provenance_in_manifest=False),
+    ])
+    assert aggregated["passed"] is False
+    assert "manifest_provenance_missing" in _failures(aggregated)
+
+
+def test_empty_input_does_not_pass():
+    aggregated = probe.aggregate_release_batches([])
+    assert aggregated["passed"] is False
+    assert "too_few_batches" in _failures(aggregated)
+
+
+# --- 5. 正例：三个独立同负载批次通过 ----------------------------------------
+
+def test_three_independent_same_load_batches_pass(tmp_path):
+    batches = [_write_batch(tmp_path, f"b{i}") for i in range(MIN_BATCHES)]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is True, aggregated["failures"]
+    assert aggregated["failures"] == []
+    assert aggregated["batches"] == MIN_BATCHES
     assert aggregated["aggregate_distinct"] == 1
     assert aggregated["every_batch_distinct_one"] is True
     assert aggregated["time_limit_failures"] == 0
-    assert aggregated["passed"] is True
 
 
-def test_aggregation_fails_when_any_single_batch_forks(tmp_path):
-    runs = [
-        _fake_run(tmp_path, "b0", digests=["a"] * 3),
-        _fake_run(tmp_path, "b1", digests=["a", "a", "Z"]),  # 单批内部分叉
-        _fake_run(tmp_path, "b2", digests=["a"] * 3),
-    ]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["aggregate_distinct"] == 2
-    assert aggregated["every_batch_distinct_one"] is False
+def test_intra_batch_fork_fails(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
+        _write_batch(tmp_path, "c", digests=("a", "a", "Z")),
+    ])
     assert aggregated["passed"] is False
+    assert "batch_distinct_not_one" in _failures(aggregated)
 
 
-def test_aggregation_fails_when_batches_agree_internally_but_not_with_each_other(tmp_path):
-    """每批各自 distinct=1，但批与批不同 —— 聚合仍必须失败。"""
-    runs = [
-        _fake_run(tmp_path, "b0", digests=["a", "a", "a"]),
-        _fake_run(tmp_path, "b1", digests=["b", "b", "b"]),
-    ]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["every_batch_distinct_one"] is True
-    assert aggregated["aggregate_distinct"] == 2
-    assert aggregated["passed"] is False
+def test_failures_name_the_offending_batch(tmp_path):
+    aggregated = probe.aggregate_release_batches([
+        _write_batch(tmp_path, "good_a"), _write_batch(tmp_path, "good_b"),
+        _write_batch(tmp_path, "bad_c", manifest_status="failed", passed=False),
+    ])
+    offenders = {f.get("batch") for f in aggregated["failures"]}
+    assert "bad_c" in offenders, aggregated["failures"]
 
 
-def test_aggregation_fails_on_any_time_limit_failure(tmp_path):
-    runs = [
-        _fake_run(tmp_path, "b0", digests=["a", "a"], statuses=(0, 0)),
-        _fake_run(tmp_path, "b1", digests=["a", "a"], statuses=(1, 0)),  # 一次 time_limit
-    ]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["time_limit_failures"] == 1
-    assert aggregated["passed"] is False
-
-
-def test_aggregation_requires_production_default_evidence(tmp_path):
-    """显式 override 的批次**不得**充当生产默认发布证据。"""
-    runs = [
-        _fake_run(tmp_path, "b0", digests=["a", "a"]),
-        _fake_run(tmp_path, "b1", digests=["a", "a"],
-                  source="explicit_override", budget=0.05),
-    ]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["production_default_only"] is False
-    assert aggregated["passed"] is False, "显式 override 不得伪造生产默认通过"
-
-
-def test_aggregation_requires_the_production_default_budget(tmp_path):
-    runs = [_fake_run(tmp_path, "b0", digests=["a", "a"], budget=0.05)]
-    aggregated = probe.aggregate_release_batches(runs)
-    assert aggregated["effective_corrector_time_limit_s"] == [0.05]
-    assert aggregated["passed"] is False
-
-
-def test_aggregation_of_nothing_does_not_pass():
-    assert probe.aggregate_release_batches([])["passed"] is False
-
-
-# --- 2. 真实批次（slow） ----------------------------------------------------
+# --- 6. 真实批次与标准聚合 run（slow） ---------------------------------------
 
 def run_batch(base_dir: pathlib.Path, run_id: str, *extra: str,
               timeout: int = 3600) -> subprocess.CompletedProcess:
-    """一个发布批次：`--modes on`（生产默认，不给任何显式预算）+ ≥6 进程 + 8 步。"""
     return subprocess.run(
         [sys.executable, "scripts/probe_corrector_repro.py",
          "--modes", "on", "--runs", "6", "--steps", "8",
@@ -142,26 +433,74 @@ def test_a_default_batch_uses_the_production_default_and_writes_full_artifacts(t
 
     assert report["effective_corrector_time_limit_s"] == pytest.approx(PRODUCTION_DEFAULT)
     assert report["corrector_time_limit_source"] == "production_default"
-    assert report["release_gate"]["observations"], "批次必须产出生产默认观测"
+    assert report["release_gate"]["observations"]
     assert all(
         o["corrector_time_limit_source"] == "production_default"
         for o in report["release_gate"]["observations"]
-    ), "默认批次的观测必须全部来自生产默认"
-
+    )
     assert (result.returncode == 0) is report["release_gate"]["passed"]
     assert manifest["status"] == ("success" if report["release_gate"]["passed"] else "failed")
     assert summary["status"] == manifest["status"]
-    for name in ("config.yaml", "metrics.parquet", "report.json", "figures",
-                 "manifest.json", "summary.json", "summary.parquet"):
+    for name in REQUIRED_ARTIFACTS:
         assert (run_dir / name).exists(), f"缺少产物 {name}"
 
 
 @pytest.mark.slow
+def test_a_real_batch_writes_provenance_into_config_report_and_manifest(tmp_path):
+    run_batch(tmp_path, "m54i_prov")
+    run_dir = tmp_path / "m54i_prov"
+    config = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8"))
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+
+    for obj in (config, report, manifest):
+        assert obj["production_corrector_time_limit_s"] == pytest.approx(PRODUCTION_DEFAULT)
+        assert obj["effective_corrector_time_limit_s"] == pytest.approx(PRODUCTION_DEFAULT)
+        assert obj["corrector_time_limit_source"] == "production_default", obj
+
+
+@pytest.mark.slow
+def test_the_aggregate_command_writes_a_standard_run(tmp_path):
+    for i in range(MIN_BATCHES):
+        run_batch(tmp_path, f"m54i_b{i}")
+    out = subprocess.run(
+        [sys.executable, "scripts/probe_corrector_repro.py", "--aggregate-runs",
+         *[str(tmp_path / f"m54i_b{i}") for i in range(MIN_BATCHES)],
+         "--base-dir", str(tmp_path), "--run-id", "m54i_agg"],
+        cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800,
+    )
+    agg_dir = tmp_path / "m54i_agg"
+    for name in ("config.yaml", "metrics.parquet", "report.json", "figures", "manifest.json"):
+        assert (agg_dir / name).exists(), f"聚合 run 缺少标准产物 {name}"
+
+    manifest = json.loads((agg_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads((agg_dir / "report.json").read_text(encoding="utf-8"))
+    assert manifest["corrector_time_limit_source"] == "production_default"
+    assert manifest["status"] == ("success" if report["passed"] else "failed")
+    assert (out.returncode == 0) is report["passed"]
+    assert report["passed"] is True, report["failures"]
+
+
+@pytest.mark.slow
+def test_the_aggregate_command_refuses_to_overwrite_a_successful_aggregate(tmp_path):
+    for i in range(MIN_BATCHES):
+        run_batch(tmp_path, f"c{i}")
+    args = [sys.executable, "scripts/probe_corrector_repro.py", "--aggregate-runs",
+            *[str(tmp_path / f"c{i}") for i in range(MIN_BATCHES)],
+            "--base-dir", str(tmp_path), "--run-id", "agg_dup"]
+    first = subprocess.run(args, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800)
+    assert first.returncode == 0, first.stderr
+    before = (tmp_path / "agg_dup" / "manifest.json").read_bytes()
+
+    second = subprocess.run(args, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1800)
+    assert second.returncode != 0, "不得覆盖既有成功聚合 run"
+    assert (tmp_path / "agg_dup" / "manifest.json").read_bytes() == before
+
+
+@pytest.mark.slow
 def test_the_override_batch_is_recorded_and_excluded_from_the_release_gate(tmp_path):
-    """显式 0.05 诊断 run：如实记录、可聚合，但**不**参与生产 release acceptance。"""
     result = run_batch(tmp_path, "m54i_override", "--corrector-time-limit", "0.05")
     run_dir = tmp_path / "m54i_override"
-    # 先确认探针**确实**跑完并落了产物；否则后续 json 解析失败会掩盖真实原因。
     assert (run_dir / "report.json").exists(), (
         f"探针未产出 report.json（returncode={result.returncode}）\n"
         f"stdout={result.stdout}\nstderr={result.stderr}"
@@ -170,15 +509,10 @@ def test_the_override_batch_is_recorded_and_excluded_from_the_release_gate(tmp_p
 
     assert report["effective_corrector_time_limit_s"] == pytest.approx(0.05)
     assert report["corrector_time_limit_source"] == "explicit_override"
-    assert report["release_gate"]["passed"] is False, "override 不得通过生产门禁"
-    assert report["release_gate"]["observations"] == [], (
-        f"override 观测混进了生产默认证据：{report['release_gate']['observations']}"
-    )
-    assert report["release_gate"]["override_observations"], "override 观测必须被如实登记"
-    assert result.returncode != 0, (
-        f"override run 不得退出 0\nstdout={result.stdout}\nstderr={result.stderr}"
-    )
+    assert report["release_gate"]["passed"] is False
+    assert report["release_gate"]["observations"] == []
+    assert report["release_gate"]["override_observations"]
+    assert result.returncode != 0
 
     aggregated = probe.aggregate_release_batches([run_dir])
     assert aggregated["passed"] is False
-    assert aggregated["production_default_only"] is False
