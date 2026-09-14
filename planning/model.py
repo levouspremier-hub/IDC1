@@ -1006,8 +1006,10 @@ def solve_time_indexed_mip_raw_projection(
         return max(deadline - _monotonic(), 0.0)
 
     def _options() -> dict:
-        rem = _remaining()
-        return {} if rem is None else {"time_limit": float(rem)}
+        # M5.4g：阶段 A/B 也必须走同一份确定性选项构造。
+        # **只替换 options 构造**：time_limit 仍来自上面这个共享 deadline 的剩余预算，
+        # remaining-budget 算法未变；不触碰目标、约束、边界。
+        return deterministic_mip_options(time_limit_s=_remaining())
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
     _audit = {

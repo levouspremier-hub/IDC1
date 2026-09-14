@@ -150,11 +150,16 @@ def test_digest_is_deterministic_for_the_same_input():
 # --- 3. solver 证据 ----------------------------------------------------------
 
 def test_solver_evidence_records_backend_version_and_options():
+    """M5.4g 迁移：evidence 的 options 必须记录**全部**确定性选项，不再只报 time_limit。
+
+    （原断言 `== {"time_limit": 0.05}` 是 M5.4d 时期探针自拼 options 的产物；
+    M5.4g 要求 options 从 `planning.model.deterministic_mip_options` 导出。）
+    """
     evidence = probe.solver_evidence(budget=0.05)
     assert evidence["planner_backend"] == "mip"
     assert "scipy" in evidence["solver"]
     assert evidence["scipy_version"]
-    assert evidence["options"] == {"time_limit": 0.05}
+    assert evidence["options"] == {"random_seed": 0, "parallel": False, "time_limit": 0.05}
     assert evidence["integrality"] == "binary on/off per step"
 
 

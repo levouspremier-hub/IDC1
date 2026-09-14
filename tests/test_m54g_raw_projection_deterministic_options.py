@@ -135,16 +135,30 @@ def test_remaining_budget_semantics_are_preserved(monkeypatch):
 
 
 def test_no_time_limit_still_gets_the_deterministic_options(monkeypatch):
-    """`time_limit_s=None` 时仍必须传 random_seed/parallel，仅不含 time_limit。"""
+    """`time_limit_s=None` 时仍必须传 random_seed/parallel，仅不含 time_limit。
+
+    注意：`correct()` 出于 M4.4 的预算纪律**显式拒绝** `None`
+    （"time_limit_s 必须为显式正数预算"），故本用例直接驱动
+    `solve_time_indexed_mip_raw_projection` —— 要验证的是模型层的 options 构造。
+    """
     spy = _Spy(monkeypatch)
     snapshot, proposal = _snapshot_and_proposal()
-    correct(snapshot, proposal, time_limit_s=None)
+    planning_model.solve_time_indexed_mip_raw_projection(
+        snapshot, proposal, time_limit_s=None
+    )
 
     assert spy.milp_options, "没有观测到 milp 调用"
     for options in spy.milp_options:
         assert options.get("random_seed") == 0
         assert options.get("parallel") is False
         assert "time_limit" not in options, f"无预算时不得出现 time_limit：{options}"
+
+
+def test_corrector_still_rejects_a_missing_budget():
+    """M4.4 的预算纪律不得被本卡放松：correct() 仍必须拒绝 None。"""
+    snapshot, proposal = _snapshot_and_proposal()
+    with pytest.raises(ValueError, match="time_limit_s"):
+        correct(snapshot, proposal, time_limit_s=None)
 
 
 # --- 2. options 构造函数本身 ------------------------------------------------

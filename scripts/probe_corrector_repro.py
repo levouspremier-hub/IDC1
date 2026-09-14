@@ -144,15 +144,22 @@ def semantic_digest(buffer: RolloutBuffer) -> str:
 
 
 def solver_evidence(*, budget: float) -> dict:
-    """记录求解器身份与选项 —— 结论必须能追溯到具体 solver 配置。"""
+    """记录求解器身份与选项 —— 结论必须能追溯到具体 solver 配置。
+
+    M5.4g：options 必须**从 planning 的同一构造函数导出**（不再自拼），
+    否则 evidence 会与真正传给 HiGHS 的选项不一致（M5.4f 的教训）。
+    """
     import scipy
+
+    from planning.model import deterministic_mip_options
 
     return {
         "planner_backend": "mip",
         "solver": "scipy.optimize.milp (HiGHS)",
         "scipy_version": scipy.__version__,
-        "options": {"time_limit": float(budget)},
+        "options": deterministic_mip_options(time_limit_s=float(budget)),
         "integrality": "binary on/off per step",
+        "options_source": "planning.model.deterministic_mip_options",
     }
 
 
