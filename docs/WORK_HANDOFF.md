@@ -1,7 +1,8 @@
 # 工程工作交接文档
 
 > 更新时间：2026-09-14（Asia/Shanghai）
-> M5.4 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`；本交接文档在其上提交。
+> M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract` @ `0ee844d`（M5.4h2 执行完成，**等待人工审查**）。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -50,7 +51,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `ca17d87` | **当前继续工作分支**；包含 M5.1–M5.4h1 的累计链。 |
+| `p4-safeppo-m51a-rollout-contract` | `0ee844d` | **当前继续工作分支**；包含 M5.1–M5.4h2 的累计链。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
@@ -129,17 +130,20 @@ M5.4f（终点 `46a8acc`）曾把确定性 options 接到不被 corrector 使用
 不得再引用 M5.4f 的“路径已修好”或 digest 对比作为接线证据；其任务卡追加的 §10
 历史勘误已明确该结论失效。M5.4g 的运行时 spy 才是有效接线证据。
 
-### 6.2 M5.4h / M5.4h1 的证据
+### 6.2 M5.4h / M5.4h1 / M5.4h2 的证据
 
 - M5.4h：`96f3aa1` → `c842c34`，建立预算矩阵、受控 CPU hog、逐阶段探针。
 - M5.4h1：`07e2224` → `ca17d87`，修复了初版账本中的负载记录、失败状态和节点替代
   实验语义。
+- M5.4h2：`bf4b62a` → `0ee844d`（**执行完成，等待人工审查**），勘误了 `options`
+  字段名、`overall` 与 release gate 的一致性、以及未绑定节点上限的候选表述。
 - 当前默认预算仍是 **0.05 s**；在受控 hogs4/hogs8 下，独立进程 digest 可分叉，
   release gate 因此为 blocked。
 - 在本机样本中，0.25 s 及以上没有 observed `time_limit` 且 digest 一致；这是
   **本机候选值**，不是跨机器保证。
 - `mip_max_nodes=100/10000` 的替代语义臂稳定，是因为移除了 `time_limit`；所有可行解
-  `mip_node_count=1`，节点上限未实际绑定。它不能被称为“节点上限导致确定性”。
+  `mip_node_count=1`，节点上限未实际绑定。它不能被称为“节点上限导致确定性”，
+  M5.4h2 起在产物中固定为 `node_cap_effective=false`、`node_cap_candidate=false`。
 
 历史 runs 保留且不得覆盖：
 
@@ -149,42 +153,41 @@ runs/m54h_nodecaps/
 runs/m54h1_matrix/
 ```
 
-## 7. 当前 M5.4h1 的未决账本问题
+M5.4h2 新增产物：`runs/m54h2_matrix/`。
 
-当前 HEAD 是 `ca17d87`，M5.4h1 已修复大部分账本问题，但尚有两项必须先用
-M5.4h2 修正：
+## 7. M5.4h2 的账本勘误结果（已执行）
 
-1. `summary.parquet` 使用 `options_json`，而约定字段名是 `options`。新卡须将其改为
-   `options`（规范 JSON 字符串），并明确 encoding。
-2. 某些 report 同时有 `release_gate.blocked=true` 与 `overall.blocked=false`。
-   `overall` 必须反映 M5.4 phase/release 状态；预算归因仅位于 `attribution`。
-   否则下游会误将“归因成功”理解为“阶段已放行”。
+M5.4h2 已修正下列三项，专项测试 22 项、`tests/test_m54h*.py` 67 项全通过，
+`make check` exit 0（998 passed），`make smoke` exit 0：
 
-此外，`candidate_notes` 必须明确 `node_cap_effective=false` 与
-`node_cap_candidate=false`，将稳定性归因于 probe 中停用了 wall clock，不得将 cap
-100/10000 表述为生产候选。
+1. `summary.parquet` 的字段名由 `options_json` 改为约定的 `options`
+   （规范 JSON：键排序、无多余空白、保留非 ASCII）；未执行的 skipped 阶段写 `null`。
+2. `overall` **只**反映 release gate 的最终阶段状态，与 `release_gate.blocked` 恒等；
+   `attribution` 只解释原因、绝不决定放行。`summary.json` 与 `manifest.status`、
+   退出码共用同一推导。
+3. `candidate_notes` 固定输出 `node_cap_effective=false` 与 `node_cap_candidate=false`
+   （实测未绑定），并将稳定性归因于 probe 内关闭 wall clock。
 
-## 8. 已授权的下一批：严格两张连续卡
+新增证据路径：`runs/m54h2_matrix/m54h2_hogs4_gate_20260914T114439Z`、
+`runs/m54h2_matrix/m54h2_nodealt_20260914T114439Z`、
+`runs/m54h2_matrix/m54h2_hogs4_attribution_20260914T121500Z`、
+`runs/m54h2_matrix/m54h2_hogs4_attribution_20260914T114439Z`（见
+`docs/task_cards/M5.4h2.md` §9.5）。
 
-只在卡 1 验收通过后才能开始卡 2。两卡完成后停止，提交阶段验收，等待人工审阅。
+**必须留意的既有事实**：release gate 的判定来自**单次抽样**。M5.4h2 有一次 hogs4
+运行在 0.05 s 下抽到全部 `distinct=1`，该 run 的 manifest 因此为 `success` ——
+这只说明**该次样本**的门禁已清，**不表示** M5.4 已发布；0.05 s 的不稳定是间歇的。
+是否引入跨 run 证据合并或最小样本量策略，属 M5.4h2 范围之外，**待人工决定**。
 
-### M5.4h2：诊断账本语义最终勘误
+## 8. 当前授权状态：M5.4i 未开始
 
-- **基线**：`ca17d87`；分支保持
-  `p4-safeppo-m51a-rollout-contract`。
-- **允许文件**：`scripts/probe_corrector_repro.py`、`tests/test_m54h*.py`、
-  `docs/task_cards/M5.4h2.md`、新 `runs/m54h2_*` 产物。
-- **禁止**：改 `planning/`、`envs/`、`safe_rl_v2/`、`contracts/`、默认预算或任何
-  求解/物理语义。
-- **必须**：以失败测试证明第 7 节三项旧语义错误存在；`options` 作为规范 JSON 字段
-  持久化；`overall` 与 release gate 一致；node-cap 不绑定时不能成为 candidate。
-  不得覆盖历史 runs。
-- **验收**：专项测试、`make check`、`make smoke`、`git diff --check`；新 run 的
-  manifest/release gate/summary 三者必须一致。
+`M5.4h2` **执行完成，等待人工审查**；尚未被人工接受。
+`M5.4i` **尚未开始，尚未获得本轮审查放行** —— 在人工审阅 M5.4h2 的 diff 并明确
+放行之前不得开工。默认预算仍为 0.05 s，M5.4 状态仍为 blocked，**不得**表述为 released。
 
-### M5.4i：采纳 0.25 s 为正确器生产默认预算
+### M5.4i（未开始）：采纳 0.25 s 为正确器生产默认预算
 
-只有 M5.4h2 全绿才开始。本卡已获得“选择 B”的授权：生产默认值从 0.05 s 改为
+只有 M5.4h2 经人工审查放行后才开始。拟授权为“选择 B”：生产默认值从 0.05 s 改为
 0.25 s；0.05 s 仍为显式 override/诊断值，绝不静默改写。
 
 - **允许文件**：`planning/corrector.py`（若仅为唯一常量来源所需）、
