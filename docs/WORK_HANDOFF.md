@@ -213,7 +213,28 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 8. 当前授权状态：M5.4i 三轮审核均未通过，第三次返修后等待再次审核
+## 8. 当前授权状态：M5.4i **已通过人工审核，M5.4 工程门禁已解除**
+
+**M5.4i 第三次返修通过第四轮人工审核（2026-09-15）→ M5.4 工程门禁正式解除。**
+详见 `docs/task_cards/M5.4i.md` §13。
+
+- **最终有效证据**：`runs/m54i_release_v5/`（13 个 run，全部修订 `2cab5a1`）。
+- **历史证据保留但 superseded**，一律不得作为发布证据引用：
+  v1 `runs/m54i_release/`（`61ba510`）、v2 `runs/m54i_release_v2/`（`aa3294f`）、
+  v3 `runs/m54i_release_v3/`（`771a33d`）、v4 `runs/m54i_release_v4/`（`4f759fb`）。
+- **生产默认 corrector 预算为 0.25 s**（唯一来源
+  `planning.corrector.PRODUCTION_CORRECTOR_TIME_LIMIT_S`）。
+- **效力边界**：这是**本机工程门禁**通过，**不是跨机器保证**。
+  **没有**完成正式训练、性能评估或收敛结论。
+  正式 `make train` 仍被 **M1.2 当前分支缺失**（无 `data/manifest/train.json`）与
+  **M1.3 未完成**阻塞，绝不回退合成数据。
+
+### 8.1 M5.4i 三轮审核未通过的历史（存档）
+
+**三轮审核未通过的三个原因**（详见任务卡 §10.1/§11.1/§12.1）：聚合器 fail-open →
+证据不足 fail-open 与 manifest provenance 缺失 → 外部产物类型强转（容器 provenance
+泄漏 `TypeError`、非字符串 digest 被 `str()` 洗白、宽松 `int()` 截断）。
+
 
 `M5.4h2` **已通过人工审查并被接受**（2026-09-14）。
 
