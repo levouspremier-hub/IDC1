@@ -219,7 +219,50 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7G. M1.3d：连续 truth split 已冻结（等待人工审查）
+## 7H. M1.3d 第一轮审核返修：严格校验 split manifest 与 canonical 时间轴（等待人工复审）
+
+**M1.3d 第一轮审核不通过**，两个根因（详见 `docs/task_cards/M1.3d.md` §11）：
+
+1. **split manifest 未被严格验证**：reader 只证明了「生成时写对了」，
+   没有拒绝**随后被篡改的冻结声明**。实测 15 类篡改（`year`、`step_minutes`、
+   两个路径声明、`materializer_revision` 格式、`no_overlap`/`no_gap`/`randomized`/
+   `leap_day_split`、两条 origin 规则、`readiness`、`unavailable` 四项、
+   `train_only_statistics` 清空/伪造）**全部被接受**。
+2. **canonical 时间轴未被严格验证**：只查首/末行与总行数。
+   在 canonical manifest hash 同步更新、自洽的前提下，
+   实测**内部交换相邻两行、重复时间戳、非网格时间戳、非单调、边界换行**
+   **全部被接受**（物化器与 reader 同）。
+
+**修复**：`validate_canonical_timeline()` 校验**整表**（tz-aware、严格 30min 网格、
+严格递增、唯一、首末精确），**首次冻结前**与 **reader 返回切片前**各调用一次；
+`_read_split_manifest()` 现在校验上述**全部**字段，并要求**路径声明与调用者实际提供的
+logical repo path 一致**、`materializer_revision` 为 40 位小写 Git SHA；
+`_verify_train_statistics()` 把 `train_only_statistics` 与 canonical **train 段重算值**
+逐字段比对（伪造/清空/`bool`/`NaN` 均拒绝）；`no_overlap`/`no_gap`/`randomized`/
+`leap_day_split`/两条 origin 规则/`readiness` 四态/`unavailable` 四项**必须为严格期望值**。
+
+**证据**：改前 **43 failed**（全为 `DID NOT RAISE`）；改后
+`tests/test_m13d_splits.py` **128 非 slow + 1 slow 全绿**；
+`make check` **exit 0**（1418 passed）；`make smoke` **exit 0**；
+`make train` 仍 **exit 2** 且不回退 synthetic，无 checkpoint，
+`train.json`/`validation.json`/`test.json` **未创建**。
+
+**最终 split manifest**：`materializer_revision` = `076923b603e961652593e40f5e3b8869315b81e9`；
+SHA-256 = `b1eab71aa92f01093fb396519eb85d44e89641bc0fbee646ba607548edced4ca`；最终 docs 提交后复跑物化命令两次均 `exit=0`，bytes/sha/`mtime_ns` 不变。
+**上游未变**：`singapore_2024.json` `d4e24d6f…`、`singapore_2024_half_hour.json`
+`e6484d6b…`、`half_hour.parquet` `dec76ea2…` 全部未变；raw 与
+`configs/frozen_refs/refs.json` 未动；**split 边界与行数未变**（10224/2928/4416）。
+
+**一次未复现的既有 flake（与本卡无关）**：`make check` 首跑有 1 次
+`test_m54g_raw_projection_deterministic_options.py` 失败；重跑 exit 0，
+该文件单独连跑 5 次 4 绿 1 红 —— 属 M5.4g corrector 跨进程确定性既有的偶发 flake，
+本卡未触碰 corrector/planning/求解路径，且该文件不在允许范围内，故只登记不修改。
+
+**M1.3e 尚未开始**：forecast provenance / contract-v8 仍未动；
+`forecast_ready=false`，正式 `ScenarioBundle` 与训练**仍 blocked**；
+四项缺口仍 unavailable。
+
+## 7G. M1.3d：连续 truth split 首轮冻结（已被 7H 取代）
 
 `docs/task_cards/M1.3d.md`（`49084b6` → `4d82317`）。**M1.3c 审计通过**，
 人工**批准月对齐方案 B**。本卡**只**冻结 truth 切分与 train-only 描述统计。
