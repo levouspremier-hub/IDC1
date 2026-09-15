@@ -23,6 +23,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 PRODUCTION_DEFAULT = 0.25
 MIN_BATCHES = 3
 
+_SHA256 = "a" * 64
+
 REQUIRED_ARTIFACTS = (
     "config.yaml", "metrics.parquet", "report.json", "figures",
     "manifest.json", "summary.json", "summary.parquet",
@@ -33,7 +35,7 @@ def _write_batch(
     root: pathlib.Path,
     run_id: str,
     *,
-    digests=("a", "a", "a", "a", "a", "a"),
+    digests=(_SHA256, _SHA256, _SHA256, _SHA256, _SHA256, _SHA256),
     steps: int = 8,
     passed: bool = True,
     evaluated: bool = True,
@@ -770,3 +772,200 @@ def test_batches_are_read_once_per_input(tmp_path, monkeypatch):
     probe.aggregate_release_batches(batches)
     monkeypatch.undo()
     assert len(reads) == len(set(reads)) == 3, f"report.json 被重复读取：{reads}"
+
+
+# --- 8. 第三次审核返修：严格外部类型校验 ------------------------------------
+
+SHA256_HEX = "a" * 64
+
+
+def _valid_digest(prefix: str = "a") -> str:
+    return (prefix * 64)[:64]
+
+
+def _set_obs(path: pathlib.Path, **fields) -> pathlib.Path:
+    return _mutate(path, "report.json", lambda obj: (
+        obj["release_gate"]["observations"][0].update(fields), obj)[1])
+
+
+@pytest.mark.parametrize("container", ([1, 2], {"a": 1}))
+def test_container_provenance_fails_without_raising(tmp_path, container):
+    """三处 provenance 是**相同**的容器时：必须 false，且**不得**抛 TypeError。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        for name in ("config.yaml", "report.json", "manifest.json"):
+            _set_provenance(d, name, corrector_time_limit_source=container)
+    aggregated = probe.aggregate_release_batches(batches)  # 不得抛
+    assert aggregated["passed"] is False
+    assert "provenance_not_scalar" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", ([1], {"a": 1}, True, None, float("nan"), float("inf")))
+@pytest.mark.parametrize("field", (
+    "production_corrector_time_limit_s",
+    "effective_corrector_time_limit_s",
+    "corrector_time_limit_source",
+))
+def test_non_scalar_provenance_fails_closed(tmp_path, field, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        for name in ("config.yaml", "report.json", "manifest.json"):
+            _set_provenance(d, name, **{field: bad})
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "provenance_not_scalar" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", (True, float("nan"), float("inf"), "0.25", 0.25 + 1e-9))
+def test_budget_must_be_a_finite_real_number(tmp_path, bad):
+    """bool 不得当作 0/1；NaN/Infinity/字符串/不等值都失败。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _set_obs(d, effective_corrector_time_limit_s=bad)
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "budget_not_production_default" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", (["production_default"], {"k": 1}, True, None, 1))
+def test_source_must_be_the_exact_string(tmp_path, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _set_obs(d, corrector_time_limit_source=bad)
+        for name in ("config.yaml", "report.json", "manifest.json"):
+            _set_provenance(d, name, corrector_time_limit_source=bad)
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+
+
+@pytest.mark.parametrize("bad", (None, 1, 1.5, ["a"], {"a": 1}, "", "not-hex",
+                                 "A" * 64, "a" * 63, "a" * 65))
+def test_digest_must_be_a_lowercase_sha256_hex_string(tmp_path, bad):
+    """digest 必须是非空的小写 64 位十六进制；`str()` 不得把错误类型洗白。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _set_obs(d, digests=[bad] * 6)
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "digest_malformed" in _failures(aggregated)
+
+
+def test_non_string_digests_cannot_be_laundered_into_evidence(tmp_path):
+    """三批全为 [1]*6 时不得因为 `str()` 后相等而放行。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _set_obs(d, digests=[1, 1, 1, 1, 1, 1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False, "非字符串 digest 不得被 str() 洗成证据"
+    assert "digest_malformed" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("field", ("processes", "steps"))
+@pytest.mark.parametrize("bad", (True, "6", 6.9, float("nan"), float("inf"), 0, -1))
+def test_counts_must_be_positive_non_bool_integers(tmp_path, field, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    for d in batches:
+        _set_obs(d, **{field: bad})
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "count_not_integer" in _failures(aggregated) or (
+        "observation_underpowered" in _failures(aggregated)
+    ), _failures(aggregated)
+
+
+@pytest.mark.parametrize("bad", (0.5, "0", True, float("nan"), float("inf"), -0.5))
+def test_summary_status_must_be_a_finite_integer(tmp_path, bad):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    pd.DataFrame({"status": [bad, bad]}).to_parquet(batches[0] / "summary.parquet")
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "summary_parquet_malformed_status" in _failures(aggregated)
+
+
+@pytest.mark.parametrize("load,reason", (
+    ({"mode": "bogus", "concurrency": 0, "program": None, "load_injected": False},
+     "load_signature_invalid"),
+    ({"mode": "none", "concurrency": 3, "program": None, "load_injected": False},
+     "load_signature_invalid"),
+    ({"mode": "none", "concurrency": 0, "program": None, "load_injected": True},
+     "load_signature_invalid"),
+    ({"mode": "none", "concurrency": -1, "program": None, "load_injected": False},
+     "load_signature_invalid"),
+    ({"mode": "hogs", "concurrency": 4, "program": "", "load_injected": True},
+     "load_signature_invalid"),
+    ({"mode": "hogs", "concurrency": 0, "program": "p", "load_injected": True},
+     "load_signature_invalid"),
+    ({"mode": "hogs", "concurrency": 4, "program": "p", "load_injected": False},
+     "load_signature_invalid"),
+    ({"mode": "hogs", "concurrency": True, "program": "p", "load_injected": True},
+     "load_signature_invalid"),
+))
+def test_load_semantics_are_validated(tmp_path, load, reason):
+    batches = [_write_batch(tmp_path, n, load=load) for n in ("a", "b", "c")]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False, f"{load} 不得通过"
+    assert reason in _failures(aggregated)
+
+
+def test_valid_hogs_load_passes(tmp_path):
+    load = {"mode": "hogs", "concurrency": 4, "program": "spin", "load_injected": True}
+    batches = [_write_batch(tmp_path, n, load=load) for n in ("a", "b", "c")]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is True, aggregated["failures"]
+
+
+@pytest.mark.parametrize("bad", (
+    {"platform": "", "machine": "arm64", "python": "3.12", "cpu_count": 10},
+    {"platform": "macOS", "machine": "", "python": "3.12", "cpu_count": 10},
+    {"platform": "macOS", "machine": "arm64", "python": "", "cpu_count": 10},
+    {"platform": "macOS", "machine": "arm64", "python": "3.12", "cpu_count": 0},
+    {"platform": "macOS", "machine": "arm64", "python": "3.12", "cpu_count": True},
+    {"platform": "macOS", "machine": "arm64", "python": "3.12", "cpu_count": 2.5},
+    {"platform": 1, "machine": "arm64", "python": "3.12", "cpu_count": 10},
+))
+def test_machine_fields_are_validated(tmp_path, bad):
+    batches = [_write_batch(tmp_path, n, machine=bad) for n in ("a", "b", "c")]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False, f"{bad} 不得通过"
+    assert "machine_signature_invalid" in _failures(aggregated)
+
+
+def test_run_id_must_match_the_input_directory_name(tmp_path):
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _mutate(batches[0], "manifest.json", lambda obj: (
+        obj.__setitem__("run_id", "a-completely-different-name"), obj)[1])
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is False
+    assert "manifest_run_id_mismatch" in _failures(aggregated)
+
+
+def test_strict_validation_never_raises(tmp_path):
+    """每一种变体都必须返回 batch/reason/detail，而不是抛异常。"""
+    variants = [
+        ("container provenance", lambda d: [
+            _set_provenance(d, n, corrector_time_limit_source=["x"])
+            for n in ("config.yaml", "report.json", "manifest.json")]),
+        ("non-string digest", lambda d: _set_obs(d, digests=[1] * 6)),
+        ("float processes", lambda d: _set_obs(d, processes=6.9)),
+        ("bool source", lambda d: _set_obs(d, corrector_time_limit_source=True)),
+        ("nan budget", lambda d: _set_obs(d, effective_corrector_time_limit_s=float("nan"))),
+    ]
+    for label, mutate in variants:
+        batches = [_write_batch(tmp_path / label.replace(" ", "_"), n)
+                   for n in ("a", "b", "c")]
+        mutate(batches[0])
+        aggregated = probe.aggregate_release_batches(batches)  # 不得抛
+        assert aggregated["passed"] is False, label
+        assert aggregated["failures"], label
+        for failure in aggregated["failures"]:
+            assert set(failure) >= {"batch", "reason", "detail"}, (label, failure)
+
+
+def test_strict_validation_does_not_change_valid_artifacts(tmp_path):
+    """合法产物的语义不得变化：仍然通过，且摘要字段保持标量。"""
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    aggregated = probe.aggregate_release_batches(batches)
+    assert aggregated["passed"] is True
+    assert aggregated["aggregate_distinct"] == 1
+    assert aggregated["corrector_time_limit_sources"] == ["production_default"]
+    assert aggregated["effective_corrector_time_limit_s"] == [PRODUCTION_DEFAULT]
