@@ -6,7 +6,7 @@
 > （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b **第二次返修**实现终点 `7007f36`
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`；M1.3b **已通过**，M1.3c 只读接线审计已完成（等待人工确认）
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
@@ -219,7 +219,76 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7E. M1.3b 第二次审核返修（等待人工复审）
+## 7F. M1.3c：正式 ScenarioBundle 接线前置审计（只读，**等待人工确认**）
+
+`docs/task_cards/M1.3c.md`。**M1.3b 第二次返修已正式通过**；本卡是**只读**审计 ——
+不改任何代码/数据/契约/manifest，不创建 `train.json`，不开始训练。
+
+### 7F.1 最重要的发现：正式链会把「未来真值」当作 forecast
+
+- `scenario/scenario.py:65-66` 的 `_window()` 把传入 `true` 数组的**前 `forecast_cutoff` 个
+  元素**直接当作 `*_forecast`；函数**无法**保证这些值来自「时刻 t 可获得的信息」。
+- `planning/snapshot_adapter.py:128-134` 的「可见预测」**就是**
+  `env.price_t/pv_t/wt_t/T_amb/carbon_factor_t` 在 `[t, t+cutoff)` 的**真值**；
+  其中 `load_forecast=[0.0]*cutoff`（129 行）是**全零数组**静默冒充系统负荷预测。
+- 现有 leakage 测试**只**验证 cutoff **之外**不泄漏
+  （`tests/test_m13a_canonical_bundle.py:109-119`）；而
+  `test_visible_truth_mutation_changes_bundle`（122-128 行）**断言 cutoff 内的真值进入
+  forecast 会改变 bundle** —— 即**把该缺陷固化成了正确行为**。
+- **结论：在 M1.3e 重写该测试之前，不得开始正式训练。**
+
+### 7F.2 契约判断：`ScenarioBundle` 不足以承载 provenance
+
+`contracts/models.py:25-56` 缺 `generated_at`、forecast origin、model/version、seed、
+visible window 语义，以及 truth/forecast/oracle-debug 分类（只有 `synthetic: bool`）；
+`source_hashes` 是无 schema 的自由 dict，无法逐序列区分
+external/modeled/persistence/zero-fill。`contracts/validators.py:72-84` 的
+`validate_scenario()` **只**校验长度与单位，**完全不校验 provenance**。
+**推荐 bump 到 `contract-v8`**（完整影响面见卡片 §7.1：单一版本源、≈50 个引用文件、
+v7 buffer/checkpoint 全部失效 —— 属预期代价）。卡内另列了更窄的替代方案供人工选择。
+
+### 7F.3 连续切分：推荐方案 B（月对齐）
+
+| 方案 | train | val | test |
+|---|---|---|---|
+| A 严格 60/20/20 | 01-01→08-07（220 天，60.1%） | 08-08→10-13（67 天，18.3%） | 10-14→12-31（79 天，21.6%） |
+| **B 月对齐（推荐）** | **01-01→07-31（213 天，58.2%）** | **08-01→09-30（61 天，16.7%）** | **10-01→12-31（92 天，25.1%）** |
+| C 长训练 | 01-01→09-11（255 天，69.7%） | 09-12→10-26（45 天，12.3%） | 10-27→12-31（66 天，18.0%） |
+
+三者合计均为 366 天 / 17,568 行；闰日 Feb 29 均落在 train；test 分别为 79/92/66 天，
+均 ≥ 30 天。**共同约束**：不随机打散；episode 不得跨 split 边界（`t ≤ split_end − H`）；
+边界丢弃 `H + C` 的 **purge gap**；refs **只在 train** 冻结。
+推荐 B 的理由：切分点落在自然月边界、可肉眼审计、闰日无歧义、三段季节不重叠；
+代价是 58.2/16.7/25.1 偏离计划书字面的 60/20/20（该值为**指导值**）。
+**本卡不创建 split manifest，需人工确认后再由 M1.3d 落地。**
+
+### 7F.4 forecast 口径与四项缺口（**全部仍需人工决定**）
+
+- **forecast 三类严格区分**：truth（M1.3b canonical 历史事实，只作执行真值与评估参照）、
+  forecast（带 `generated_at`/窗口/模型 revision/seed）、oracle（**仅 debug**）。
+  方案 A（外部真实预测产品）**当前不可得**；推荐先以 **B（仅用 train 拟合/校准的
+  persistence / seasonal-naive）** 起步。
+- **四项缺口目前全部 unavailable**：`local_pv_kw`、`wind_generation_kw`、
+  `carbon_intensity`、`arrival`。硬约束：national IGS **不得**改名 IDC local PV；
+  ERA5 wind speed **不得**当作风电发电量；carbon **不得**用未注明来源的常数/默认日曲线；
+  arrival **不得**用已抽样出的未来真实任务序列生成正式 forecast；
+  **全零数组不得**作为缺失兼容方案静默进入正式链；不满足时**保持 blocked**。
+- 链上现存的默认值构造（`data_io/data_loader.py:71` 默认 PV 曲线、
+  `snapshot_adapter.py:129` 全零负荷、`idc_model/task_forecast.py` 的 `perfect` oracle 模式）
+  在正式模式下必须禁用。
+
+### 7F.5 后续实现卡（最小、可回滚）
+
+**M1.3d**（split manifest + train 段 refs + 边界校验，需先人工确认方案 B）→
+**M1.3e**（forecast artifact/provenance 契约 + **重写** leakage 测试）→
+**M1.3f**（PV/wind/carbon/arrival 的人工批准口径或数据接入）→
+**M1.3g**（正式 `ScenarioBundle` + env/train 接线，并把 `train.py` 的「需要 M1.2 数据」
+错误信息改为 M1.3 readiness）。**不新增 M5.5，不提前进入 M6。**
+
+**正式 `ScenarioBundle`、训练与 M6 均未开始**；`data/manifest/train.json` **仍不存在**；
+`make train` 仍非零失败。**下一步必须等待人工确认 split 与 forecast / 缺失字段口径。**
+
+## 7E. M1.3b 第二次审核返修（**已通过**）
 
 **第二次人工审核仍未通过**：上一轮的 revision 语义、路径可移植、正常幂等、
 已有 manifest 的失败保护与测试标记整改**均已确认通过**；只剩**首冻失败原子性**一个阻断缺陷 ——
