@@ -28,6 +28,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -166,6 +167,51 @@ def _require_git_sha40(value: Any, *, field: str) -> str:
           and all(c in "0123456789abcdef" for c in value))
     if not ok:
         raise SplitError(f"{field} 必须是 40 位小写十六进制 Git 提交，实际 {value!r}")
+    return value
+
+
+def _require_str_list(value: Any, *, field: str, expected: tuple[str, ...]) -> list[str]:
+    """必须是**精确的 `list[str]`**：类型为 list、元素全为 str、顺序与内容严格等于期望值。
+
+    刻意**不**用 `list(value)`：对 int/bool/float 等不可迭代标量，`list()` 会抛
+    `TypeError` 而不是干净 fail closed（M1.3d-R2 §12.2 问题 1）。
+    """
+    if not isinstance(value, list):
+        raise SplitError(f"{field} 必须是 list，实际 {type(value).__name__}")
+    if any(not isinstance(item, str) for item in value):
+        raise SplitError(f"{field} 的元素必须全部是字符串")
+    if value != list(expected):
+        raise SplitError(f"{field} 必须严格等于 {list(expected)}，实际 {value}")
+    return value
+
+
+def _require_canonical_utc(value: Any, *, field: str) -> str:
+    """必须是**规范 UTC** 的 ISO-8601（带 `+00:00`，无微秒）。
+
+    非规范写法（无时区、只有日期、非法文本、非 UTC 偏移）一律拒绝，
+    以保证冻结时刻可跨机器逐字符比较。
+    """
+    if not isinstance(value, str):
+        raise SplitError(f"{field} 必须是字符串，实际 {type(value).__name__}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise SplitError(f"{field} 不是合法 ISO-8601：{value!r}") from error
+    if parsed.tzinfo is None:
+        raise SplitError(f"{field} 必须带显式时区偏移：{value!r}")
+    normalized = parsed.astimezone(UTC).replace(microsecond=0).isoformat()
+    if value != normalized:
+        raise SplitError(
+            f"{field} 必须是规范 UTC（例如 {normalized}），实际 {value!r}"
+        )
+    if not normalized.endswith("+00:00"):
+        raise SplitError(f"{field} 必须是 UTC（+00:00），实际 {value!r}")
+    return value
+
+
+def _require_str_scalar(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SplitError(f"{field} 必须是非空字符串，实际 {value!r}")
     return value
 
 
@@ -308,6 +354,7 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
         raise SplitError(f"split manifest 不可读：{error}") from error
     manifest = _require_dict(manifest, field="split manifest")
 
+    _require_canonical_utc(manifest.get("frozen_at_utc"), field="frozen_at_utc")
     if manifest.get("schema") != SPLIT_SCHEMA:
         raise SplitError(
             f"split manifest schema 必须是 {SPLIT_SCHEMA!r}，实际 {manifest.get('schema')!r}"
@@ -369,11 +416,18 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
             f"{list(UNAVAILABLE_COLUMNS)}，实际 {sorted(unavailable)}"
         )
     for column, entry in unavailable.items():
-        text = entry if isinstance(entry, str) else json.dumps(entry, ensure_ascii=False)
-        lowered = text.lower()
+        # 条目必须是**字符串**：容器（list/dict）即使文本里含 "unavailable" 也必须拒绝
+        if not isinstance(entry, str):
+            raise SplitError(
+                f"{column} 必须是标注为 {EXPECTED_UNAVAILABLE_STATUS!r} 的**字符串**，"
+                f"实际 {type(entry).__name__}"
+            )
+        if not entry:
+            raise SplitError(f"{column} 不得为空字符串")
+        lowered = entry.lower()
         if EXPECTED_UNAVAILABLE_STATUS not in lowered:
             raise SplitError(f"{column} 必须标注为 {EXPECTED_UNAVAILABLE_STATUS!r}")
-        # 注意：先剔除 "unavailable" 本身，否则 "available" 会命中它的子串。
+        # 先剔除 "unavailable" 本身，否则 "available" 会命中它的子串
         remainder = lowered.replace(EXPECTED_UNAVAILABLE_STATUS, "")
         hit = [m for m in _FORBIDDEN_AVAILABLE_MARKERS if m in remainder]
         if hit:
@@ -495,10 +549,8 @@ def _verify_train_statistics(frame: pd.DataFrame, split_manifest: dict) -> None:
                 f"train_only_statistics_source.{field} 与 train 边界不符："
                 f"{source.get(field)!r} != {expected!r}"
             )
-    if list(source.get("columns") or []) != list(STATISTIC_COLUMNS):
-        raise SplitError(
-            f"train_only_statistics_source.columns 必须是 {list(STATISTIC_COLUMNS)}"
-        )
+    _require_str_list(source.get("columns"), field="train_only_statistics_source.columns",
+                      expected=STATISTIC_COLUMNS)
     # 统计来源必须**指向真实**的 canonical parquet 与实现 revision，而不是只格式合法
     if source.get("canonical_parquet_sha256") != split_manifest.get(
         "canonical_parquet_sha256"

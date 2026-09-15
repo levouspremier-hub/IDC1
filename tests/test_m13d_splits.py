@@ -851,7 +851,6 @@ def test_statistics_source_columns_scalar_types_are_rejected_cleanly(tmp_path, l
     ("extra", [*STATISTIC_COLUMNS, "extra"]),
     ("non_string_elements", [1, 2, 3, 4, 5, 6]),
     ("mixed_elements", [STATISTIC_COLUMNS[0], 2, 3, 4, 5, 6]),
-    ("tuple_instead_of_list", tuple(STATISTIC_COLUMNS)),
 ])
 def test_statistics_source_columns_must_be_exactly_the_frozen_list(tmp_path, label, value):
     """`columns` 必须是精确 `list[str]`，顺序与内容严格等于 `STATISTIC_COLUMNS`。"""
@@ -859,6 +858,21 @@ def test_statistics_source_columns_must_be_exactly_the_frozen_list(tmp_path, lab
     manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
     _tampered_manifest(manifest_path, _source_tamper(value))
     _reject(fixture, manifest_path, f"columns={label}")
+
+
+@pytest.mark.parametrize("value", [
+    tuple(STATISTIC_COLUMNS), "price_sgd_per_kwh", 5, True, 1.5, None, {"a": 1},
+])
+def test_str_list_validator_rejects_anything_but_a_plain_string_list(value):
+    """直接测校验器：`str`、标量、`dict`、**`tuple`** 都不是合法的 `list[str]`。
+
+    （`tuple` 无法经由 JSON manifest 送达 —— `json.dumps` 会把它变成 list ——
+    故此处直接对校验器断言，而不是伪造一个到不了的输入。）
+    """
+    module = importlib.import_module(SPLIT_MODULE)
+    with pytest.raises(ValueError) as excinfo:
+        module._require_str_list(value, field="columns", expected=STATISTIC_COLUMNS)
+    assert not isinstance(excinfo.value, LEAKY_EXCEPTIONS), type(excinfo.value).__name__
 
 
 def test_statistics_source_columns_accepts_the_exact_frozen_list(tmp_path):
