@@ -2,11 +2,11 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> ⚠️ **当前工作分支**：`p4-safeppo-m51a-rollout-contract-m12-integration`（M1.2e 整合分支，
-> 从 `04296db` 起，M1.2 数据链**已整合**，等待人工审查是否合回）。
+> ⚠️ **当前工作分支**：`p4-safeppo-m51a-rollout-contract-m12-integration`
+> （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.2e 实现终点 `3e9491a`
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b 实现终点 `485491d`
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
@@ -219,7 +219,44 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7B. M1.2e：冻结数据链**已整合**（独立分支，等待人工审查是否合回）
+## 7C. M1.3b：Singapore-2024 半小时 canonical reader（等待人工审查）
+
+`docs/task_cards/M1.3b.md`（`ac8ba3a` → `485491d`）。**M1.2e 已正式通过**，
+本分支即后续累计工程链（**不**反向合并到旧 `p4-safeppo-m51a-rollout-contract`）。
+
+- **只读 canonical reader**：`scenario/singapore_2024.py`
+  （`load_singapore_2024_half_hour(raw_dir, source_manifest_path)`）。
+- **物化**：`scripts/materialize_singapore_2024.py`。
+  Parquet 落 `data/processed/singapore_2024/half_hour.parquet`（**gitignore，不入库**）；
+  canonical manifest 入库：`data/manifest/singapore_2024_half_hour.json`。
+- **实测**：**17,568 行**，`2024-01-01T00:00+08:00` → `2024-12-31T23:30+08:00`，
+  `frequency=30min`，时区 `Asia/Singapore`（tz-aware），output parquet SHA-256
+  `dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd`。
+- **天气映射规则（已写入 manifest，非仅藏在实现里）**：
+  `latest source timestamp not later than target timestamp` —— 目标 `h:00` 用天气 `h:00`
+  （age=0），目标 `h:30` 仍用天气 `h:00`（age=30）；逐行 `weather_source_timestamp <= timestamp`。
+  禁止下一小时填充 / 线性插值 / centered resampling / backfill。
+- **⚠️ 人工授权的契约修正**：卡原要求 IGS **非负**，但冻结的真实数据有
+  **7,657/17,568（43.6%）为负**（最小 -0.124 MWh）—— 设施净耗电时段的净注入本就为负。
+  经**人工批准**改为「**有限**（允许负值）」，**逐值原值保留、未 clip、未取绝对值**；
+  manifest 的 `observed_value_ranges` 记录 min/max/负值行数。
+  `system_load_mw` / `wind_speed_10m_mps` / `ghi_w_per_m2` **仍保持非负**（实测均非负）。
+- **unavailable（绝不伪造）**：`local_pv_kw`、`wind_generation_kw`、`carbon_intensity`、
+  `arrival` 逐项登记为 `unavailable`；national IGS ≠ IDC 本地 PV、ERA5 风速 ≠ 本地
+  风电实测、无冻结碳强度、arrival 未入口径。
+- **未改动**：raw 四文件的 SHA/字节/mtime 与 `singapore_2024.json` **字节完全不变**；
+  未联网；未生成新时间戳。幂等重跑 OK；篡改 canonical manifest 后重跑**拒绝覆盖**（exit 1）。
+- **`scenario/scenario.py`** 只改过时的阻塞措辞：错误信息现在指向
+  **M1.3 正式数据集/split manifest 尚未完成**，不再误称「M1.2 阻塞」。
+
+**M1.3b 只完成 canonical 半小时事实表**：仍**没有** `ScenarioBundle` 接线、
+连续 train/validation/test 切分、forecast 可见窗口与泄漏门禁 —— 那些属 **M1.3c**。
+`data/manifest/train.json` **仍不存在**，正式 `make train` 仍非零失败（原因已正确指向 M1.3），
+**未**产生 checkpoint。**M6 尚未开始。**
+
+**下一步：M1.3c**（正式 `ScenarioBundle`、连续切分、forecast 可见窗口、泄漏门禁）。
+
+## 7B. M1.2e：冻结数据链**已整合**（独立分支，**已通过人工审查**）
 
 `docs/task_cards/M1.2e.md`。已获人工批准执行**方案 A**。
 
