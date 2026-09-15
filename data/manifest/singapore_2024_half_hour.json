@@ -1,0 +1,140 @@
+{
+  "code_revision": "d9df46ae85061bef6aef768a9bba67faaaa4f2e5",
+  "columns": {
+    "ghi_w_per_m2": {
+      "semantic": "ERA5 前一小时平均 GHI；M1.2 未重采样",
+      "unit": "W/m2"
+    },
+    "national_igs_mwh_per_half_hour": {
+      "constraint": "finite; negative values preserved as-is (net injection)",
+      "semantic": "national intermittent generation（EMC metered generation, FACILITY TYPE=IGS）的**净注入**；**不是** IDC 本地 PV，也**不是**太阳能专属。约束是**有限**（允许负值）：设施净耗电的半小时净注入本就为负，这是真实计量语义，**不得** clip 或取绝对值",
+      "unit": "MWh per half-hour settlement period"
+    },
+    "price_sgd_per_kwh": {
+      "semantic": "最终批发电价 USEP（SGD/MWh × 0.001）；允许为负，只要求有限",
+      "unit": "SGD/kWh"
+    },
+    "system_load_mw": {
+      "semantic": "新加坡实际系统负荷；唯一来源是 SASEA raw_SGP_demand.csv",
+      "unit": "MW"
+    },
+    "temperature_deg_c": {
+      "semantic": "ERA5 2m 气温（国家级网格再分析）",
+      "unit": "degC"
+    },
+    "timestamp": {
+      "semantic": "半小时结算点，严格递增且无重复",
+      "unit": "tz-aware Asia/Singapore"
+    },
+    "weather_age_minutes": {
+      "semantic": "目标时刻 − 天气来源时刻；只能为 0 或 30",
+      "unit": "minutes"
+    },
+    "weather_source_timestamp": {
+      "semantic": "该行天气字段的**实际来源**小时时刻",
+      "unit": "tz-aware Asia/Singapore"
+    },
+    "wind_speed_10m_mps": {
+      "semantic": "ERA5 10m 风速；**不是**本地风电实测，也**不是**发电量",
+      "unit": "m/s"
+    }
+  },
+  "end": "2024-12-31T23:30:00+08:00",
+  "frequency": "30min",
+  "frozen_at_utc": "2026-09-15T00:00:00+00:00",
+  "missing_data_policy": "reject; no imputation",
+  "observed_value_ranges": {
+    "ghi_w_per_m2": {
+      "max": 960.0,
+      "min": 0.0,
+      "negative_rows": 0
+    },
+    "national_igs_mwh_per_half_hour": {
+      "max": 289.645,
+      "min": -0.124,
+      "negative_rows": 7657
+    },
+    "price_sgd_per_kwh": {
+      "max": 4.5,
+      "min": -0.02017,
+      "negative_rows": 3
+    },
+    "system_load_mw": {
+      "max": 8044.7894954427,
+      "min": 5162.536583050944,
+      "negative_rows": 0
+    },
+    "temperature_deg_c": {
+      "max": 33.2,
+      "min": 23.0,
+      "negative_rows": 0
+    },
+    "weather_age_minutes": {
+      "max": 30.0,
+      "min": 0.0,
+      "negative_rows": 0
+    },
+    "wind_speed_10m_mps": {
+      "max": 6.09,
+      "min": 0.0,
+      "negative_rows": 0
+    }
+  },
+  "output_parquet_sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+  "raw_files": {
+    "emc_metered_generation": {
+      "bytes": 891699,
+      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/emc_metered_generation_2024.zip",
+      "sha256": "4ff06ea9044d17bb24c69515cebd2c518deb0c96e169463b98a028e521ae83fd"
+    },
+    "emc_usep": {
+      "bytes": 354185,
+      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/emc_usep_2024.zip",
+      "sha256": "3e86e162526e2c3f499571c607c9b4d414a1648ea3e96fae65461bfaaefd306a"
+    },
+    "open_meteo_weather": {
+      "bytes": 280497,
+      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/open_meteo_era5_2024.csv",
+      "sha256": "9732f1b2e740da1917a191191706026c1b9a2c6b99e1eee1023642425cf1ea7d"
+    },
+    "sasea_demand": {
+      "bytes": 15176981,
+      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/sasea_demand_2024.zip",
+      "sha256": "1264e192171c36fb86a580974c5b0ae64b41917ab7c2330e369f1791532c3e89"
+    }
+  },
+  "row_count": 17568,
+  "schema": "m1.3b-singapore-2024-half-hour-v1",
+  "source_manifest_path": "/Users/levous/Desktop/IDC/data/manifest/singapore_2024.json",
+  "source_manifest_sha256": "d4e24d6f4e00408b8acf8e7ed7bd570db5db0eec6d8762284e97bbafdad2a7a9",
+  "start": "2024-01-01T00:00:00+08:00",
+  "timezone": "Asia/Singapore",
+  "unavailable_not_materialized": {
+    "arrival": {
+      "reason": "unavailable: arrival（任务到达）尚未进入 M1.3 数据口径",
+      "status": "unavailable"
+    },
+    "carbon_intensity": {
+      "reason": "unavailable: 尚无冻结的**半小时碳强度**；不得由默认曲线或常数伪造",
+      "status": "unavailable"
+    },
+    "local_pv_kw": {
+      "reason": "unavailable: M1.2 未冻结 IDC 本地 PV 实测；national IGS **不等于** IDC 本地 PV，也**不是** solar-only",
+      "status": "unavailable"
+    },
+    "wind_generation_kw": {
+      "reason": "unavailable: M1.2 未冻结风电发电量；ERA5 wind_speed_10m **不等于**本地风电实测，也**不等于**发电量",
+      "status": "unavailable"
+    }
+  },
+  "weather_mapping_policy": {
+    "allowed_weather_age_minutes": [
+      0,
+      30
+    ],
+    "description": "目标 h:00 使用天气 h:00（age=0）；目标 h:30 仍使用天气 h:00（age=30）。逐行保证 weather_source_timestamp <= timestamp。禁止用下一小时天气填充、禁止线性插值、禁止 centered resampling、禁止 backfill。",
+    "granularity_mapping": "hourly ERA5 -> half-hourly canonical（最近不晚于）",
+    "rule": "latest source timestamp not later than target timestamp"
+  },
+  "year": 2024
+}
