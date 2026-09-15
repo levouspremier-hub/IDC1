@@ -12,6 +12,8 @@ import io
 import json
 import math
 import pathlib
+import subprocess
+import tempfile
 import zipfile
 from datetime import datetime, timedelta
 
@@ -204,6 +206,23 @@ def write_raw_fixture(
 
 LOADER = "scenario.singapore_2024"
 
+# 全年 fixture 只构造/读取一次：17,568 行 × 4 源，重复构造会让门禁变慢。
+_CACHED: dict = {}
+
+
+def cached_valid_fixture() -> dict:
+    if "fixture" not in _CACHED:
+        _CACHED["fixture"] = write_raw_fixture(
+            pathlib.Path(tempfile.mkdtemp(prefix="m13b_valid_"))
+        )
+    return _CACHED["fixture"]
+
+
+def cached_valid_frame():
+    if "frame" not in _CACHED:
+        _CACHED["frame"] = _load(cached_valid_fixture())
+    return _CACHED["frame"]
+
 
 def _load(fixture, **kwargs):
     from scenario.singapore_2024 import load_singapore_2024_half_hour
@@ -222,16 +241,14 @@ def test_module_is_importable():
     importlib.import_module(LOADER)
 
 
-@pytest.mark.slow
 def test_full_leap_year_produces_17568_rows(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     assert len(frame) == EXPECTED_ROWS
     assert tuple(frame.columns) == CANONICAL_COLUMNS
 
 
-@pytest.mark.slow
 def test_timeline_is_strictly_increasing_and_complete(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     stamps = frame["timestamp"]
     assert stamps.is_monotonic_increasing
     assert not stamps.duplicated().any()
@@ -240,9 +257,8 @@ def test_timeline_is_strictly_increasing_and_complete(tmp_path):
     assert len(stamps) == EXPECTED_ROWS
 
 
-@pytest.mark.slow
 def test_timestamps_are_timezone_aware(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     stamps = frame["timestamp"]
     assert str(stamps.dt.tz) == TIMEZONE, "不得用 naive timestamp 冒充带时区时间"
     assert frame["weather_source_timestamp"].dt.tz is not None
@@ -250,7 +266,6 @@ def test_timestamps_are_timezone_aware(tmp_path):
 
 # --- 2. 单位与来源 ----------------------------------------------------------
 
-@pytest.mark.slow
 def test_usep_is_converted_exactly_to_sgd_per_kwh(tmp_path):
     frame = _load(write_raw_fixture(tmp_path, price_scale=1.0))
     assert frame["price_sgd_per_kwh"].iloc[0] == pytest.approx(0.1, abs=0)
@@ -264,17 +279,15 @@ def test_negative_price_is_allowed_but_must_be_finite():
     assert usep_sgd_per_mwh_to_reader_unit(100.0) == pytest.approx(0.1)
 
 
-@pytest.mark.slow
 def test_system_load_comes_from_sasea_not_from_the_usep_demand_column(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     # fixture 的 USEP DEMAND 列写死 9999；实际负荷必须是 SASEA 的 6000
     assert (frame["system_load_mw"] == 6000.0).all()
     assert not (frame["system_load_mw"] == 9999.0).any()
 
 
-@pytest.mark.slow
 def test_igs_keeps_national_semantics_and_is_not_local_pv(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     assert (frame["national_igs_mwh_per_half_hour"] == 250.0).all()
     lowered = " ".join(frame.columns).lower()
     assert "local_pv" not in lowered and "solar" not in lowered
@@ -283,9 +296,8 @@ def test_igs_keeps_national_semantics_and_is_not_local_pv(tmp_path):
 
 # --- 3. 天气映射规则 --------------------------------------------------------
 
-@pytest.mark.slow
 def test_weather_uses_the_latest_source_not_later_than_the_target(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     ages = frame["weather_age_minutes"]
     assert set(ages.unique()) <= {0, 30}
     at_h00 = frame[frame["timestamp"].dt.minute == 0]
@@ -295,13 +307,11 @@ def test_weather_uses_the_latest_source_not_later_than_the_target(tmp_path):
     assert (at_h30["weather_source_timestamp"].dt.minute == 0).all()
 
 
-@pytest.mark.slow
 def test_weather_source_is_never_later_than_the_target(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     assert (frame["weather_source_timestamp"] <= frame["timestamp"]).all()
 
 
-@pytest.mark.slow
 def test_future_weather_source_fails_closed(tmp_path):
     """天气来源晚于目标时间 -> 必须失败，不得用下一小时填充。"""
     fixture = write_raw_fixture(tmp_path, weather_shift_minutes=30)
@@ -309,7 +319,6 @@ def test_future_weather_source_fails_closed(tmp_path):
         _load(fixture)
 
 
-@pytest.mark.slow
 def test_weather_not_shifted_cannot_silently_backfill(tmp_path):
     """规则必须是「不晚于目标」；用 h:30 的天气填 h:00 属 backfill，必须失败。"""
     fixture = write_raw_fixture(tmp_path, weather_shift_minutes=-30)
@@ -319,31 +328,26 @@ def test_weather_not_shifted_cannot_silently_backfill(tmp_path):
 
 # --- 4. 缺失与非法值 fail closed -------------------------------------------
 
-@pytest.mark.slow
 def test_missing_half_hour_fails_without_imputation(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, drop_half_hour=True))
 
 
-@pytest.mark.slow
 def test_duplicate_timestamp_fails(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, duplicate_half_hour=True))
 
 
-@pytest.mark.slow
 def test_nan_price_fails(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, nan_price=True))
 
 
-@pytest.mark.slow
 def test_infinite_load_fails(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, inf_load=True))
 
 
-@pytest.mark.slow
 def test_negative_igs_is_preserved_not_clipped(tmp_path):
     """净注入为负是真实计量语义：必须**原值保留**，不得 clip 到 0 或取绝对值。
 
@@ -366,19 +370,16 @@ def test_infinite_igs_fails():
         _finite(float("nan"), field="NET INJECTION (MWh)")
 
 
-@pytest.mark.slow
 def test_wrong_year_fails(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, weather_year=2023))
 
 
-@pytest.mark.slow
 def test_wrong_timezone_fails(tmp_path):
     with pytest.raises((ValueError, FileNotFoundError)):
         _load(write_raw_fixture(tmp_path, weather_timezone="UTC"))
 
 
-@pytest.mark.slow
 def test_raw_hash_mismatch_fails(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     (fixture["files"]["emc_usep"]).write_bytes(b"tampered")
@@ -386,7 +387,6 @@ def test_raw_hash_mismatch_fails(tmp_path):
         _load(fixture)
 
 
-@pytest.mark.slow
 def test_raw_byte_count_mismatch_fails(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     manifest = json.loads(fixture["source_manifest"].read_text(encoding="utf-8"))
@@ -397,7 +397,6 @@ def test_raw_byte_count_mismatch_fails(tmp_path):
         _load(fixture)
 
 
-@pytest.mark.slow
 def test_unsupported_schema_fails(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     manifest = json.loads(fixture["source_manifest"].read_text(encoding="utf-8"))
@@ -407,7 +406,6 @@ def test_unsupported_schema_fails(tmp_path):
         _load(fixture)
 
 
-@pytest.mark.slow
 def test_source_manifest_is_byte_identical_before_and_after(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     before = fixture["source_manifest"].read_bytes()
@@ -423,9 +421,8 @@ def test_unavailable_columns_are_declared_not_invented():
     assert set(declared) == set(UNAVAILABLE_COLUMNS)
 
 
-@pytest.mark.slow
 def test_canonical_table_does_not_invent_unavailable_columns(tmp_path):
-    frame = _load(write_raw_fixture(tmp_path))
+    frame = cached_valid_frame()
     for column in UNAVAILABLE_COLUMNS:
         assert column not in frame.columns, f"不得伪造 {column}"
 
@@ -467,7 +464,6 @@ def _materialize(fixture, out_root, *, frozen_at="2026-09-15T00:00:00+00:00"):
     )
 
 
-@pytest.mark.slow
 def test_canonical_manifest_records_inputs_outputs_and_mapping(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     out = tmp_path / "out"
@@ -516,7 +512,6 @@ def test_canonical_manifest_records_inputs_outputs_and_mapping(tmp_path):
         assert manifest["columns"][column]["semantic"]
 
 
-@pytest.mark.slow
 def test_canonical_manifest_declares_the_unavailable_fields(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     result = _materialize(fixture, tmp_path / "out")
@@ -533,7 +528,6 @@ def test_canonical_manifest_declares_the_unavailable_fields(tmp_path):
     assert "carbon" in blob
 
 
-@pytest.mark.slow
 def test_existing_different_canonical_manifest_is_not_silently_overwritten(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     out = tmp_path / "out"
@@ -544,7 +538,6 @@ def test_existing_different_canonical_manifest_is_not_silently_overwritten(tmp_p
         _materialize(fixture, out)
 
 
-@pytest.mark.slow
 def test_idempotent_rematerialization_with_the_same_freeze_time(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     out = tmp_path / "out"
@@ -573,3 +566,247 @@ def test_build_scenario_still_fails_closed_without_an_m13_manifest(tmp_path):
     message = str(excinfo.value)
     assert "M1.3" in message
     assert "M1.2 阻塞" not in message
+
+
+# --- 9. 返修：冻结可复现性、失败原子性、路径可移植性 -------------------------
+
+REPO_ROOT_STR = str(REPO_ROOT)
+MATERIALIZER = "scripts.materialize_singapore_2024"
+MATERIALIZER_SOURCES = (
+    "scenario/singapore_2024.py",
+    "scripts/materialize_singapore_2024.py",
+)
+
+
+def _snap(path: pathlib.Path) -> tuple:
+    st = path.stat()
+    return (st.st_size, hashlib.sha256(path.read_bytes()).hexdigest(), st.st_mtime_ns)
+
+
+def test_materializer_revision_is_git_verified():
+    """`materializer_revision` 必须由 Git 解析，指向最后修改生成实现的提交。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    revision = module.resolve_materializer_revision()
+    assert isinstance(revision, str) and len(revision) == 40, revision
+    assert all(c in "0123456789abcdef" for c in revision)
+
+    expected = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", *MATERIALIZER_SOURCES],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert revision == expected
+
+
+def test_materializer_revision_ignores_docs_only_commits():
+    """docs-only 提交不得改变 `materializer_revision`（否则冻结数据会被误判失效）。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    revision = module.resolve_materializer_revision()
+
+    # 该 revision 之后的提交**不得**触及任何生成实现文件
+    touched = subprocess.run(
+        ["git", "log", "--format=%H", "--name-only", f"{revision}..HEAD"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+    for source in MATERIALIZER_SOURCES:
+        assert source not in touched, f"{revision} 之后又改动了 {source}"
+
+
+def test_materializer_revision_is_not_a_caller_supplied_value(tmp_path):
+    """不得接受调用者传入的未经验证 revision 冒充来源。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(
+        raw_dir=fixture["raw_dir"],
+        source_manifest_path=fixture["source_manifest"],
+        output_dir=out,
+        manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    manifest = json.loads((out / "canon.json").read_text(encoding="utf-8"))
+    assert manifest["materializer_revision"] == module.resolve_materializer_revision()
+    assert "code_revision" not in manifest, "不得再使用随 HEAD 漂移的 code_revision"
+
+
+def test_manifest_records_repo_relative_logical_paths(tmp_path):
+    """入库 manifest 只记仓库相对逻辑路径，不得出现绝对/home 路径。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    text = (out / "canon.json").read_text(encoding="utf-8")
+    assert REPO_ROOT_STR not in text
+    assert "/Users/" not in text
+    assert str(pathlib.Path.home()) not in text
+    manifest = json.loads(text)
+    for entry in manifest["raw_files"].values():
+        assert not entry["path"].startswith("/"), entry["path"]
+        assert ".." not in entry["path"], entry["path"]
+    assert not manifest["source_manifest_path"].startswith("/")
+
+
+def test_logical_paths_are_stable_across_different_roots(tmp_path):
+    """不同临时 root 下生成的逻辑 provenance 必须一致（可移植）。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    first = write_raw_fixture(tmp_path / "root_a")
+    second = write_raw_fixture(tmp_path / "root_b")
+    manifests = []
+    for index, fixture in enumerate((first, second)):
+        out = tmp_path / f"out{index}"
+        module.materialize(
+            raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+            output_dir=out, manifest_path=out / "canon.json",
+            frozen_at_utc="2026-09-15T00:00:00+00:00",
+        )
+        manifests.append(json.loads((out / "canon.json").read_text(encoding="utf-8")))
+    assert {entry["path"] for entry in manifests[0]["raw_files"].values()} == \
+           {entry["path"] for entry in manifests[1]["raw_files"].values()}
+
+
+def test_identical_rematerialization_does_not_rewrite_anything(tmp_path):
+    """完全相同时不得重写：parquet 与 manifest 的 mtime_ns 都必须不变。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    kwargs = dict(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    module.materialize(**kwargs)
+    parquet, manifest = out / "half_hour.parquet", out / "canon.json"
+    before = (_snap(parquet), _snap(manifest))
+    module.materialize(**kwargs)
+    after = (_snap(parquet), _snap(manifest))
+    assert after[0][1] == before[0][1], "parquet hash 变了"
+    assert after[0][2] == before[0][2], "parquet mtime_ns 变了（被无谓重写）"
+    assert after[1][1] == before[1][1], "manifest hash 变了"
+    assert after[1][2] == before[1][2], "manifest mtime_ns 变了（被无谓重写）"
+
+
+def test_manifest_mismatch_leaves_both_artifacts_untouched(tmp_path):
+    """manifest 不一致时 fail closed，且 parquet/manifest 的 bytes/hash/mtime 全不变。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    kwargs = dict(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    module.materialize(**kwargs)
+    parquet, manifest = out / "half_hour.parquet", out / "canon.json"
+    tampered = json.loads(manifest.read_text(encoding="utf-8"))
+    tampered["row_count"] = 999
+    manifest.write_text(json.dumps(tampered), encoding="utf-8")
+
+    before = (_snap(parquet), _snap(manifest))
+    entries_before = sorted(p.name for p in out.iterdir())
+    with pytest.raises((ValueError, FileExistsError)):
+        module.materialize(**kwargs)
+    after = (_snap(parquet), _snap(manifest))
+
+    assert after[0] == before[0], "失败的物化改写了正式 parquet"
+    assert after[1] == before[1], "失败的物化改写了正式 manifest"
+    assert sorted(p.name for p in out.iterdir()) == entries_before, "留下了临时文件"
+
+
+def test_first_freeze_is_atomic_and_leaves_no_temp_files(tmp_path):
+    """首次冻结：原子安装，不留下临时文件。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    assert sorted(p.name for p in out.iterdir()) == ["canon.json", "half_hour.parquet"]
+
+
+def test_corrupt_parquet_is_restored_only_when_the_candidate_hash_matches(tmp_path):
+    """正式 parquet 损坏：候选 hash 与冻结 manifest 相符时原子恢复。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    kwargs = dict(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    module.materialize(**kwargs)
+    parquet = out / "half_hour.parquet"
+    frozen_sha = json.loads((out / "canon.json").read_text(encoding="utf-8"))[
+        "output_parquet_sha256"]
+
+    parquet.write_bytes(b"corrupted")
+    module.materialize(**kwargs)
+    assert hashlib.sha256(parquet.read_bytes()).hexdigest() == frozen_sha
+    assert sorted(p.name for p in out.iterdir()) == ["canon.json", "half_hour.parquet"]
+
+
+def test_corrupt_parquet_with_mismatching_frozen_hash_fails_closed(tmp_path):
+    """冻结 manifest 的 hash 与候选不符时不得"恢复"，必须失败。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    kwargs = dict(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    module.materialize(**kwargs)
+    parquet = out / "half_hour.parquet"
+    manifest = json.loads((out / "canon.json").read_text(encoding="utf-8"))
+    manifest["output_parquet_sha256"] = "0" * 64
+    (out / "canon.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    parquet.write_bytes(b"corrupted")
+    before_pq = _snap(parquet)
+    before_mf = _snap(out / "canon.json")
+    with pytest.raises((ValueError, FileExistsError)):
+        module.materialize(**kwargs)
+    assert _snap(parquet) == before_pq
+    assert _snap(out / "canon.json") == before_mf
+
+
+def test_frozen_manifest_and_parquet_agree_after_materialization(tmp_path):
+    """冻结不变量：manifest 的 output hash 必须与实际 parquet 完全一致。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+    manifest = json.loads((out / "canon.json").read_text(encoding="utf-8"))
+    assert manifest["output_parquet_sha256"] == hashlib.sha256(
+        (out / "half_hour.parquet").read_bytes()
+    ).hexdigest()
