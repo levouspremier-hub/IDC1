@@ -213,6 +213,46 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
+## 7A. M1.2d：冻结数据链跨分支整合审计（只读，**未实际整合**）
+
+`docs/task_cards/M1.2d.md`（`62d72b6`）。**本卡只产出可审核的整合方案，
+没有执行任何 merge / cherry-pick，没有修改任何代码、测试、配置或数据**。
+
+- **数据来源**：`p1-data-contracts` @ `d72b192`；**共同祖先（merge-base）** `3a75d0e`。
+- **需要移植的完整提交序列**：`merge-base..p1-data-contracts` 共 **20 个**，
+  按序为 `a4a788c`（M1.2 前置）→ M1.2a（`f79c94a`…`b77594e`，终点 ✅）→
+  M1.2b（`05e7034`…`7d04d3d`，终点 ✅）→ M1.2c（`16ee77b`…`d72b192`，终点 ✅）。
+  逐提交清单见任务卡 §6.1。
+- **p1 只改动了 11 个文件**，且**完全未触碰** `contracts/`、`scenario/`、`Makefile`、
+  `uv.lock`、`pyproject.toml`、`tests/test_m13*` —— 因此**本批移植不需要针对
+  `contract-v7` 重写任何文件**。
+- **冲突面极小**：双方都改过的只有 3 个文件。只读 `git merge-tree` 实测恰好
+  **2 处文本冲突**（`data/raw/README.md`、`docs/task_cards/M1.2.md`，均为文档），
+  `.gitignore` 自动合并。
+- **raw 只读核验**：本机 `data/raw/singapore_2024/` 的 4 个文件**全部存在且
+  SHA-256 与 p1 冻结 manifest 逐一一致**（含字节数），未改动任何时间戳或内容，
+  **未 blocked**。
+- **推荐方案（唯一）**：**A —— 从 `6c5ed50` 新建
+  `p4-safeppo-m51a-rollout-contract-m12-integration`，按序逐提交移植那 20 个提交**；
+  明确不推荐 B（整体 merge，会引入 merge commit、破坏逐卡审计）与
+  C（重新实现，会迫使重新冻结 manifest，违反「不改 hash/时间戳」红线）。
+- **冲突处理**：`data/raw/README.md` 以 p1 为主但**必须保留** p4 的
+  「未验证 ≠ 已证明不存在」表述；`docs/task_cards/M1.2.md` 同时保留 p1 的验收记录
+  与 p4 的软化勘误（`53b54f9` **不得被整合回退**）。
+- **后续卡顺序**：M1.2e（实际整合）→ M1.3b（半小时 canonical reader）→
+  M1.3c（正式 ScenarioBundle、连续切分与泄漏门禁）→ M6.1（冻结归一化参考值）→
+  M6.2（统一评估适配器）。**不新增 M5.5。**
+
+**M1.2 已完成**：USEP / 系统负荷 / national intermittent generation / ERA5 weather
+四源冻结，含来源、许可、时区、行数与 SHA 账本；manifest 不可变（M1.2b）；
+冻结后 raw 路径只读（M1.2c）。
+
+**M1.2 仍不等于**：正式训练 ScenarioBundle、IDC 本地 PV/风电实测、碳强度、
+半小时 canonical dataset、train/val/test 切分 —— 这些属 **M1.3**（缺口清单见任务卡 §10.3）。
+
+**正式训练仍未开始**，`make train` 在本分支仍因 `data/manifest/` 整个目录缺失
+（M1.2 未整合）与 M1.3 未完成而明确失败，**绝不回退合成数据**。**M6 尚未开始。**
+
 ## 8. 当前授权状态：M5.4i **已通过人工审核，M5.4 工程门禁已解除**
 
 **M5.4i 第三次返修通过第四轮人工审核（2026-09-15）→ M5.4 工程门禁正式解除。**
