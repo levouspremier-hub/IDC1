@@ -373,10 +373,16 @@ def _localize(naive: datetime, *, field: str) -> pd.Timestamp:
 
 
 def _require_complete(observed: dict, *, label: str) -> None:
-    """必须是**恰好**完整闰年半小时轴：无缺失、无多余。"""
+    """必须是**恰好**完整闰年半小时轴：无缺失、无多余。
+
+    纯性能修正（语义不变）：`set(expected)` 只构造一次。原写法在每个循环迭代里
+    重建集合，是 O(n²)（实测每调用 ≈2.5 s × 3 次/次读取 ≈7.5 s），
+    使门禁无法在合理时间内跑完。输出与修正前**逐字节相同**（由 parquet SHA 证明）。
+    """
     expected = expected_half_hours()
+    expected_set = set(expected)
     missing = [t for t in expected if t not in observed]
-    extra = [t for t in observed if t not in set(expected)]
+    extra = [t for t in observed if t not in expected_set]
     if missing:
         raise SingaporeReaderError(
             f"{label} 缺少 {len(missing)} 个半小时点（不插补），"

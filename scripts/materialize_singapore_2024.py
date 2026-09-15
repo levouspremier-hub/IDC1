@@ -18,7 +18,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import subprocess
 import sys
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,7 +30,6 @@ if __package__ in (None, ""):
 
 import pandas as pd
 
-from runs.writer import git_revision
 from scenario.singapore_2024 import (
     ALLOWED_WEATHER_AGES_MINUTES,
     CANONICAL_COLUMNS,
@@ -45,8 +47,45 @@ from scenario.singapore_2024 import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = "m1.3b-singapore-2024-half-hour-v1"
+# 数据生成实现文件：`materializer_revision` 取「HEAD 可达历史中最后修改它们的提交」。
+MATERIALIZER_SOURCE_PATHS = (
+    "scenario/singapore_2024.py",
+    "scripts/materialize_singapore_2024.py",
+)
 DEFAULT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data/processed/singapore_2024"
+
+
+def resolve_materializer_revision() -> str:
+    """**数据生成实现**的 revision —— 由 Git 解析，指向最后修改生成实现的提交。
+
+    刻意**不**用「当前 HEAD」：否则任何后续提交（哪怕只改文档）都会让已冻结的
+    canonical manifest 失效，破坏幂等。**不得**由调用者传入未经验证的 revision。
+    """
+    try:
+        revision = subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", *MATERIALIZER_SOURCE_PATHS],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    except (subprocess.CalledProcessError, OSError) as error:  # pragma: no cover
+        raise ValueError(f"无法解析 materializer revision：{error}") from error
+    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise ValueError(f"materializer revision 不是有效的 Git 提交：{revision!r}")
+    return revision
+
+
+def logical_repo_path(path: Path | str) -> str:
+    """入库 manifest 只记**仓库相对逻辑路径**，绝不泄漏机器绝对路径。
+
+    仓库内文件 → `data/raw/...` 这样的相对路径；
+    仓库外文件（如测试临时目录）→ 稳定的 `<external>/<文件名>`，
+    保证不同 root 下生成的 provenance 一致。
+    """
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return f"<external>/{resolved.name}"
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -82,7 +121,7 @@ def build_manifest(
     """构造 canonical manifest。**所有**可复现事实都来自显式输入，不用运行时刻。"""
     raw_files = {
         name: {
-            "path": str(path),
+            "path": logical_repo_path(path),
             "sha256": _sha256_file(path),
             "bytes": path.stat().st_size,
         }
@@ -98,7 +137,7 @@ def build_manifest(
         "end": frame["timestamp"].iloc[-1].isoformat(),
         "columns": {name: dict(COLUMN_SPECS[name]) for name in CANONICAL_COLUMNS},
         "raw_files": raw_files,
-        "source_manifest_path": str(source_manifest_path),
+        "source_manifest_path": logical_repo_path(source_manifest_path),
         "source_manifest_sha256": _sha256_file(source_manifest_path),
         "output_parquet_sha256": parquet_sha256,
         "weather_mapping_policy": {
@@ -126,23 +165,41 @@ def build_manifest(
             name: {"status": "unavailable", "reason": reason}
             for name, reason in sorted(UNAVAILABLE_COLUMNS.items())
         },
-        "code_revision": git_revision(),
+        "materializer_revision": resolve_materializer_revision(),
         "frozen_at_utc": frozen_at_utc,
     }
 
 
-def verify_existing(canonical_manifest_path: Path, expected: dict) -> None:
-    """已有 canonical manifest 只能**只读验证**；内容不同即失败，不得覆盖。"""
-    actual = json.loads(canonical_manifest_path.read_text(encoding="utf-8"))
-    if _canonical_json(actual) != _canonical_json(expected):
-        differing = sorted(
-            key for key in set(actual) | set(expected)
-            if actual.get(key) != expected.get(key)
-        )
-        raise ValueError(
-            f"{canonical_manifest_path} 已存在且内容不同（差异字段：{differing}）；"
-            "不得静默覆盖"
-        )
+def _read_frozen_manifest(manifest_path: Path) -> dict | None:
+    if not manifest_path.exists():
+        return None
+    return json.loads(manifest_path.read_text(encoding="utf-8"))
+
+
+def _require_same_frozen_fields(frozen: dict, candidate: dict) -> None:
+    """除 `output_parquet_sha256`（与 parquet 本体绑定）外，冻结字段必须完全一致。
+
+    不一致即 **fail closed**：调用方不得靠重跑静默改写已冻结的 provenance。
+    """
+    differing = sorted(
+        key for key in set(frozen) | set(candidate)
+        if key != "output_parquet_sha256" and frozen.get(key) != candidate.get(key)
+    )
+    if differing:
+        raise ValueError(f"已冻结的 canonical manifest 与本次生成不一致（差异字段：{differing}）")
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """同文件系统内写临时文件再 `os.replace`：要么全成，要么全不成。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.replace(temp_name, path)
+    except BaseException:
+        Path(temp_name).unlink(missing_ok=True)
+        raise
 
 
 def materialize(
@@ -153,11 +210,17 @@ def materialize(
     manifest_path: Path | str,
     frozen_at_utc: str,
 ) -> dict:
-    """读出 canonical 表 → 写 Parquet → 写/校验 canonical manifest。"""
+    """读出 canonical 表 → 候选写入临时文件 → **先比较再落盘**（失败原子性）。
+
+    顺序固定为：验证 raw → 构建 frame → 写候选临时 parquet → 算候选 hash 与候选
+    manifest → 与已有冻结 manifest 比较 → 只有确认安全才 `os.replace` 安装。
+
+    任何失败路径都**不得**改动正式 parquet / manifest，也**不得**留下临时文件。
+    """
     source_manifest_path = Path(source_manifest_path)
     manifest_path = Path(manifest_path)
     output_dir = Path(output_dir)
-    frozen = _parse_freeze_time_or_raise(frozen_at_utc)
+    frozen_time = _parse_freeze_time_or_raise(frozen_at_utc)
 
     source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
     raw_paths = verify_raw_files(raw_dir, source_manifest)
@@ -167,28 +230,54 @@ def materialize(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     parquet_path = output_dir / "half_hour.parquet"
-    frame.to_parquet(parquet_path, index=False)
-    parquet_sha = _sha256_file(parquet_path)
 
-    manifest = build_manifest(
-        frame=frame,
-        parquet_sha256=parquet_sha,
-        raw_paths=raw_paths,
-        source_manifest_path=source_manifest_path,
-        frozen_at_utc=frozen,
-    )
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    if manifest_path.exists():
-        verify_existing(manifest_path, manifest)
-    else:
-        manifest_path.write_text(_canonical_json(manifest) + "\n", encoding="utf-8")
+    # 候选 parquet 只写进**同文件系统**的临时文件；正式路径此刻不动。
+    handle, temp_name = tempfile.mkstemp(dir=output_dir, prefix=".half_hour.", suffix=".tmp")
+    os.close(handle)
+    temp_parquet = Path(temp_name)
+    installed_parquet = False
+    try:
+        frame.to_parquet(temp_parquet, index=False)
+        candidate_sha = _sha256_file(temp_parquet)
+        candidate_manifest = build_manifest(
+            frame=frame,
+            parquet_sha256=candidate_sha,
+            raw_paths=raw_paths,
+            source_manifest_path=source_manifest_path,
+            frozen_at_utc=frozen_time,
+        )
+        frozen = _read_frozen_manifest(manifest_path)
+
+        if frozen is None:
+            # 首次冻结：原子替换安装 parquet 与 manifest
+            os.replace(temp_parquet, parquet_path)
+            installed_parquet = True
+            _atomic_write_text(manifest_path, _canonical_json(candidate_manifest) + "\n")
+        else:
+            # 已有冻结 manifest：先把**全部**冻结字段比完，再决定是否落盘。
+            _require_same_frozen_fields(frozen, candidate_manifest)
+            frozen_sha = frozen["output_parquet_sha256"]
+            if candidate_sha != frozen_sha:
+                raise ValueError(
+                    "候选 parquet 的 SHA-256 与冻结 manifest 不符："
+                    f"candidate={candidate_sha} frozen={frozen_sha}"
+                )
+            if parquet_path.exists() and _sha256_file(parquet_path) == frozen_sha:
+                pass  # 完全一致：正式 parquet 与 manifest 都不重写
+            else:
+                # 正式 parquet 缺失/损坏：仅在候选 hash 与冻结值相符时原子恢复
+                os.replace(temp_parquet, parquet_path)
+                installed_parquet = True
+    finally:
+        if not installed_parquet:
+            temp_parquet.unlink(missing_ok=True)
 
     return {
         "parquet_path": str(parquet_path),
         "manifest_path": str(manifest_path),
-        "output_parquet_sha256": parquet_sha,
+        "output_parquet_sha256": _sha256_file(parquet_path),
         "row_count": int(len(frame)),
-        "manifest": manifest,
+        "manifest": candidate_manifest,
     }
 
 
