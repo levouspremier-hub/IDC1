@@ -563,3 +563,243 @@ def test_real_canonical_splits_are_consistent(tmp_path):
             < frames["validation"]["timestamp"].min())
     assert (frames["validation"]["timestamp"].max()
             < frames["test"]["timestamp"].min())
+
+
+# --- 11. 第一轮返修：manifest 语义严格校验 ---------------------------------
+
+def _materialize_and_get_manifest(fixture, out):
+    result = _materialize(fixture, out)
+    return pathlib.Path(result["manifest_path"])
+
+
+def _tampered_manifest(path: pathlib.Path, mutation) -> pathlib.Path:
+    good = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps(mutation(json.loads(json.dumps(good)))), encoding="utf-8")
+    return path
+
+
+def _assert_clean_rejection(callable_, label):
+    """畸形外部输入只允许 ValueError（含 SplitError）/ FileNotFoundError。"""
+    with pytest.raises((ValueError, FileNotFoundError)) as excinfo:
+        callable_()
+    leaked = (KeyError, TypeError, AttributeError, IndexError)
+    assert not isinstance(excinfo.value, leaked), (
+        f"{label}: 泄漏了 {type(excinfo.value).__name__}: {excinfo.value}"
+    )
+
+
+MANIFEST_TAMPERINGS = {
+    "year": lambda m: {**m, "year": 1999},
+    "step_minutes": lambda m: {**m, "step_minutes": 60},
+    "canonical_parquet_path": lambda m: {**m, "canonical_parquet_path": "data/raw/evil.parquet"},
+    "canonical_manifest_path": lambda m: {**m, "canonical_manifest_path": "/etc/passwd"},
+    "materializer_revision_type": lambda m: {**m, "materializer_revision": 12345},
+    "materializer_revision_format": lambda m: {**m, "materializer_revision": "nope"},
+    "no_overlap": lambda m: {**m, "no_overlap": False},
+    "no_gap": lambda m: {**m, "no_gap": False},
+    "randomized": lambda m: {**m, "randomized": True},
+    "leap_day_split": lambda m: {**m, "leap_day_split": "test"},
+    "episode_origin_rule": lambda m: {**m, "episode_origin_rule": "任意规则"},
+    "forecast_origin_rule": lambda m: {**m, "forecast_origin_rule": "任意规则"},
+    "readiness_forecast_ready": lambda m: {
+        **m, "readiness": {**m["readiness"], "forecast_ready": True}},
+    "readiness_training_ready": lambda m: {
+        **m, "readiness": {**m["readiness"], "formal_training_ready": True}},
+    "readiness_missing_key": lambda m: {
+        **m, "readiness": {k: v for k, v in m["readiness"].items()
+                           if k != "truth_splits_ready"}},
+    "unavailable_empty": lambda m: {**m, "unavailable_not_materialized": {}},
+    "unavailable_fake_available": lambda m: {
+        **m, "unavailable_not_materialized": {
+            k: {"status": "available"} for k in m["unavailable_not_materialized"]}},
+    "unavailable_wrong_type": lambda m: {**m, "unavailable_not_materialized": ["a", "b"]},
+    "train_stats_empty": lambda m: {**m, "train_only_statistics": {}},
+    "train_stats_missing_column": lambda m: {
+        **m, "train_only_statistics": {
+            k: v for k, v in m["train_only_statistics"].items()
+            if k != "price_sgd_per_kwh"}},
+    "train_stats_forged_value": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"],
+            "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "mean": 9999.0}}},
+    "train_stats_bool_for_int": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"],
+            "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "count": True}}},
+    "train_stats_nan": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"],
+            "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "min": float("nan")}}},
+    "train_stats_source_split": lambda m: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"], "split": "test"}},
+    "train_stats_source_columns": lambda m: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"], "columns": ["price_sgd_per_kwh"]}},
+    "train_stats_source_hash": lambda m: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"],
+            "canonical_parquet_sha256": "0" * 64}},
+    "train_stats_source_revision": lambda m: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"],
+            "statistics_implementation_revision": "bad"}},
+}
+
+
+@pytest.mark.parametrize("label", sorted(MANIFEST_TAMPERINGS))
+def test_tampered_split_manifest_is_rejected_by_the_reader(tmp_path, label):
+    """篡改后的冻结声明必须被 reader 拒绝 —— 不能只验证「生成时写对了」。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, MANIFEST_TAMPERINGS[label])
+    _assert_clean_rejection(
+        lambda: _load(fixture, manifest_path, "train"), label)
+
+
+@pytest.mark.parametrize("label", sorted(MANIFEST_TAMPERINGS))
+def test_tampered_split_manifest_is_rejected_by_the_materializer(tmp_path, label):
+    """同一批篡改也必须让重新物化 fail closed，而不是静默接受既有声明。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, MANIFEST_TAMPERINGS[label])
+    _assert_clean_rejection(
+        lambda: _materialize(fixture, tmp_path / "out"), label)
+
+
+def test_reader_rejects_a_declared_path_that_is_not_the_caller_supplied_one(tmp_path):
+    """路径声明必须与调用者实际提供的 logical repo path 一致。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m: {
+        **m,
+        "canonical_parquet_path": "data/processed/other/half_hour.parquet",
+        "canonical_manifest_path": "data/manifest/other.json",
+    })
+    _assert_clean_rejection(lambda: _load(fixture, manifest_path, "train"), "path-mismatch")
+
+
+# --- 12. 第一轮返修：canonical 连续时间轴严格校验 ---------------------------
+
+def _repack_canonical(fixture, out_root: pathlib.Path, mutate) -> dict:
+    """写坏 canonical parquet，并**同步更新** canonical manifest 的 hash（自洽坏数据）。"""
+    frame = pd.read_parquet(fixture["parquet"])
+    frame = mutate(frame)
+    out_root.mkdir(parents=True, exist_ok=True)
+    parquet = out_root / "half_hour.parquet"
+    frame.to_parquet(parquet, index=False)
+    manifest = out_root / "singapore_2024_half_hour.json"
+    good = json.loads(fixture["canonical_manifest"].read_text(encoding="utf-8"))
+    good["output_parquet_sha256"] = hashlib.sha256(parquet.read_bytes()).hexdigest()
+    good["row_count"] = len(frame)
+    manifest.write_text(json.dumps(good), encoding="utf-8")
+    return {"parquet": parquet, "canonical_manifest": manifest}
+
+
+def _swap_rows(lo: int, hi: int):
+    def mutate(frame):
+        a = frame.iloc[lo].copy()
+        frame.iloc[lo] = frame.iloc[hi].values
+        frame.iloc[hi] = a.values
+        return frame
+    return mutate
+
+
+def _shift_timestamp(row: int, minutes: int):
+    def mutate(frame):
+        frame.iloc[row, frame.columns.get_loc("timestamp")] = (
+            frame.iloc[row]["timestamp"] + pd.Timedelta(minutes=minutes))
+        return frame
+    return mutate
+
+
+def _copy_timestamp(src: int, dst: int):
+    def mutate(frame):
+        frame.iloc[dst, frame.columns.get_loc("timestamp")] = frame.iloc[src]["timestamp"]
+        return frame
+    return mutate
+
+
+TIMELINE_CORRUPTIONS = {
+    "train_internal_swap": _swap_rows(100, 101),
+    "validation_internal_swap": _swap_rows(10224 + 10, 10224 + 11),
+    "test_internal_swap": _swap_rows(14000, 14001),
+    "duplicate_timestamp": _copy_timestamp(100, 101),
+    "non_grid_17min": _shift_timestamp(100, 17),
+    "non_grid_7min": _shift_timestamp(500, 7),
+    "non_monotonic": _copy_timestamp(300, 200),
+    "boundary_swap": _swap_rows(10223, 10224),
+}
+
+
+@pytest.mark.parametrize("label", sorted(TIMELINE_CORRUPTIONS))
+def test_corrupt_canonical_timeline_is_rejected_by_the_materializer(tmp_path, label):
+    """首末行与行数都对、但整表不连续的 canonical 必须被**物化器**拒绝。"""
+    fixture = write_canonical_fixture(tmp_path)
+    broken = _repack_canonical(fixture, tmp_path / "broken", TIMELINE_CORRUPTIONS[label])
+    _assert_clean_rejection(
+        lambda: _materialize(broken, tmp_path / "out"), label)
+
+
+@pytest.mark.parametrize("label", sorted(TIMELINE_CORRUPTIONS))
+def test_corrupt_canonical_timeline_is_rejected_by_the_reader(tmp_path, label):
+    """reader 在返回切片前同样必须验证整条时间轴，不能只查首末行。"""
+    fixture = write_canonical_fixture(tmp_path)
+    broken = _repack_canonical(fixture, tmp_path / "broken", TIMELINE_CORRUPTIONS[label])
+    manifest_path = _materialize(fixture, tmp_path / "out")["manifest_path"]
+    # 把 split manifest 的两个 canonical hash 改成与坏 canonical 自洽
+    good = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
+    good["canonical_parquet_sha256"] = hashlib.sha256(
+        broken["parquet"].read_bytes()).hexdigest()
+    good["canonical_manifest_sha256"] = hashlib.sha256(
+        broken["canonical_manifest"].read_bytes()).hexdigest()
+    good["train_only_statistics_source"]["canonical_parquet_sha256"] = \
+        good["canonical_parquet_sha256"]
+    pathlib.Path(manifest_path).write_text(json.dumps(good), encoding="utf-8")
+    _assert_clean_rejection(lambda: _load(broken, manifest_path, "train"), label)
+
+
+def test_intact_canonical_timeline_is_exactly_the_frozen_half_hour_grid(tmp_path):
+    """正例：17,568 行、严格 30min 网格、首末时刻精确。"""
+    fixture = write_canonical_fixture(tmp_path)
+    frame = pd.read_parquet(fixture["parquet"])
+    stamps = frame["timestamp"]
+    assert len(stamps) == TOTAL_ROWS
+    assert stamps.is_monotonic_increasing
+    assert not stamps.duplicated().any()
+    deltas = stamps.diff().dropna().unique()
+    assert len(deltas) == 1 and deltas[0] == pd.Timedelta(minutes=30)
+    assert stamps.iloc[0] == pd.Timestamp("2024-01-01T00:00:00+08:00")
+    assert stamps.iloc[-1] == pd.Timestamp("2024-12-31T23:30:00+08:00")
+
+
+# --- 13. 回归：不得回退既有语义 ---------------------------------------------
+
+def test_boundaries_and_origin_rules_are_unchanged():
+    module = importlib.import_module(SPLIT_MODULE)
+    assert module.SPLIT_ROW_COUNTS == EXPECTED_ROW_COUNTS
+    for name in SPLIT_NAMES:
+        assert module.SPLIT_SPECS[name]["start"] == EXPECTED_STARTS[name]
+        assert module.SPLIT_SPECS[name]["end_exclusive"] == EXPECTED_ENDS_EXCLUSIVE[name]
+    end = EXPECTED_ROW_COUNTS["train"]
+    assert _episode("train", end - 4, 4) == end - 4
+    assert _forecast("train", end - 4, 4) == end - 4
+    with pytest.raises(ValueError):
+        _episode("train", end - 3, 4)
+    with pytest.raises(ValueError):
+        _forecast("train", end - 3, 4)
+
+
+def test_upstream_manifests_and_raw_are_untouched_by_this_card():
+    """本卡不得改动上游资产。"""
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--",
+         "data/raw", "data/manifest/singapore_2024.json",
+         "data/manifest/singapore_2024_half_hour.json",
+         "data/processed", "configs/frozen_refs/refs.json"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert status == "", f"上游资产被改动：{status}"
