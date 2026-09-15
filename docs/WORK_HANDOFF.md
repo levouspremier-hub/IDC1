@@ -6,7 +6,7 @@
 > （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b 实现终点 `485491d`
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b **返修**实现终点 `751caac`
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
@@ -219,7 +219,45 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7C. M1.3b：Singapore-2024 半小时 canonical reader（等待人工审查）
+## 7D. M1.3b 第一次审核返修（等待人工复审）
+
+**第一次人工审核未通过**（五个问题：最终 HEAD 幂等失败、docs-only 提交使冻结数据失效、
+manifest 不一致时先改写 parquet、完全相同也重写、路径不可移植；
+另有 27 项测试被标 slow 导致 `make check` 只跑 6 项）。
+返修提交 `c14f349` → `64bed88`；详见 `docs/task_cards/M1.3b.md` §11。
+
+**修复要点**：
+
+- **revision 语义**：字段由随 HEAD 漂移的 `code_revision` 改为
+  **`materializer_revision`** —— 由 Git 解析「最后修改 `scenario/singapore_2024.py`
+  或 `scripts/materialize_singapore_2024.py` 的提交」。**docs-only 提交不再使冻结数据失效。**
+- **失败原子性**：候选 parquet 只写同文件系统临时文件；先算候选 hash 与候选 manifest
+  并**比较完毕**，才在安全时 `os.replace`。不一致 → 正式 parquet/manifest
+  **bytes/hash/mtime_ns 全不变**、无临时文件残留；一致 → **不重写**；
+  正式 parquet 损坏 → 仅当候选 hash 与冻结值相符时原子恢复。
+- **路径可移植**：入库 manifest 只记**仓库相对逻辑路径**
+  （`data/raw/singapore_2024/...`、`data/manifest/singapore_2024.json`），
+  **无** `/Users/...`、无任何绝对或 home 路径。
+- **数据语义零变化**（可证明）：返修前后 parquet SHA-256 **完全相同**
+  （`dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd`）——
+  17,568 行、signed IGS 原值、USEP ×0.001、SASEA 唯一实际负荷、天气 age 0/30 全部不变。
+- **测试标记整改**：slow 由 **27 → 1**（只剩真实冻结 raw 全量验收）；
+  全年 fixture 与读取结果模块级缓存；**未删除测试、未弱化断言**。
+  测试耗时 **3m46s → 13.9s**。
+
+**⚠️ 一处越界说明（供审阅者判断）**：为使非 slow 门禁可用，本次还修改了审核范围外的
+`scenario/singapore_2024.py`，**仅**修 `_require_complete` 的 O(n²) 性能缺陷
+（循环内重建 `set(expected)`，实测每调用 ≈2.5 s）。该修正**输出保持**，
+并由上述 parquet 字节同一性证明未改变任何数据语义。
+
+**最终 HEAD 幂等**：同一物化命令连跑两次均 `exit=0`，parquet 与 manifest 的
+`mtime_ns` **均不变**，无临时文件残留。
+
+**M1.3b 仍只是半小时事实表**：`ScenarioBundle` 接线、连续 train/validation/test 切分、
+forecast 可见窗口与泄漏门禁属 **M1.3c**；`data/manifest/train.json` **仍不存在**，
+正式 `make train` 仍非零失败（原因已正确指向 M1.3），**未**产生 checkpoint；**M6 尚未开始**。
+
+## 7C. M1.3b：Singapore-2024 半小时 canonical reader（首轮，已被 7D 取代）
 
 `docs/task_cards/M1.3b.md`（`ac8ba3a` → `485491d`）。**M1.2e 已正式通过**，
 本分支即后续累计工程链（**不**反向合并到旧 `p4-safeppo-m51a-rollout-contract`）。
