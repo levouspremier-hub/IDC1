@@ -10,6 +10,7 @@
 import hashlib
 import io
 import json
+import math
 import pathlib
 import zipfile
 from datetime import datetime, timedelta
@@ -343,9 +344,26 @@ def test_infinite_load_fails(tmp_path):
 
 
 @pytest.mark.slow
-def test_negative_igs_fails(tmp_path):
-    with pytest.raises((ValueError, FileNotFoundError)):
-        _load(write_raw_fixture(tmp_path, negative_igs=True))
+def test_negative_igs_is_preserved_not_clipped(tmp_path):
+    """净注入为负是真实计量语义：必须**原值保留**，不得 clip 到 0 或取绝对值。
+
+    （M1.3b 卡 §3 的「非负」已按人工授权改为「有限」——冻结数据中
+    43.6% 的 IGS 值为负，最小 -0.124 MWh。）
+    """
+    frame = _load(write_raw_fixture(tmp_path, negative_igs=True))
+    assert frame["national_igs_mwh_per_half_hour"].iloc[0] == pytest.approx(-1.0)
+    assert (frame["national_igs_mwh_per_half_hour"] < 0).sum() == 1
+    assert (frame["national_igs_mwh_per_half_hour"] >= 0).sum() == EXPECTED_ROWS - 1
+
+
+def test_infinite_igs_fails():
+    """非有限值仍然必须失败（只是不再要求非负）。"""
+    from scenario.singapore_2024 import _finite
+
+    with pytest.raises(ValueError):
+        _finite(float("inf"), field="NET INJECTION (MWh)")
+    with pytest.raises(ValueError):
+        _finite(float("nan"), field="NET INJECTION (MWh)")
 
 
 @pytest.mark.slow
@@ -429,7 +447,10 @@ def test_real_frozen_raw_materializes_17568_rows():
     assert (frame["weather_source_timestamp"] <= frame["timestamp"]).all()
     assert frame["system_load_mw"].notna().all()
     assert (frame["system_load_mw"] >= 0).all()
-    assert (frame["national_igs_mwh_per_half_hour"] >= 0).all()
+    # IGS 净注入按人工授权为「有限」：真实数据约 43.6% 为负，必须**原值保留**
+    assert frame["national_igs_mwh_per_half_hour"].notna().all()
+    assert (frame["national_igs_mwh_per_half_hour"] < 0).any(), "真实 IGS 含负净注入"
+    assert frame["national_igs_mwh_per_half_hour"].map(math.isfinite).all()
 
 
 # --- 7. canonical manifest（物化） -----------------------------------------
@@ -451,7 +472,8 @@ def test_canonical_manifest_records_inputs_outputs_and_mapping(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     out = tmp_path / "out"
     result = _materialize(fixture, out)
-    manifest = json.loads(result["manifest_path"].read_text(encoding="utf-8"))
+    manifest_path = pathlib.Path(result["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
     assert manifest["schema"]
     assert manifest["year"] == 2024
@@ -498,7 +520,7 @@ def test_canonical_manifest_records_inputs_outputs_and_mapping(tmp_path):
 def test_canonical_manifest_declares_the_unavailable_fields(tmp_path):
     fixture = write_raw_fixture(tmp_path)
     result = _materialize(fixture, tmp_path / "out")
-    manifest = json.loads(result["manifest_path"].read_text(encoding="utf-8"))
+    manifest = json.loads(pathlib.Path(result["manifest_path"]).read_text(encoding="utf-8"))
 
     unavailable = manifest["unavailable_not_materialized"]
     assert set(unavailable) == set(UNAVAILABLE_COLUMNS)
@@ -506,7 +528,8 @@ def test_canonical_manifest_declares_the_unavailable_fields(tmp_path):
         assert entry["status"] in ("unavailable", "not_materialized"), column
         assert entry["reason"], column
     blob = json.dumps(unavailable, ensure_ascii=False).lower()
-    assert "not idc local pv" in blob or "不等于 idc 本地 pv" in blob
+    assert "idc 本地 pv" in blob          # national IGS ≠ IDC 本地 PV
+    assert "local_pv_kw" in blob and "wind_generation_kw" in blob
     assert "carbon" in blob
 
 
@@ -528,3 +551,25 @@ def test_idempotent_rematerialization_with_the_same_freeze_time(tmp_path):
     first = _materialize(fixture, out)
     second = _materialize(fixture, out)
     assert first["output_parquet_sha256"] == second["output_parquet_sha256"]
+
+
+# --- 8. 过时的阻塞说明不得残留 ----------------------------------------------
+
+def test_error_messages_do_not_claim_m12_is_unfinished():
+    """M1.2 已冻结；错误信息不得再误称「M1.2 尚未完成/仍阻塞」。"""
+    source = (REPO_ROOT / "scenario/scenario.py").read_text(encoding="utf-8")
+    assert "M1.2 阻塞" not in source, "不得再称 M1.2 阻塞"
+    assert "待 M1.2 解除阻塞后实现" not in source
+    assert "M1.3" in source, "必须指向真正未完成的 M1.3"
+
+
+def test_build_scenario_still_fails_closed_without_an_m13_manifest(tmp_path):
+    """正式路径仍必须明确失败，且原因指向 M1.3，而非 M1.2。"""
+    from scenario.scenario import build_scenario
+
+    with pytest.raises((FileNotFoundError, ValueError)) as excinfo:
+        build_scenario("train", start="2024-01-01", horizon=24, forecast_cutoff=4,
+                       manifest_dir=str(tmp_path / "no_such_manifest_dir"))
+    message = str(excinfo.value)
+    assert "M1.3" in message
+    assert "M1.2 阻塞" not in message

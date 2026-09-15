@@ -6,8 +6,10 @@
 可见性：预测窗口为 `[t, t + forecast_cutoff)`（与 env / snapshot adapter 同一定义），
 不暴露未来真值。
 
-数据边界：M1.2 正式数据接线**仍阻塞**（数据组合未验证）。当前只允许生成显式
-`synthetic=True` 的开发/测试场景；正式模式在无 manifest 时抛错，绝不回退到合成数据。
+数据边界：M1.2 raw freeze **已完成**（四个 Singapore-2024 原始文件已冻结并核验），
+但 **M1.3 正式数据集（`split` manifest）尚未完成**，正式 `ScenarioBundle` 接线
+也尚未实现。当前只允许生成显式 `synthetic=True` 的开发/测试场景；
+正式模式在无 manifest 时抛错，绝不回退到合成数据。
 """
 
 from __future__ import annotations
@@ -124,11 +126,15 @@ def _build_from_manifest(
     if not manifest_path.exists():
         raise FileNotFoundError(
             f"正式模式无数据：缺少 manifest {manifest_path}"
-            "（M1.2 阻塞，未验证到满足许可证/匿名访问/全年粒度的数据组合）。"
+            "（M1.2 raw freeze 已完成；M1.3 正式数据集/split manifest 尚未完成）。"
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     for field in _REQUIRED_MANIFEST_FIELDS:
         if field not in manifest:
             raise ValueError(f"manifest 缺少字段 {field!r}（需单位/来源/hash）")
-    # 真实数据加载 + 切片 + sha256 校验待 M1.2 解除阻塞后实现；不得回退到合成数据。
-    raise NotImplementedError("真实数据加载待 M1.2 解除阻塞后实现")
+    # 真实数据加载 + 切片 + sha256 校验属 M1.3c（正式 ScenarioBundle 接线）；
+    # M1.3b 只提供半小时 canonical 事实表，尚未接进 ScenarioBundle。
+    raise NotImplementedError(
+        "正式 ScenarioBundle 接线属 M1.3c（M1.2 raw freeze 已完成；"
+        "M1.3 正式数据集/split 尚未完成）"
+    )
