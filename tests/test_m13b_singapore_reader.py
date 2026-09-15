@@ -20,6 +20,8 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TIMEZONE = "Asia/Singapore"
 YEAR = 2024
 EXPECTED_ROWS = 366 * 48
+# fixture 中 USEP 的 DEMAND 列写死一个可辨识的假值；实际负荷只能来自 SASEA
+USEP_DEMAND_FORECAST = 9999.0
 CANONICAL_COLUMNS = (
     "timestamp",
     "price_sgd_per_kwh",
@@ -35,6 +37,18 @@ UNAVAILABLE_COLUMNS = ("local_pv_kw", "wind_generation_kw", "carbon_intensity", 
 
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+# 与**冻结 raw 文件实测表头**一致（不得自创列名；见 M1.3b 卡 §实现记录）
+USEP_HEADER = (
+    "INFORMATION TYPE,DATE,PERIOD,USEP ($/MWh),LCP ($/MWh),DEMAND (MW),"
+    "SOLAR(MW),TCL (MW),RUSEP ($/MWh),MAP ($/MWh),MAPT ($/MWh),TPC Applied"
+)
+MG_HEADER = (
+    "INFORMATION TYPE,DATE,PERIOD,FACILITY TYPE,GROSS INJECTION (MWh),"
+    "NET INJECTION (MWh)"
+)
+SASEA_HEADER = "datetime,system_demand"
+WEATHER_HEADER = "time,temperature_2m (°C),wind_speed_10m (m/s),shortwave_radiation (W/m²)"
 
 
 # --- fixture 构造 -----------------------------------------------------------
@@ -53,10 +67,15 @@ def _month_files(timestamps, usep_values, igs_values):
         date_text = ts.strftime("%d-%b-%Y")
         period = (ts.hour * 2) + (1 if ts.minute == 30 else 0) + 1
         usep_by_month.setdefault(key, []).append(
-            f"{date_text},{period},USEP,{price},USEP ($/MWh),DEMAND (MW),9999"
+            f"USEP,{date_text},{period},{price},0.00,{USEP_DEMAND_FORECAST},"
+            f"0.000,0.000,{price},166.23,556.02,No"
         )
         igs_by_month.setdefault(key, []).append(
-            f"{date_text},{period},MG,IGS,NET INJECTION (MWh),{igs}"
+            f"MG,{date_text},{period},IGS,{igs},{igs}"
+        )
+        # 非 IGS 行（BATTERY）必须被过滤掉，不得混入 national IGS
+        igs_by_month[key].append(
+            f"MG,{date_text},{period},BATTERY,99999.0,99999.0"
         )
     return usep_by_month, igs_by_month
 
@@ -114,12 +133,12 @@ def write_raw_fixture(
     usep_zip = raw_dir / "emc_usep_2024.zip"
     usep_zip.write_bytes(_zip_bytes(
         {f"USEP_{m}{YEAR}.csv": v for m, v in usep_months.items()},
-        "DATE,PERIOD,INFORMATION TYPE,USEP ($/MWh),UNITS,DEMAND (MW),UNITS",
+        USEP_HEADER,
     ))
     igs_zip = raw_dir / "emc_metered_generation_2024.zip"
     igs_zip.write_bytes(_zip_bytes(
         {f"MG_{m}{YEAR}.csv": v for m, v in igs_months.items()},
-        "DATE,PERIOD,INFORMATION TYPE,FACILITY TYPE,UNITS,NET INJECTION (MWh)",
+        MG_HEADER,
     ))
 
     # SASEA
@@ -133,7 +152,9 @@ def write_raw_fixture(
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr(
             "data/raw/raw_SGP_demand.csv",
-            "datetime,system_demand\n"
+            SASEA_HEADER + "\n"
+            + "2014-01-06 00:00:00,4980.1787\n"
+            + "2023-12-31 23:30:00,5000.0\n"
             + "\n".join(r for m in sorted(sasea_months) for r in sasea_months[m])
             + "\n",
         )
@@ -148,8 +169,9 @@ def write_raw_fixture(
     weather_csv = raw_dir / "open_meteo_era5_2024.csv"
     weather_csv.write_text(
         "latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation\n"
-        f"1.5,103.75,15,28800,{weather_timezone},GMT+8\n"
-        "time,temperature_2m (°C),wind_speed_10m (m/s),shortwave_radiation (W/m²)\n"
+        f"1.5,103.75,46.0,28800,{weather_timezone},GMT+8\n"
+        "\n"
+        + WEATHER_HEADER + "\n"
         + "\n".join(weather_rows) + "\n",
         encoding="utf-8",
     )
