@@ -242,7 +242,9 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
   validation`）—— 首轮返修链的真实成员，首轮任务卡表格当时漏列。
 - **`3327346..e3aafdc` 首轮返修链实际有 8 个提交**（不是 5 个）：
   `d60f597 45e5a29 6a2ca5d 2c0b8c1 076923b 37ca45b 373b392 e3aafdc`。
-- `3327346..HEAD` 迄今共 **12 个提交**（首轮 8 + R2 4）。
+- `3327346..HEAD` 的完整链共 **14 个提交**（首轮 8 + R2 实现/产物 4 + R2 证据/交接 2）；
+  下方回滚命令列出前 12 个，不含记录本回滚的两个 docs 提交（记录自身的提交
+  无法在记录中列全，属既有正常限制），已实测可精确恢复 `3327346` 的树。
 
 **改前 16 failed**（直接原因：3 项 `TypeError: 'int'/'float'/'bool' object is not
 iterable`，13 项 `DID NOT RAISE`）；**改后** `tests/test_m13d_splits.py`
