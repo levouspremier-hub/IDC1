@@ -29,6 +29,7 @@ if __package__ in (None, ""):
 import pandas as pd
 
 from scenario.splits import (
+    CANONICAL_COLUMNS,
     EPISODE_ORIGIN_RULE,
     FORECAST_ORIGIN_RULE,
     FREQUENCY,
@@ -40,7 +41,9 @@ from scenario.splits import (
     TOTAL_ROWS,
     UNAVAILABLE_COLUMNS,
     YEAR,
+    logical_repo_path,
     train_only_statistics,
+    validate_canonical_timeline,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -82,15 +85,6 @@ def resolve_split_materializer_revision() -> str:
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise ValueError(f"split materializer revision 不是有效的 Git 提交：{revision!r}")
     return revision
-
-
-def logical_repo_path(path: Path | str) -> str:
-    """入库 manifest 只记**仓库相对逻辑路径**，绝不泄漏机器绝对路径。"""
-    resolved = Path(path).resolve()
-    try:
-        return resolved.relative_to(REPO_ROOT).as_posix()
-    except ValueError:
-        return f"<external>/{resolved.name}"
 
 
 def _sha256_file(path: Path) -> str:
@@ -145,10 +139,10 @@ def build_split_manifest(
     """
     _verify_canonical_pair(canonical_parquet_path, canonical_manifest_path)
     frame = pd.read_parquet(canonical_parquet_path)
-    if len(frame) != TOTAL_ROWS:
-        raise ValueError(f"canonical 行数必须是 {TOTAL_ROWS}，实际 {len(frame)}")
-    if str(frame["timestamp"].dt.tz) != TIMEZONE:
-        raise ValueError(f"canonical 时间戳时区必须是 {TIMEZONE}")
+    # 首次冻结**之前**先验证整条 canonical 时间轴（含列名）
+    if tuple(frame.columns) != CANONICAL_COLUMNS:
+        raise ValueError(f"canonical 列不符：{tuple(frame.columns)}")
+    validate_canonical_timeline(frame, label="canonical")
 
     train_spec = SPLIT_SPECS["train"]
     train_frame = frame.iloc[
