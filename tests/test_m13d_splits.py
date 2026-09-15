@@ -1012,3 +1012,195 @@ def test_nested_tampering_is_also_rejected_by_the_materializer(tmp_path, label):
     manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
     _tampered_manifest(manifest_path, NESTED_FIELD_TAMPERS[label])
     _assert_clean_rejection(lambda: _materialize(fixture, tmp_path / "out"), label)
+
+
+# --- 15. M1.3d-R3：冻结 schema 的键集合精确性 ---------------------------------
+
+SPLIT_ENTRY_KEYS = ("start", "end_exclusive", "row_start", "row_end_exclusive", "row_count")
+TOP_LEVEL_KEYS = (
+    "canonical_manifest_path", "canonical_manifest_sha256", "canonical_parquet_path",
+    "canonical_parquet_sha256", "episode_origin_rule", "forecast_origin_rule",
+    "frequency", "frozen_at_utc", "leap_day_split", "materializer_revision",
+    "no_gap", "no_overlap", "randomized", "readiness", "schema", "splits",
+    "step_minutes", "timezone", "total_rows", "train_only_statistics",
+    "train_only_statistics_source", "unavailable_not_materialized", "year",
+)
+STATISTICS_SOURCE_KEYS = (
+    "split", "row_start", "row_end_exclusive", "start", "end_exclusive", "columns",
+    "canonical_parquet_sha256", "statistics_implementation_revision", "note",
+)
+
+
+def test_frozen_schema_key_sets_match_the_manifest(tmp_path):
+    """冻结的键集合必须与真实 manifest 一致（否则本组用例就是空转）。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest = json.loads(
+        _materialize_and_get_manifest(fixture, tmp_path / "out").read_text(encoding="utf-8"))
+    assert set(manifest) == set(TOP_LEVEL_KEYS)
+    assert set(manifest["splits"]) == set(SPLIT_NAMES)
+    for name in SPLIT_NAMES:
+        assert set(manifest["splits"][name]) == set(SPLIT_ENTRY_KEYS)
+    assert set(manifest["train_only_statistics_source"]) == set(STATISTICS_SOURCE_KEYS)
+
+
+EXTRA_SPLIT_TAMPERS = {
+    "extra_split_shadow_test": lambda m: {
+        **m, "splits": {**m["splits"], "shadow_test": dict(m["splits"]["train"])}},
+    "extra_split_shadow_train": lambda m: {
+        **m, "splits": {**m["splits"], "shadow_train": dict(m["splits"]["train"])}},
+    "missing_train": lambda m: {
+        **m, "splits": {k: v for k, v in m["splits"].items() if k != "train"}},
+    "missing_validation": lambda m: {
+        **m, "splits": {k: v for k, v in m["splits"].items() if k != "validation"}},
+    "missing_test": lambda m: {
+        **m, "splits": {k: v for k, v in m["splits"].items() if k != "test"}},
+    "renamed_validation": lambda m: {
+        **m, "splits": {("val" if k == "validation" else k): v
+                        for k, v in m["splits"].items()}},
+}
+
+
+@pytest.mark.parametrize("label", sorted(EXTRA_SPLIT_TAMPERS))
+def test_split_name_set_must_be_exactly_the_three_frozen_names(tmp_path, label):
+    """`splits` 必须**恰好**是 train/validation/test —— 多一个少一个都拒绝。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, EXTRA_SPLIT_TAMPERS[label])
+    _reject(fixture, manifest_path, label)
+
+
+@pytest.mark.parametrize("extra_key", [
+    "randomized_indices", "source", "ready", "leap_day_split", "notes", "n_rows",
+])
+def test_split_entry_rejects_any_undeclared_key(tmp_path, extra_key):
+    """split entry 的键集合必须精确；任何未声明字段都必须拒绝。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_key: {
+        **m, "splits": {**m["splits"], "train": {**m["splits"]["train"], k: "x"}}})
+    _reject(fixture, manifest_path, f"entry_extra={extra_key}")
+
+
+@pytest.mark.parametrize("dropped", SPLIT_ENTRY_KEYS)
+def test_split_entry_rejects_a_missing_declared_key(tmp_path, dropped):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=dropped: {
+        **m, "splits": {**m["splits"], "train": {
+            kk: vv for kk, vv in m["splits"]["train"].items() if kk != k}}})
+    _reject(fixture, manifest_path, f"entry_missing={dropped}")
+
+
+@pytest.mark.parametrize("extra_key", ["extra", "future_extension", "note", "version"])
+def test_top_level_manifest_rejects_any_undeclared_key(tmp_path, extra_key):
+    """未知的顶层字段不得静默通过；扩展必须 bump schema。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_key: {**m, k: 1})
+    _reject(fixture, manifest_path, f"top_level_extra={extra_key}")
+
+
+@pytest.mark.parametrize("extra_key", ["extra", "generated_at", "seed"])
+def test_statistics_source_rejects_any_undeclared_key(tmp_path, extra_key):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_key: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"], k: "x"}})
+    _reject(fixture, manifest_path, f"source_extra={extra_key}")
+
+
+@pytest.mark.parametrize("dropped", STATISTICS_SOURCE_KEYS)
+def test_statistics_source_rejects_a_missing_declared_key(tmp_path, dropped):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=dropped: {
+        **m, "train_only_statistics_source": {
+            kk: vv for kk, vv in m["train_only_statistics_source"].items() if kk != k}})
+    _reject(fixture, manifest_path, f"source_missing={dropped}")
+
+
+@pytest.mark.parametrize("extra_column", ["extra_column", "shadow"])
+def test_statistics_rejects_an_undeclared_column(tmp_path, extra_column):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_column: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"],
+            k: dict(m["train_only_statistics"]["price_sgd_per_kwh"])}})
+    _reject(fixture, manifest_path, f"stats_extra={extra_column}")
+
+
+@pytest.mark.parametrize("extra_field", ["extra", "p95", "stdev"])
+def test_statistics_entry_rejects_an_undeclared_field(tmp_path, extra_field):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_field: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], k: 1.0}}})
+    _reject(fixture, manifest_path, f"stats_entry_extra={extra_field}")
+
+
+@pytest.mark.parametrize("extra_key", ["extra", "materialized"])
+def test_readiness_rejects_an_undeclared_key(tmp_path, extra_key):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, k=extra_key: {
+        **m, "readiness": {**m["readiness"], k: True}})
+    _reject(fixture, manifest_path, f"readiness_extra={extra_key}")
+
+
+def test_unavailable_rejects_an_undeclared_column(tmp_path):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m: {
+        **m, "unavailable_not_materialized": {
+            **m["unavailable_not_materialized"], "shadow": "unavailable: x"}})
+    _reject(fixture, manifest_path, "unavailable_extra")
+
+
+SCHEMA_PRECISION_TAMPERS = {
+    **EXTRA_SPLIT_TAMPERS,
+    "entry_extra_randomized_indices": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            **m["splits"]["train"], "randomized_indices": []}}},
+    "entry_extra_source": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            **m["splits"]["train"], "source": "x"}}},
+    "entry_extra_ready": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            **m["splits"]["train"], "ready": True}}},
+    "top_level_extra": lambda m: {**m, "future_extension": 1},
+    "source_extra": lambda m: {
+        **m, "train_only_statistics_source": {
+            **m["train_only_statistics_source"], "extra": 1}},
+    "readiness_extra": lambda m: {**m, "readiness": {**m["readiness"], "extra": True}},
+    "statistics_extra_column": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "extra_column": {}}},
+    "statistics_entry_extra": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "extra": 1}}},
+    "unavailable_extra": lambda m: {
+        **m, "unavailable_not_materialized": {
+            **m["unavailable_not_materialized"], "shadow": "unavailable: x"}},
+}
+
+
+@pytest.mark.parametrize("label", sorted(SCHEMA_PRECISION_TAMPERS))
+def test_schema_precision_tampers_never_leak_a_builtin_exception(tmp_path, label):
+    """键集合畸形同样只能抛 ValueError 一族，不泄漏内建异常。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, SCHEMA_PRECISION_TAMPERS[label])
+    _reject(fixture, manifest_path, label)
+
+
+@pytest.mark.parametrize("label", sorted(SCHEMA_PRECISION_TAMPERS))
+def test_schema_precision_tampers_are_also_rejected_by_the_materializer(tmp_path, label):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, SCHEMA_PRECISION_TAMPERS[label])
+    _assert_clean_rejection(lambda: _materialize(fixture, tmp_path / "out"), label)
