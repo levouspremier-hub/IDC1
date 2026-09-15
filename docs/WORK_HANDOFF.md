@@ -6,7 +6,7 @@
 > （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b **返修**实现终点 `751caac`
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.3b **第二次返修**实现终点 `7007f36`
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
@@ -219,7 +219,39 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7D. M1.3b 第一次审核返修（等待人工复审）
+## 7E. M1.3b 第二次审核返修（等待人工复审）
+
+**第二次人工审核仍未通过**：上一轮的 revision 语义、路径可移植、正常幂等、
+已有 manifest 的失败保护与测试标记整改**均已确认通过**；只剩**首冻失败原子性**一个阻断缺陷 ——
+原实现先把候选 parquet 安装到正式路径、再写 manifest，manifest 失败会留下**孤立正式 parquet**。
+返修提交 `f364bed` → `3b235f1`；详见 `docs/task_cards/M1.3b.md` §12。
+
+**修复要点**：
+
+- **首冻原子回滚**：parquet 与 manifest 的安装包在同一个 `try` 内，记录本次**创建**的
+  文件；任一异常即删除本次创建的文件后重抛。回滚只处理本次创建的路径，不误删调用前已存在的文件。
+- **孤立 parquet fail closed**：manifest 不存在但正式 parquet 已存在 → 直接拒绝，
+  不覆盖/删除/修改，不创建 manifest，不留临时文件。
+- **frozen manifest 结构校验**：索引字段前先校验顶层为 object、
+  `output_parquet_sha256` 为 64 位小写十六进制、`materializer_revision` 为 40 位小写十六进制；
+  畸形一律 `ValueError`，CLI 干净 `exit 1`，不泄漏 `KeyError`/`TypeError`。
+- **dirty generator 拒绝**：生成实现文件有未提交修改时**拒绝生成**
+  （不能用旧 revision 为未提交代码背书）。测试侧按审核指南 monkeypatch Git 查询，
+  另有 `test_dirty_generator_is_rejected` 显式验证。
+
+**零半成品实测**：首冻时注入 manifest 临时写入失败 / `os.replace` 失败 / 一般 `OSError`，
+三种情况均**完全回滚**（parquet 不存在、manifest 不存在、无临时文件）。
+
+**数据语义零变化**：parquet SHA-256 仍为
+`dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd`（逐字节相同）。
+`materializer_revision` 自然更新为 `7007f36`；canonical manifest 已基于该提交重新生成，
+路径仍为仓库相对形式，`/Users/` = False。最终 HEAD 幂等连跑两次 `exit=0` 且 mtime 不变。
+
+**M1.3b 仍只是半小时事实表**：`ScenarioBundle` 接线、连续切分、forecast 可见窗口与
+泄漏门禁属 **M1.3c**；`data/manifest/train.json` **仍不存在**，正式 `make train` 仍非零失败
+（原因已正确指向 M1.3），**未**产生 checkpoint；**M6 尚未开始**。
+
+## 7D. M1.3b 第一次审核返修（已被 7E 取代）
 
 **第一次人工审核未通过**（五个问题：最终 HEAD 幂等失败、docs-only 提交使冻结数据失效、
 manifest 不一致时先改写 parquet、完全相同也重写、路径不可移植；
