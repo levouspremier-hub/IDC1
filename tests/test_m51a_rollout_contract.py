@@ -235,8 +235,9 @@ def test_rejects_non_serializable_correction_info():
 
 # --- 5. 版本与常量 ---
 
-def test_contract_version_is_v6():
-    assert CONTRACT_VERSION_ID == "contract-v7"
+def test_contract_version_is_the_current_single_source():
+    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID != "contract-v7"
     assert CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 
@@ -458,11 +459,11 @@ def test_rejects_literal_v5_payload():
 
 
 def test_v5_payload_is_rejected_even_if_version_forwarded():
-    """只把版本号改成 v6 也不得被接受：v5 缺字段必须仍然报错，不得填默认值。"""
+    """只把版本号改成**当前**版本也不得被接受：v5 缺字段必须仍然报错，不得填默认值。"""
     payload = json.loads(json.dumps(V5_PAYLOAD))
-    payload["contract_version"] = "contract-v7"
+    payload["contract_version"] = CONTRACT_VERSION_ID
     for entry in payload["transitions"]:
-        entry["contract_version"] = "contract-v7"
+        entry["contract_version"] = CONTRACT_VERSION_ID
     with pytest.raises((ValueError, KeyError)):
         RolloutBuffer.from_dict(payload)
 

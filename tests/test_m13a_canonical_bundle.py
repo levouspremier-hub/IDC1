@@ -1,4 +1,14 @@
-"""M1.3a 测试：scenario provider 与 contracts.ScenarioBundle 类型统一。"""
+"""M1.3a 测试：scenario provider 与 contracts.ScenarioBundle 类型统一。
+
+**M1.3e 迁移**：契约升到 `contract-v8`，`synthetic: bool` 由显式的 `mode` 取代、
+自由 dict `source_hashes` 退役为结构化 `forecast_provenance`；
+`build_scenario_from_true` 改名为 `build_oracle_debug_scenario_from_truth`
+（必须显式 `oracle_debug=True`）。
+
+原来那两条「可见 truth 改变 bundle」的断言**没有删除、也没有反转**：它们改名为
+**oracle-debug** 语义——把 `[t, t+cutoff)` 真值当作预测**正是 oracle-debug 的定义**。
+正式 causal forecast 的 leakage 回归在 `tests/test_m13e_forecast_provenance.py`。
+"""
 
 from pathlib import Path
 
@@ -7,10 +17,11 @@ import pytest
 
 import contracts
 import scenario
+from contracts.models import ScenarioForecastProvenance
 from contracts.validators import validate_scenario
 from envs.idc_price_env import IDCPriceEnv20D, visible_window_slice
 from planning.snapshot_adapter import build_snapshot
-from scenario import build_scenario, build_scenario_from_true
+from scenario import build_oracle_debug_scenario_from_truth, build_scenario
 from scenario.scenario import SERIES_KEYS
 
 SIX_FORECAST_FIELDS = (
@@ -36,6 +47,12 @@ def _true(horizon: int = 24) -> dict[str, np.ndarray]:
     }
 
 
+def _oracle_debug(true: dict[str, np.ndarray], horizon: int = 24, cutoff: int = 4):
+    return build_oracle_debug_scenario_from_truth(
+        "train", "s", horizon, cutoff, true, oracle_debug=True
+    )
+
+
 # --- 1. 类型统一 ---
 
 def test_provider_returns_contract_type():
@@ -51,7 +68,7 @@ def test_no_local_duplicate_class():
     assert scenario.ScenarioBundle is contracts.ScenarioBundle
     src = Path("scenario/scenario.py").read_text(encoding="utf-8")
     assert "class ScenarioBundle" not in src, "本地重复类仍存在"
-    assert "build_scenario_from_true" in src  # 模块仍有实际内容
+    assert "build_oracle_debug_scenario_from_truth" in src  # 模块仍有实际内容
 
 
 # --- 2. 六类预测字段与元数据完整 ---
@@ -70,17 +87,25 @@ def test_all_six_forecast_fields_present(cutoff):
 
 
 def test_metadata_not_lost():
+    """元数据不再放在自由 dict 里：改为结构化 provenance。"""
     b = build_scenario("train", "s", 24, 4, synthetic=True, seed=3)
-    assert b.synthetic is True
-    assert isinstance(b.source_hashes, dict) and b.source_hashes, "source_hashes 不可为空"
-    assert "generator" in b.source_hashes
+    assert b.mode == "synthetic"
+    assert isinstance(b.forecast_provenance, ScenarioForecastProvenance)
+    assert b.generated_at
+    for field in SIX_FORECAST_FIELDS:
+        entry = getattr(b.forecast_provenance, field)
+        assert entry.series_name == field
+        assert entry.sources, f"{field} 的来源 digest 不可为空"
+        assert entry.method
 
 
-def test_from_true_requires_six_series():
-    b = build_scenario_from_true("train", "s", 24, 4, _true(24), synthetic=True)
+def test_oracle_debug_helper_covers_all_seven_series():
+    b = _oracle_debug(_true(24))
     assert isinstance(b, contracts.ScenarioBundle)
+    assert b.mode == "oracle_debug"
     assert len(b.carbon_forecast) == 4
-    assert set(SERIES_KEYS) == {"price", "load", "pv", "wind", "temperature", "carbon", "arrival"}
+    assert set(SERIES_KEYS) == {"price", "load", "pv", "wind", "temperature", "carbon",
+                               "arrival"}
 
 
 # --- 3. contracts.validators 显式拒绝 ---
@@ -96,33 +121,42 @@ def test_validator_rejects_bad_window_length():
         validate_scenario(bad)
 
 
-def test_validator_rejects_missing_source_hashes():
+def test_validator_rejects_missing_source_provenance():
+    """`source_hashes` 自由 dict 已退役；**没有来源 digest** 仍然必须失败。"""
     b = build_scenario("train", "s", 24, 4, synthetic=True, seed=5)
-    bad = b.model_copy(update={"source_hashes": {}})
+    payload = b.model_dump()
+    payload["forecast_provenance"]["carbon_forecast"]["sources"] = []
     with pytest.raises(ValueError, match="来源"):
-        validate_scenario(bad)
+        contracts.ScenarioBundle(**payload)
 
 
-# --- 4. 未来真值不泄漏（[t, t+cutoff) 语义） ---
+# --- 4. oracle-debug 语义下的可见/未来窗口（原 M1.3a 断言，改名保留） ---
 
 @pytest.mark.leakage
 def test_future_truth_mutation_does_not_change_bundle():
     true = _true(24)
-    before = build_scenario_from_true("train", "s", 24, 4, true, synthetic=True)
+    before = _oracle_debug(true)
     for k in SERIES_KEYS:
         true[k][10] = 9999.0  # 超出 cutoff=4
-    after = build_scenario_from_true("train", "s", 24, 4, true, synthetic=True)
+    after = _oracle_debug(true)
     for field in SIX_FORECAST_FIELDS:
         assert getattr(before, field) == getattr(after, field)
     assert before.content_hash() == after.content_hash()
 
 
 @pytest.mark.leakage
-def test_visible_truth_mutation_changes_bundle():
+def test_oracle_debug_visible_truth_mutation_changes_bundle():
+    """**oracle-debug 定义**：窗口内真值就是预测，所以它改变 bundle。
+
+    这条断言**不是**正式 forecast 的语义——正式 causal provider 只读
+    `[origin-48, origin)` 历史，其 future-truth mutation 回归见
+    `tests/test_m13e_forecast_provenance.py`（`@pytest.mark.leakage`）。
+    """
     true = _true(24)
-    before = build_scenario_from_true("train", "s", 24, 4, true, synthetic=True)
+    before = _oracle_debug(true)
+    assert before.mode == "oracle_debug"
     true["carbon"][2] = 9999.0  # 在 cutoff 内
-    after = build_scenario_from_true("train", "s", 24, 4, true, synthetic=True)
+    after = _oracle_debug(true)
     assert before.content_hash() != after.content_hash()
 
 
@@ -140,11 +174,11 @@ def test_provider_and_snapshot_share_cutoff_semantics():
     assert (end - start) <= cutoff
 
 
-# --- 6. 数据边界：合成 vs 真实 ---
+# --- 6. 数据边界：合成 / oracle-debug vs 正式 ---
 
 def test_synthetic_flagged_and_real_mode_blocked():
     b = build_scenario("train", "s", 24, 4, synthetic=True, seed=9)
-    assert b.synthetic is True
-    # 正式模式（无 M1.2 数据）必须显式失败，不得回退到合成
+    assert b.mode == "synthetic"
+    # 正式模式（无 M1.3 split/forecast）必须显式失败，不得回退到合成
     with pytest.raises(FileNotFoundError):
         build_scenario("train", "s", 24, 4, synthetic=False, manifest_dir="data/manifest")

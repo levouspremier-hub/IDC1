@@ -1,4 +1,10 @@
-"""M2.1 契约测试：JSON 往返、矩形/非负、单位、hash 键序无关、frozen。"""
+"""M2.1 契约测试：JSON 往返、矩形/非负、单位、hash 键序无关、frozen。
+
+**M1.3e 迁移**：`ScenarioBundle` 升到 `contract-v8`——自由 dict `source_hashes`
+退役为结构化 `forecast_provenance`（七个字段一一对应），`synthetic: bool`
+由显式 `mode` 取代。以下 fixture 因此显式提供 v8 provenance，
+**原有断言一条都未弱化**。
+"""
 
 import pytest
 from pydantic import ValidationError
@@ -12,24 +18,55 @@ from contracts import (
     TaskAllocation,
     TaskState,
 )
-from contracts.models import PlanningExogenousForecast
+from contracts.models import BUNDLE_FORECAST_FIELDS, PlanningExogenousForecast
 
 
-def _scenario(source_hashes: dict[str, str] | None = None) -> ScenarioBundle:
-    return ScenarioBundle(
-        split="train",
-        start="2026-01-01T00:00:00",
-        horizon=24,
-        forecast_cutoff=6,
-        price_forecast=[0.2] * 6,
-        load_forecast=[6000.0] * 6,
-        pv_forecast=[0.0] * 6,
-        wind_forecast=[0.0] * 6,
-        temperature_forecast=[28.0] * 6,
-        arrival_forecast=[0.0] * 6,
-        carbon_forecast=[0.0] * 6,
-        source_hashes=source_hashes or {"a": "x", "b": "y"},
+def _series_provenance(field: str) -> dict:
+    return dict(
+        series_name=field,
+        source_kind="synthetic",
+        method="test_fixture",
+        generated_at="2026-01-01T00:00:00+08:00",
+        information_cutoff_exclusive="2026-01-01T00:00:00+08:00",
+        target_start="2026-01-01T00:00:00+08:00",
+        target_end_exclusive="2026-01-01T06:00:00+08:00",
+        lookback_start=None,
+        lookback_end_exclusive=None,
+        model_name="test_fixture",
+        model_version="v1",
+        code_revision="a" * 40,
+        seed=None,
+        sources=[
+            {"role": "fixture", "logical_path": "tests/fixtures/none",
+             "sha256": "b" * 64}
+        ],
     )
+
+
+def _provenance(*, reverse: bool = False) -> dict:
+    fields = list(BUNDLE_FORECAST_FIELDS)
+    if reverse:
+        fields = fields[::-1]
+    return {field: _series_provenance(field) for field in fields}
+
+
+def _scenario(*, reverse_provenance: bool = False) -> ScenarioBundle:
+    return ScenarioBundle.model_validate({
+        "split": "train",
+        "start": "2026-01-01T00:00:00",
+        "horizon": 24,
+        "forecast_cutoff": 6,
+        "price_forecast": [0.2] * 6,
+        "load_forecast": [6000.0] * 6,
+        "pv_forecast": [0.0] * 6,
+        "wind_forecast": [0.0] * 6,
+        "temperature_forecast": [28.0] * 6,
+        "arrival_forecast": [0.0] * 6,
+        "carbon_forecast": [0.0] * 6,
+        "mode": "synthetic",
+        "generated_at": "2026-01-01T00:00:00+08:00",
+        "forecast_provenance": _provenance(reverse=reverse_provenance),
+    })
 
 
 def test_scenario_json_roundtrip():
@@ -40,8 +77,10 @@ def test_scenario_json_roundtrip():
 
 
 def test_scenario_hash_key_order_independent():
-    a = _scenario({"a": "x", "b": "y"})
-    b = _scenario({"b": "y", "a": "x"})
+    """hash 与 dict 键顺序无关（provenance 的键序同样不得影响）。"""
+    a = _scenario()
+    b = _scenario(reverse_provenance=True)
+    assert a.model_dump() == b.model_dump()
     assert a.content_hash() == b.content_hash()
 
 

@@ -3,7 +3,8 @@
 business = violation_task_steps（违规任务·步计数）、carbon = kgCO2e（排放质量），
 两者物理上不可能为负；负值必须被**明确拒绝**（不得裁剪为 0）。
 
-本卡**不提升** contract 版本：序列化 schema 不变，仍为 contract-v7。
+本卡**不提升** contract 版本：序列化 schema 不变。
+**M1.3e 迁移**：全仓唯一契约版本升至 `contract-v8`，本文件只把版本断言随之迁移。
 """
 
 import copy
@@ -45,10 +46,11 @@ def seed_state() -> Lagrangian:
 
 # --- 0. 前置：版本与 schema 不变 -------------------------------------------
 
-def test_contract_version_is_still_v7():
+def test_contract_version_is_still_the_single_current_version():
     from contracts import CONTRACT_VERSION_ID
 
-    assert CONTRACT_VERSION_ID == "contract-v7"
+    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID != "contract-v7"
     assert lag_mod.CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 

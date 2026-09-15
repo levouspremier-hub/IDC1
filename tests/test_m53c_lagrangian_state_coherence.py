@@ -1,7 +1,8 @@
-"""M5.3c 测试：拒绝「形态合法但 update() 不可能产生」的 contract-v7 乘子状态。
+"""M5.3c 测试：拒绝「形态合法但 update() 不可能产生」的乘子状态。
 
-本卡**不提升** contract 版本：state_dict() 的 schema 完全不变，
+M5.3c **不提升** contract 版本：state_dict() 的 schema 完全不变，
 只是补上状态内部自洽性的强制拒绝（此前会被静默接受）。
+**M1.3e 迁移**：全仓唯一契约版本升至 `contract-v8`，本文件只把版本断言随之迁移。
 """
 
 import copy
@@ -62,13 +63,14 @@ def assert_rejected(state: dict, match: str | None = None) -> None:
 
 # --- 0. 前置：schema 未变，合法状态仍被接受 -------------------------------
 
-def test_contract_version_is_still_v7():
+def test_contract_version_is_still_the_single_current_version():
     from contracts import CONTRACT_VERSION_ID
     from safe_rl_v2 import lagrangian as lag_mod
 
-    assert CONTRACT_VERSION_ID == "contract-v7"
+    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID != "contract-v7"
     assert lag_mod.CONTRACT_VERSION == CONTRACT_VERSION_ID
-    assert valid_state()["contract_version"] == "contract-v7"
+    assert valid_state()["contract_version"] == CONTRACT_VERSION_ID
 
 
 def test_state_dict_shape_is_unchanged():

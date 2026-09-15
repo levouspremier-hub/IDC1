@@ -15,6 +15,8 @@ import pytest
 import torch
 import yaml
 
+from contracts import CONTRACT_VERSION_ID
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TRAIN_MODULE = REPO_ROOT / "safe_rl_v2" / "train.py"
 ARTIFACTS = ("config.yaml", "metrics.parquet", "report.json", "figures", "manifest.json")
@@ -138,7 +140,7 @@ def test_report_is_not_dressed_up_as_a_real_experiment(synthetic_run):
 def test_config_records_everything_required_for_reproducibility(synthetic_run):
     config = yaml.safe_load((synthetic_run / "config.yaml").read_text(encoding="utf-8"))
     assert config["action_dim"] == 21
-    assert config["contract_version"] == "contract-v7"
+    assert config["contract_version"] == CONTRACT_VERSION_ID
 
     seeds = config["env_seed_kwargs"]
     for key in ("task_seed", "server_seed", "forecast_seed"):

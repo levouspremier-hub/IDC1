@@ -221,10 +221,11 @@ def test_updates_counter_and_log_per_constraint():
 
 # --- 4. 版本化持久化 ---
 
-def test_contract_version_is_v7():
+def test_contract_version_is_the_current_single_source():
     from contracts import CONTRACT_VERSION_ID
 
-    assert CONTRACT_VERSION_ID == "contract-v7"
+    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID != "contract-v7"
     assert lag_mod.CONTRACT_VERSION == CONTRACT_VERSION_ID
 
 

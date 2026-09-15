@@ -5,7 +5,12 @@ import pytest
 import torch
 
 from checkpointing import CURRENT_CONTRACT_VERSION, CheckpointVersionError, VersionedCheckpoint
-from contracts.models import ScenarioBundle
+from contracts.models import (
+    ArtifactDigest,
+    ForecastSeriesProvenance,
+    ScenarioBundle,
+    ScenarioForecastProvenance,
+)
 from envs.idc_price_env import IDCPriceEnv20D, visible_window_slice
 from planning.snapshot_adapter import build_snapshot
 
@@ -15,6 +20,45 @@ CURRENT_OBS_DIM = 6 + 10 + 6 * N_GROUPS  # 136
 FORECAST_GROUPS = 8
 EXPECTED_OBS_DIM = CURRENT_OBS_DIM + FORECAST_GROUPS * HORIZON  # 328
 FEATURE_ORDER = ("price", "temperature", "arrival", "pv", "wind", "carbon", "sin", "cos")
+
+# M1.3e：contract-v8 要求结构化 provenance（无 schema 的 `source_hashes` 已退役）。
+_FIXTURE_GENERATED_AT = "2026-01-01T00:00:00+08:00"
+
+
+def _fixture_series(field: str) -> ForecastSeriesProvenance:
+    """单个序列的夹具 provenance（**非正式**，mode=synthetic）。"""
+    return ForecastSeriesProvenance(
+        series_name=field,
+        source_kind="synthetic",
+        method="test_fixture",
+        generated_at=_FIXTURE_GENERATED_AT,
+        information_cutoff_exclusive=_FIXTURE_GENERATED_AT,
+        target_start=_FIXTURE_GENERATED_AT,
+        target_end_exclusive="2026-01-01T02:00:00+08:00",
+        lookback_start=None,
+        lookback_end_exclusive=None,
+        model_name="test_fixture",
+        model_version="v1",
+        code_revision="a" * 40,
+        seed=None,
+        sources=[
+            ArtifactDigest(role="fixture", logical_path="tests/fixtures/none",
+                           sha256="b" * 64)
+        ],
+    )
+
+
+def _fixture_provenance() -> ScenarioForecastProvenance:
+    """七个字段一一对应的测试夹具 provenance（**非正式**，mode=synthetic）。"""
+    return ScenarioForecastProvenance(
+        price_forecast=_fixture_series("price_forecast"),
+        load_forecast=_fixture_series("load_forecast"),
+        pv_forecast=_fixture_series("pv_forecast"),
+        wind_forecast=_fixture_series("wind_forecast"),
+        temperature_forecast=_fixture_series("temperature_forecast"),
+        carbon_forecast=_fixture_series("carbon_forecast"),
+        arrival_forecast=_fixture_series("arrival_forecast"),
+    )
 
 
 def _env(cutoff: int = 4, t: int = 0) -> IDCPriceEnv20D:
@@ -133,7 +177,8 @@ def test_out_of_window_wind_carbon_change_ignored(cutoff):
 # --- 4. 契约版本与旧 schema 拒绝 ---
 
 def test_contract_version_bumped():
-    assert CURRENT_CONTRACT_VERSION == "contract-v7"
+    assert CURRENT_CONTRACT_VERSION == "contract-v8"
+    assert CURRENT_CONTRACT_VERSION != "contract-v7"
 
 
 def test_old_and_unversioned_checkpoints_rejected(tmp_path):
@@ -203,6 +248,9 @@ def test_scenario_contract_schema_version_bumped():
         temperature_forecast=[20.0, 21.0],
         arrival_forecast=[0.0] * 2,
         carbon_forecast=[0.5, 0.6],
-        source_hashes={"a": "b"},
+        mode="synthetic",
+        generated_at=_FIXTURE_GENERATED_AT,
+        forecast_provenance=_fixture_provenance(),
     )
-    assert s.schema_version == "contract-v7"
+    assert s.schema_version == "contract-v8"
+    assert s.schema_version != "contract-v7"

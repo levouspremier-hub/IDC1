@@ -1,10 +1,16 @@
-"""M1.3 场景提供器测试：可见预测 + 未来信息泄漏回归（M1.3a 统一为 contracts.ScenarioBundle）。"""
+"""M1.3 场景提供器测试：可见预测 + 未来信息泄漏回归。
+
+**M1.3e 迁移**：契约升到 `contract-v8`；`build_scenario_from_true` 改名为
+`build_oracle_debug_scenario_from_truth`（必须显式 `oracle_debug=True`），
+其可见窗口断言保留为 **oracle-debug** 语义（未删除、未反转）。
+正式 causal forecast 的 leakage 回归在 `tests/test_m13e_forecast_provenance.py`。
+"""
 
 import numpy as np
 import pytest
 
 import contracts
-from scenario import ScenarioBundle, build_scenario, build_scenario_from_true
+from scenario import ScenarioBundle, build_oracle_debug_scenario_from_truth, build_scenario
 
 FORECAST_FIELDS = (
     "price_forecast",
@@ -29,6 +35,12 @@ def _true_arrays(horizon: int = 24) -> dict[str, np.ndarray]:
     }
 
 
+def _oracle_debug(true: dict[str, np.ndarray], horizon: int = 24, cutoff: int = 4):
+    return build_oracle_debug_scenario_from_truth(
+        "train", "start", horizon, cutoff, true, oracle_debug=True
+    )
+
+
 def test_scenario_type_is_contract():
     assert ScenarioBundle is contracts.ScenarioBundle
 
@@ -39,28 +51,34 @@ def test_synthetic_bundle_shape():
     assert b.horizon == 24 and b.forecast_cutoff == 6
     for field in FORECAST_FIELDS:
         assert len(getattr(b, field)) == 6
-    assert b.synthetic is True
+    assert b.mode == "synthetic"
     assert len(b.content_hash()) == 64
 
 
 @pytest.mark.leakage
 def test_future_truth_mutation_does_not_change_forecast():
     true = _true_arrays(24)
-    before = build_scenario_from_true("train", "start", 24, 4, true)
+    before = _oracle_debug(true)
     # 篡改未来真值 t=20（超出 forecast_cutoff=4），不得影响可见预测
     true["price"][20] = 9999.0
     true["load"][20] = 0.0
-    after = build_scenario_from_true("train", "start", 24, 4, true)
+    after = _oracle_debug(true)
     for field in FORECAST_FIELDS:
         assert getattr(before, field) == getattr(after, field)
     assert before.content_hash() == after.content_hash()
 
 
-def test_visible_forecast_mutation_does_change_forecast():
+def test_oracle_debug_visible_forecast_mutation_does_change_forecast():
+    """**oracle-debug 定义**：窗口内真值即预测，因此它改变 bundle。
+
+    这不代表正式 forecast 的语义；正式 causal provider 的 future-truth
+    mutation 回归见 `tests/test_m13e_forecast_provenance.py`。
+    """
     true = _true_arrays(24)
-    before = build_scenario_from_true("train", "start", 24, 4, true)
+    before = _oracle_debug(true)
+    assert before.mode == "oracle_debug"
     true["price"][2] = 9999.0  # 在 forecast_cutoff 内，可见
-    after = build_scenario_from_true("train", "start", 24, 4, true)
+    after = _oracle_debug(true)
     assert before.content_hash() != after.content_hash()
 
 

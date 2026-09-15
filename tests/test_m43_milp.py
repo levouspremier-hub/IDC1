@@ -1,8 +1,55 @@
 """M4.3 窗口工具测试（旧单步 MILP 用例已于 M4.4b 随该路径退役）。"""
 
 
-from contracts.models import PlanningExogenousForecast, ScenarioBundle, SystemSnapshot, TaskState
+from contracts.models import (
+    ArtifactDigest,
+    ForecastSeriesProvenance,
+    PlanningExogenousForecast,
+    ScenarioBundle,
+    ScenarioForecastProvenance,
+    SystemSnapshot,
+    TaskState,
+)
 from planning.window import compute_window
+
+# M1.3e：contract-v8 要求结构化 provenance（无 schema 的 `source_hashes` 已退役）。
+_FIXTURE_GENERATED_AT = "2026-01-01T00:00:00+08:00"
+
+
+def _fixture_series(field: str) -> ForecastSeriesProvenance:
+    """单个序列的夹具 provenance（**非正式**，mode=synthetic）。"""
+    return ForecastSeriesProvenance(
+        series_name=field,
+        source_kind="synthetic",
+        method="test_fixture",
+        generated_at=_FIXTURE_GENERATED_AT,
+        information_cutoff_exclusive=_FIXTURE_GENERATED_AT,
+        target_start=_FIXTURE_GENERATED_AT,
+        target_end_exclusive="2026-01-01T04:00:00+08:00",
+        lookback_start=None,
+        lookback_end_exclusive=None,
+        model_name="test_fixture",
+        model_version="v1",
+        code_revision="a" * 40,
+        seed=None,
+        sources=[
+            ArtifactDigest(role="fixture", logical_path="tests/fixtures/none",
+                           sha256="b" * 64)
+        ],
+    )
+
+
+def _provenance() -> ScenarioForecastProvenance:
+    """七个字段一一对应的测试夹具 provenance（**非正式**，mode=synthetic）。"""
+    return ScenarioForecastProvenance(
+        price_forecast=_fixture_series("price_forecast"),
+        load_forecast=_fixture_series("load_forecast"),
+        pv_forecast=_fixture_series("pv_forecast"),
+        wind_forecast=_fixture_series("wind_forecast"),
+        temperature_forecast=_fixture_series("temperature_forecast"),
+        carbon_forecast=_fixture_series("carbon_forecast"),
+        arrival_forecast=_fixture_series("arrival_forecast"),
+    )
 
 
 def _forecast() -> ScenarioBundle:
@@ -18,7 +65,9 @@ def _forecast() -> ScenarioBundle:
         temperature_forecast=[28.0] * 24,
         arrival_forecast=[0.0] * 24,
         carbon_forecast=[0.0] * 24,
-        source_hashes={"x": "y"},
+        mode="synthetic",
+        generated_at=_FIXTURE_GENERATED_AT,
+        forecast_provenance=_provenance(),
     )
 
 

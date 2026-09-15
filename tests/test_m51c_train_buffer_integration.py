@@ -1,4 +1,4 @@
-"""M5.1c 测试：dry_run_update 真实消费 contract-v7 RolloutBuffer，采样 RNG 显式可注入。
+"""M5.1c 测试：dry_run_update 真实消费当前契约的 RolloutBuffer，采样 RNG 显式可注入。
 
 本卡不测 PPO 数学，也不声称训练有效：dry-run 仍只是「闭环可更新」的冒烟验证。
 """

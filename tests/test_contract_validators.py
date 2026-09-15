@@ -1,4 +1,9 @@
-"""M2.2 跨契约校验器测试：每种错误明确失败并指出具体字段。"""
+"""M2.2 跨契约校验器测试：每种错误明确失败并指出具体字段。
+
+**M1.3e 迁移**：`ScenarioBundle` 升到 `contract-v8`，`source_hashes` 自由 dict
+退役为结构化 `forecast_provenance`；「缺少来源即失败」的断言**保留**，
+只是来源现在由结构化 provenance 承载，**未弱化**。
+"""
 
 import pytest
 
@@ -9,7 +14,7 @@ from contracts import (
     SystemSnapshot,
     TaskAllocation,
 )
-from contracts.models import PlanningExogenousForecast
+from contracts.models import BUNDLE_FORECAST_FIELDS, PlanningExogenousForecast
 from contracts.validators import (
     validate_dispatch_proposal,
     validate_dispatch_result,
@@ -17,6 +22,33 @@ from contracts.validators import (
     validate_snapshot,
     validate_task_allocation,
 )
+
+GENERATED_AT = "2026-01-01T00:00:00+08:00"
+
+
+def _provenance() -> dict:
+    return {
+        field: dict(
+            series_name=field,
+            source_kind="synthetic",
+            method="test_fixture",
+            generated_at=GENERATED_AT,
+            information_cutoff_exclusive=GENERATED_AT,
+            target_start=GENERATED_AT,
+            target_end_exclusive="2026-01-01T06:00:00+08:00",
+            lookback_start=None,
+            lookback_end_exclusive=None,
+            model_name="test_fixture",
+            model_version="v1",
+            code_revision="a" * 40,
+            seed=None,
+            sources=[
+                {"role": "fixture", "logical_path": "tests/fixtures/none",
+                 "sha256": "b" * 64}
+            ],
+        )
+        for field in BUNDLE_FORECAST_FIELDS
+    }
 
 
 def _scenario(**overrides) -> ScenarioBundle:
@@ -32,7 +64,9 @@ def _scenario(**overrides) -> ScenarioBundle:
         temperature_forecast=[28.0] * 6,
         arrival_forecast=[0.0] * 6,
         carbon_forecast=[0.0] * 6,
-        source_hashes={"a": "x"},
+        mode="synthetic",
+        generated_at=GENERATED_AT,
+        forecast_provenance=_provenance(),
     )
     kwargs.update(overrides)
     return ScenarioBundle(**kwargs)  # type: ignore[arg-type]
@@ -83,9 +117,11 @@ def test_scenario_length_mismatch_fails():
 
 
 def test_scenario_missing_source_fails():
-    s = _scenario(source_hashes={})
+    """没有来源 digest 的场景必须失败（`source_hashes` 退役后仍成立）。"""
+    provenance = _provenance()
+    provenance["price_forecast"]["sources"] = []
     with pytest.raises(ValueError, match="来源"):
-        validate_scenario(s)
+        _scenario(forecast_provenance=provenance)
 
 
 def test_scenario_valid_passes():
