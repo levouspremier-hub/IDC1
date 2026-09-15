@@ -8,7 +8,7 @@
   "frequency": "30min",
   "frozen_at_utc": "2026-09-15T00:00:00+00:00",
   "leap_day_split": "train",
-  "materializer_revision": "1ab6fcacdc86e3114942ca2bc0c956a73acec37e",
+  "materializer_revision": "1d63c643c361183c17e8e208b36d3ac7dd151b35",
   "no_gap": true,
   "no_overlap": true,
   "randomized": false,
@@ -111,7 +111,7 @@
     "row_start": 0,
     "split": "train",
     "start": "2024-01-01T00:00:00+08:00",
-    "statistics_implementation_revision": "1ab6fcacdc86e3114942ca2bc0c956a73acec37e"
+    "statistics_implementation_revision": "1d63c643c361183c17e8e208b36d3ac7dd151b35"
   },
   "unavailable_not_materialized": {
     "arrival": "unavailable: 未冻结；不得用默认曲线/常数/全零/未来真值填充",
