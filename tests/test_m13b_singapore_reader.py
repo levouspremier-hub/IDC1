@@ -813,6 +813,22 @@ def test_frozen_manifest_and_parquet_agree_after_materialization(tmp_path):
     ).hexdigest()
 
 
+@pytest.fixture(autouse=True)
+def _assume_clean_generator(monkeypatch, request):
+    """默认假定生成实现文件是干净的。
+
+    真实工作树在开发过程中本来就可能带着未提交修改；若每个物化测试都走真实 git
+    查询，测试套件会在开发中途整体变红。审核指南允许 monkeypatch Git 状态查询，
+    故此处默认置为干净，并由 `test_dirty_generator_is_rejected` **显式**验证拒绝路径。
+    """
+    if request.node.name == "test_dirty_generator_is_rejected":
+        return
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+
+
 # --- 10. 第二次返修：首冻失败原子性、外部 manifest 严格校验、dirty generator ---
 
 def _materialize_kwargs(fixture, out):

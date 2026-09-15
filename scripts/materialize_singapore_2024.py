@@ -56,22 +56,77 @@ DEFAULT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "data/processed/singapore_2024"
 
 
+def _git(*args: str) -> str:
+    """运行只读 git 命令（便于测试 monkeypatch；不写任何仓库状态）。"""
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def _generator_is_dirty() -> bool:
+    """生成实现文件是否有**未提交**修改。
+
+    dirty 时拒绝生成：否则会用旧的 `materializer_revision` 为未提交代码
+    产出的内容背书，provenance 就是假的。
+    """
+    status = _git("status", "--porcelain", "--", *MATERIALIZER_SOURCE_PATHS)
+    return bool(status.strip())
+
+
 def resolve_materializer_revision() -> str:
     """**数据生成实现**的 revision —— 由 Git 解析，指向最后修改生成实现的提交。
 
     刻意**不**用「当前 HEAD」：否则任何后续提交（哪怕只改文档）都会让已冻结的
     canonical manifest 失效，破坏幂等。**不得**由调用者传入未经验证的 revision。
+
+    生成实现文件存在**未提交修改**时拒绝（`_generator_is_dirty`）。
     """
+    if _generator_is_dirty():
+        raise ValueError(
+            "生成实现文件存在未提交修改（未提交的代码不得为冻结数据背书）；"
+            f"请先提交：{list(MATERIALIZER_SOURCE_PATHS)}"
+        )
     try:
-        revision = subprocess.run(
-            ["git", "log", "-1", "--format=%H", "--", *MATERIALIZER_SOURCE_PATHS],
-            cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.strip()
+        revision = _git("log", "-1", "--format=%H", "--", *MATERIALIZER_SOURCE_PATHS).strip()
     except (subprocess.CalledProcessError, OSError) as error:  # pragma: no cover
         raise ValueError(f"无法解析 materializer revision：{error}") from error
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise ValueError(f"materializer revision 不是有效的 Git 提交：{revision!r}")
     return revision
+
+
+_HEX64 = set("0123456789abcdef")
+
+
+def _validated_frozen_manifest(manifest_path: Path) -> dict | None:
+    """读取并**校验结构** frozen manifest；畸形一律 `ValueError`（不得泄漏 KeyError）。"""
+    if not manifest_path.exists():
+        return None
+    try:
+        frozen = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"frozen canonical manifest 不可读：{error}") from error
+    if not isinstance(frozen, dict):
+        raise ValueError(
+            f"frozen canonical manifest 顶层必须是 object，实际 {type(frozen).__name__}"
+        )
+    digest = frozen.get("output_parquet_sha256")
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in _HEX64 for c in digest):
+        raise ValueError(
+            "frozen canonical manifest 的 output_parquet_sha256 必须是 64 位小写十六进制字符串，"
+            f"实际 {digest!r}"
+        )
+    revision = frozen.get("materializer_revision")
+    revision_ok = (
+        isinstance(revision, str) and len(revision) == 40
+        and all(c in _HEX64 for c in revision)
+    )
+    if not revision_ok:
+        raise ValueError(
+            "frozen canonical manifest 的 materializer_revision 必须是 40 位小写十六进制提交，"
+            f"实际 {revision!r}"
+        )
+    return frozen
 
 
 def logical_repo_path(path: Path | str) -> str:
@@ -170,12 +225,6 @@ def build_manifest(
     }
 
 
-def _read_frozen_manifest(manifest_path: Path) -> dict | None:
-    if not manifest_path.exists():
-        return None
-    return json.loads(manifest_path.read_text(encoding="utf-8"))
-
-
 def _require_same_frozen_fields(frozen: dict, candidate: dict) -> None:
     """除 `output_parquet_sha256`（与 parquet 本体绑定）外，冻结字段必须完全一致。
 
@@ -246,14 +295,16 @@ def materialize(
             source_manifest_path=source_manifest_path,
             frozen_at_utc=frozen_time,
         )
-        frozen = _read_frozen_manifest(manifest_path)
+        frozen = _validated_frozen_manifest(manifest_path)
 
-        if frozen is None:
-            # 首次冻结：原子替换安装 parquet 与 manifest
-            os.replace(temp_parquet, parquet_path)
-            installed_parquet = True
-            _atomic_write_text(manifest_path, _canonical_json(candidate_manifest) + "\n")
-        else:
+        if frozen is None and parquet_path.exists():
+            # 首冻目标已存在来源不明的 parquet：拒绝把别人的产物当自己的覆盖目标。
+            raise ValueError(
+                f"canonical manifest 不存在，但 {parquet_path} 已存在；"
+                "拒绝把来源不明的既有 parquet 当作首次冻结的可覆盖目标"
+            )
+
+        if frozen is not None:
             # 已有冻结 manifest：先把**全部**冻结字段比完，再决定是否落盘。
             _require_same_frozen_fields(frozen, candidate_manifest)
             frozen_sha = frozen["output_parquet_sha256"]
@@ -268,6 +319,20 @@ def materialize(
                 # 正式 parquet 缺失/损坏：仅在候选 hash 与冻结值相符时原子恢复
                 os.replace(temp_parquet, parquet_path)
                 installed_parquet = True
+        else:
+            # 首次冻结：两个产物都安装；**任一失败即回滚本次已安装的文件**。
+            # 回滚只处理**本次创建**的路径（首冻时两者都不存在，故安全）。
+            created: list[Path] = []
+            try:
+                os.replace(temp_parquet, parquet_path)
+                installed_parquet = True
+                created.append(parquet_path)
+                _atomic_write_text(manifest_path, _canonical_json(candidate_manifest) + "\n")
+                created.append(manifest_path)
+            except BaseException:
+                for path in created:
+                    path.unlink(missing_ok=True)
+                raise
     finally:
         if not installed_parquet:
             temp_parquet.unlink(missing_ok=True)
