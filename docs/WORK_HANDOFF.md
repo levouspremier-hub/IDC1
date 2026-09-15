@@ -219,7 +219,55 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7I. M1.3d-R2 第二轮返修：外部字段类型审计 + 审计账本勘误（等待人工复审）
+## 7J. M1.3d-R3 第三轮返修：冻结 schema 的键集合精确性（等待人工复审）
+
+**M1.3d 第三轮审核不通过**，问题与修正（详见 `docs/task_cards/M1.3d.md` §13）：
+
+- **冻结 schema 只校验已知字段的值，不校验键集合的精确性**，于是「新增/额外的未声明
+  字段」被静默接受。实测被接受的：`splits` 增加第四项 `shadow_test`；
+  split entry 增加 `randomized_indices`/`source`/`ready`；
+  `train_only_statistics_source` 增加未知键；**顶层 manifest** 增加未知字段。
+- **修复**：新增 `_require_exact_keys()`，对**顶层 manifest（23 项）、`splits`（恰
+  train/validation/test）、每个 split entry（恰 5 项）、`readiness`、
+  `train_only_statistics`、每列 statistics entry、`train_only_statistics_source`（9 项）、
+  `unavailable_not_materialized`** 全部强制**精确键集合**。
+  **未知字段不再静默通过 —— 未来扩展必须 bump `schema`。**
+- 改前 **23 failed**（全部 `DID NOT RAISE`）；改后
+  `tests/test_m13d_splits.py` **246 非 slow + 1 slow 全绿**；
+  `make check` **exit 0**（1586 passed）；`make smoke` **exit 0**；
+  `make train` 仍 **exit 2**、不回退 synthetic、无 checkpoint、正式 split 名未创建。
+
+**审计账本修正（本轮）**：
+
+- `3327346..caf0c9d` **实际为 15 个提交**（不是 14 —— 上轮少算了 R2 的开卡提交 `3c851b1`）。
+- **R2 实际为 7 个提交**（不是「4 + 2」）：`3c851b1 0b18471 1ab6fca 4a64077 427528e
+  84e6e72 caf0c9d`。
+- 删除「记录自身无法列全属正常」这类不稳定说法，改用可稳定复算的写法：
+  **截至父提交 `<已知SHA>` 共 N 个；包含本次文档提交后为 N+1**。
+
+**最终 split manifest**：`materializer_revision` = `1d63c64`
+（`1d63c643c361183c17e8e208b36d3ac7dd151b35`）；SHA-256 = `a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27`；
+最终 HEAD 上复跑物化命令两次均 `exit=0`，bytes/sha/`mtime_ns` 不变。
+
+**上游未变**：`singapore_2024.json` `d4e24d6f…`、
+`singapore_2024_half_hour.json` `e6484d6b…`、`half_hour.parquet` `dec76ea2…`；
+raw 与 `configs/frozen_refs/refs.json` 未动；split 边界与行数未变。
+
+**回滚（由新到旧；已在临时 detached worktree 中只读验证逐树等于 `3327346`）**：
+
+```bash
+git revert e186ce4 1d63c64 7f8d169 50c19f4 caf0c9d 84e6e72 427528e \
+           4a64077 1ab6fca 0b18471 3c851b1 e3aafdc 373b392 37ca45b \
+           076923b 2c0b8c1 6a2ca5d 45e5a29 d60f597
+```
+
+**截至父提交 `e186ce4`，该链共 19 个提交；包含本次交接提交后为 21 个
+（另含证据提交 `ffb1f06`）。回滚必须由新到旧** —— 实测由旧到新会逐步冲突。
+
+**M1.3e 尚未开始**：`forecast_ready=false`，正式 `ScenarioBundle` 与训练**仍 blocked**；
+四项缺口仍 unavailable。
+
+## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
 **M1.3d 第二轮审核不通过**，问题与修正（详见 `docs/task_cards/M1.3d.md` §12）：
 
