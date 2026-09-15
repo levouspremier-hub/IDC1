@@ -2,7 +2,13 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i **第三次返修**实现终点 `2cab5a1`
+> ⚠️ **当前工作分支**：`p4-safeppo-m51a-rollout-contract-m12-integration`（M1.2e 整合分支，
+> 从 `04296db` 起，M1.2 数据链**已整合**，等待人工审查是否合回）。
+> 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
+>
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`，M1.2e 实现终点 `3e9491a`
+>
+> 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
 > **M5.4i 已连续三轮人工审核未通过**，已三轮返修，**仍等待再次人工审核**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
@@ -212,6 +218,42 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 一次抽到全部 `distinct=1` 就能让门禁通过。返修消除了「证据不足却放行」（fail open），
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
+
+## 7B. M1.2e：冻结数据链**已整合**（独立分支，等待人工审查是否合回）
+
+`docs/task_cards/M1.2e.md`。已获人工批准执行**方案 A**。
+
+- **整合分支**：`p4-safeppo-m51a-rollout-contract-m12-integration`，起点 `04296db`。
+- **20 个源提交按序移植完毕**（源→整合 SHA 完整映射见任务卡 §4）：
+  M1.2a `a4a788c`…`b77594e` → `88adbde`…`e33d26c`；
+  M1.2b `05e7034`…`7d04d3d` → `f46cc34`…`476aa4f`；
+  M1.2c `16ee77b`…`d72b192` → `df608d9`…`a475ce3`。
+  **无空提交、无 `--skip`、无授权外冲突。**
+- **实际发生 3 次冲突**（`.gitignore` 自动合并，无需人工）：
+  1. `0731c92` × `data/raw/README.md` —— 采用 p1 的冻结叙述，另立 §1.1–§1.3 保留
+     p4 的只读语义、语义隔离与「未验证 ≠ 已证明不存在」；
+  2. `0731c92` × `docs/task_cards/M1.2.md` —— p1 的验收记录与 p4 的认知保真修正
+     （`53b54f9`）**同时保留**，并标注 raw freeze ≠ ScenarioBundle、M1.3 未完成；
+  3. `0d4ed73` × `data/raw/README.md` —— **同一文件再次冲突**（纯追加），两块都保留。
+  > **这证实了 M1.2d 的勘误 2**：`merge-tree` 只预测「最终树」的 2 个冲突文件，
+  > **不能**用于推断逐提交的冲突次数。
+- **逐字节一致**：`data/manifest/singapore_2024.json` 等 **8 个文件**与
+  `p1-data-contracts` blob 完全相同（manifest `cmp` exit 0）。
+- **分阶段验收**：M1.2a 端点 **7 passed**、M1.2b 端点 **16 passed**、
+  M1.2c 端点 **22 passed**（均在临时 `git worktree` 中执行，未移动任何分支指针）。
+- **raw 只读核验**：`--verify` exit 0，四个文件的 SHA-256/字节数/mtime
+  **整合前后完全一致**；未联网、未改 manifest、未生成新时间戳。
+- **不可回退验收**：`make check` exit 0（**1235 passed**），`make smoke` exit 0，
+  contract-v7 / 21 维动作 / 旧 23 维拒绝 / canonical `ScenarioBundle` 全部保持。
+- **原三个分支指针均未移动**：`p4-safeppo-m51a-rollout-contract` = `04296db`、
+  `p1-data-contracts` = `d72b192`、`paper-baseline` = `787a3c8`。
+
+**M1.2 raw freeze 已进入当前累计链，但这仍不等于 M1.3 或正式训练可用**：
+`data/manifest/train.json` **仍不存在**，正式 `make train` 仍明确失败（exit 2，
+**不**回退合成数据），未产生任何 checkpoint。**M6 尚未开始。**
+
+**下一步：M1.3b**（半小时 canonical reader、单位与时间对齐）。
+整合分支**尚未合回** `p4-safeppo-m51a-rollout-contract`，需人工批准。
 
 ## 7A. M1.2d：冻结数据链跨分支整合审计（只读，**未实际整合**）
 
