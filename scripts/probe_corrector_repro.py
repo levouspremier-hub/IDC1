@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import shlex
 import subprocess
 import sys
@@ -645,6 +647,85 @@ PROVENANCE_KEYS = (
 # 负载 / 机器签名必须**完整**具备的键（M5.4i 第二次返修）
 LOAD_KEYS = ("mode", "concurrency", "program", "load_injected")
 MACHINE_KEYS = ("platform", "machine", "python", "cpu_count")
+# 负载模式的合法取值与语义约束（M5.4i 第三次返修）
+LOAD_MODES = ("none", "hogs")
+# digest 的真实格式：64 位小写十六进制 SHA-256
+SHA256_HEX_RE = re.compile(r"^[0-9a-f]{64}$")
+BUDGET_KEYS = ("production_corrector_time_limit_s", "effective_corrector_time_limit_s")
+
+
+def _strict_int(value) -> int | None:
+    """**非 bool** 的整数；bool / 字符串 / 浮点 / NaN / Inf 一律 `None`。
+
+    不得用 `int()` 把 `6.9`、`"6"`、`True` 静默截断成合法证据。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _strict_finite_float(value) -> float | None:
+    """**非 bool** 的有限实数；bool 显式拒绝，NaN/Infinity 拒绝。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _strict_nonempty_str(value) -> str | None:
+    """非空字符串；其他类型一律 `None`（不做 `str()` 洗白）。"""
+    return value if isinstance(value, str) and value else None
+
+
+def _strict_sha256(value) -> str | None:
+    """校验 digest 的真实格式：64 位小写十六进制 SHA-256。"""
+    if isinstance(value, str) and SHA256_HEX_RE.match(value):
+        return value
+    return None
+
+
+def _strict_provenance_scalar(key, value):
+    """provenance 必须是**标量**：预算为有限实数（bool 不算），来源为非空字符串。"""
+    if key in BUDGET_KEYS:
+        return _strict_finite_float(value)
+    return _strict_nonempty_str(value)
+
+
+def _strict_load(value) -> dict | None:
+    """`load` 必须键齐全**且语义自洽**；不合法返回 `None`。"""
+    if not isinstance(value, dict) or any(k not in value for k in LOAD_KEYS):
+        return None
+    mode = value["mode"]
+    if mode not in LOAD_MODES:
+        return None
+    concurrency = _strict_int(value["concurrency"])
+    if concurrency is None or concurrency < 0:
+        return None
+    injected = value["load_injected"]
+    if not isinstance(injected, bool):
+        return None
+    if mode == "none":
+        if concurrency != 0 or injected is not False:
+            return None
+    else:  # hogs
+        if concurrency < 1 or injected is not True:
+            return None
+        if _strict_nonempty_str(value["program"]) is None:
+            return None
+    return {key: value[key] for key in LOAD_KEYS}
+
+
+def _strict_machine(value) -> dict | None:
+    """`machine` 的三个文本字段必须非空，`cpu_count` 必须为正整数。"""
+    if not isinstance(value, dict) or any(k not in value for k in MACHINE_KEYS):
+        return None
+    for key in ("platform", "machine", "python"):
+        if _strict_nonempty_str(value[key]) is None:
+            return None
+    cpu_count = _strict_int(value["cpu_count"])
+    if cpu_count is None or cpu_count <= 0:
+        return None
+    return {key: value[key] for key in MACHINE_KEYS}
 
 
 def _coerce_int(value) -> int | None:
@@ -703,12 +784,14 @@ def _read_batch(path: Path, failures: list) -> dict | None:
     for raw in table["status"].tolist():
         if raw is None:
             continue
-        try:
-            stage_statuses.append(int(raw))
-        except (TypeError, ValueError, OverflowError):
+        # 必须是**有限整数**：0.5 / "0" / True / NaN / Infinity 一律失败
+        # （`int(0.5)` 会截断成 0，被误当作「非 time-limit」，故不得用宽松 int()）。
+        status_value = _strict_int(raw)
+        if status_value is None:
             _aggregation_failure(failures, "summary_parquet_malformed_status",
                                  batch=batch, detail=f"status={raw!r}")
             return None
+        stage_statuses.append(status_value)
 
     return {
         "path": path, "batch": batch,
@@ -727,33 +810,46 @@ def _check_batch(artifacts: dict, failures: list) -> dict | None:
     if manifest.get("status") != "success":
         _aggregation_failure(failures, "manifest_status_not_success",
                              batch=batch, detail=str(manifest.get("status")))
-    run_id = manifest.get("run_id")
-    if not isinstance(run_id, str) or not run_id:
+    run_id = _strict_nonempty_str(manifest.get("run_id"))
+    if run_id is None:
         _aggregation_failure(failures, "manifest_run_id_missing", batch=batch)
-        run_id = None
-    revision = manifest.get("revision")
-    if not isinstance(revision, str) or not revision:
+    elif run_id != artifacts["path"].name:
+        # 输入身份（目录名）必须与账本身份一致，否则无法追溯是哪一个 run
+        _aggregation_failure(failures, "manifest_run_id_mismatch", batch=batch,
+                             detail=f"manifest.run_id={run_id!r} 目录名="
+                                    f"{artifacts['path'].name!r}")
+    revision = _strict_nonempty_str(manifest.get("revision"))
+    if revision is None:
         _aggregation_failure(failures, "manifest_revision_missing", batch=batch)
-        revision = None
 
     # --- 三方恒等：config == report == manifest，逐字段 ---
     provenance: dict = {}
     for key in PROVENANCE_KEYS:
-        values: list = []
+        raw_values: list = []
         for obj, label in ((config, "config"), (report, "report"), (manifest, "manifest")):
             if key not in obj:
                 _aggregation_failure(failures, "manifest_provenance_missing",
                                      batch=batch, detail=f"{label} 缺少 {key}")
-                values = []
+                raw_values = []
                 break
-            values.append(obj[key])
-        if not values:
+            raw_values.append(obj[key])
+        if not raw_values:
+            provenance[key] = None
             continue
-        if any(value != values[0] for value in values[1:]):
+        # 每一处都必须是**标量**；容器/bool/NaN/Inf/空串一律不合法
+        scalars = [_strict_provenance_scalar(key, value) for value in raw_values]
+        if any(value is None for value in scalars):
+            _aggregation_failure(failures, "provenance_not_scalar", batch=batch,
+                                 detail=f"{key}: config={raw_values[0]!r} "
+                                        f"report={raw_values[1]!r} "
+                                        f"manifest={raw_values[2]!r}")
+            provenance[key] = None
+            continue
+        if any(value != scalars[0] for value in scalars[1:]):
             _aggregation_failure(failures, "provenance_inconsistent", batch=batch,
-                                 detail=f"{key}: config={values[0]!r} report={values[1]!r} "
-                                        f"manifest={values[2]!r}")
-        provenance[key] = values[0]
+                                 detail=f"{key}: config={scalars[0]!r} report={scalars[1]!r} "
+                                        f"manifest={scalars[2]!r}")
+        provenance[key] = scalars[0]
 
     # --- 单批门禁 ---
     gate = report.get("release_gate")
@@ -775,28 +871,14 @@ def _check_batch(artifacts: dict, failures: list) -> dict | None:
         observations = []
 
     # --- load / machine 签名（必须是**完整**的 dict）---
-    load = report.get("load")
-    if not isinstance(load, dict) or not load:
+    load = _strict_load(report.get("load"))
+    if load is None:
         _aggregation_failure(failures, "load_signature_invalid", batch=batch,
-                             detail=f"load 不是非空 dict：{load!r}")
-        load = None
-    else:
-        absent = [k for k in LOAD_KEYS if k not in load]
-        if absent:
-            _aggregation_failure(failures, "load_signature_invalid", batch=batch,
-                                 detail=f"load 缺少 {absent}")
-            load = None
-    machine = report.get("machine")
-    if not isinstance(machine, dict) or not machine:
+                             detail=f"load 不合法：{report.get('load')!r}")
+    machine = _strict_machine(report.get("machine"))
+    if machine is None:
         _aggregation_failure(failures, "machine_signature_invalid", batch=batch,
-                             detail=f"machine 不是非空 dict：{machine!r}")
-        machine = None
-    else:
-        absent = [k for k in MACHINE_KEYS if k not in machine]
-        if absent:
-            _aggregation_failure(failures, "machine_signature_invalid", batch=batch,
-                                 detail=f"machine 缺少 {absent}")
-            machine = None
+                             detail=f"machine 不合法：{report.get('machine')!r}")
 
     # --- 逐观测：类型、样本量、digest、来源、预算 ---
     digests: list[str] = []
@@ -805,47 +887,61 @@ def _check_batch(artifacts: dict, failures: list) -> dict | None:
             _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
                                  detail=f"observation 不是 dict（{type(observation).__name__}）")
             continue
-        source_label = str(observation.get("source"))
-        processes = _coerce_int(observation.get("processes"))
-        steps = _coerce_int(observation.get("steps"))
-        if processes is None or steps is None:
-            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
-                                 detail=f"{source_label} processes/steps 不可转换："
-                                        f"{observation.get('processes')!r}/"
+        raw_source = observation.get("source")
+        source_label = raw_source if isinstance(raw_source, str) else repr(raw_source)
+
+        # processes / steps：必须是非 bool 的正整数（不得截断 6.9 / 矫正 "6" / 接受 True）
+        processes = _strict_int(observation.get("processes"))
+        steps = _strict_int(observation.get("steps"))
+        if processes is None or steps is None or processes <= 0 or steps <= 0:
+            _aggregation_failure(failures, "count_not_integer", batch=batch,
+                                 detail=f"{source_label} processes="
+                                        f"{observation.get('processes')!r} steps="
                                         f"{observation.get('steps')!r}")
-            continue
-        observed = observation.get("digests")
-        if not isinstance(observed, list):
-            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
-                                 detail=f"{source_label} digests 不是 list")
             continue
         if processes < MATRIX_MIN_PROCESSES or steps < MATRIX_MIN_STEPS:
             _aggregation_failure(failures, "observation_underpowered", batch=batch,
                                  detail=f"{source_label} processes={processes} steps={steps}")
-        if not observed:
+
+        # digests：必须是非空字符串，且是真实格式的 64 位小写十六进制 SHA-256。
+        # **不得**用 str() 把数字/容器洗成「看起来合法」的证据。
+        observed_raw = observation.get("digests")
+        if not isinstance(observed_raw, list) or not observed_raw:
             _aggregation_failure(failures, "digests_empty", batch=batch, detail=source_label)
-        elif len(observed) != processes:
-            _aggregation_failure(failures, "digest_count_mismatch", batch=batch,
-                                 detail=f"{source_label} len={len(observed)} processes={processes}")
-        if observation.get("corrector_time_limit_source") != (
+            observed: list[str] = []
+        else:
+            observed = []
+            malformed = False
+            for value in observed_raw:
+                digest = _strict_sha256(value)
+                if digest is None:
+                    _aggregation_failure(failures, "digest_malformed", batch=batch,
+                                         detail=f"{source_label} digest={value!r}")
+                    malformed = True
+                else:
+                    observed.append(digest)
+            if malformed:
+                observed = []
+            elif len(observed) != processes:
+                _aggregation_failure(failures, "digest_count_mismatch", batch=batch,
+                                     detail=f"{source_label} len={len(observed)} "
+                                            f"processes={processes}")
+
+        # source：必须是字符串且严格等于 production_default
+        raw_obs_source = observation.get("corrector_time_limit_source")
+        if _strict_nonempty_str(raw_obs_source) != (
             CORRECTOR_TIME_LIMIT_SOURCE_PRODUCTION_DEFAULT
         ):
             _aggregation_failure(failures, "override_observation_in_release_evidence",
                                  batch=batch, detail=source_label)
-        budget = observation.get("effective_corrector_time_limit_s")
-        try:
-            budget_ok = budget is not None and abs(
-                float(budget) - PRODUCTION_CORRECTOR_TIME_LIMIT_S
-            ) <= 1e-12
-        except (TypeError, ValueError, OverflowError):
-            _aggregation_failure(failures, "malformed_batch_artifact", batch=batch,
-                                 detail=f"{source_label} budget 不可转换：{budget!r}")
-            budget_ok = False
-            budget = None
-        if not budget_ok:
+
+        # budget：必须是有限实数（bool 不算）且等于生产默认
+        budget = _strict_finite_float(observation.get("effective_corrector_time_limit_s"))
+        if budget is None or abs(budget - PRODUCTION_CORRECTOR_TIME_LIMIT_S) > 1e-12:
             _aggregation_failure(failures, "budget_not_production_default", batch=batch,
-                                 detail=f"{source_label} budget={budget!r}")
-        digests.extend(str(d) for d in observed)
+                                 detail=f"{source_label} budget="
+                                        f"{observation.get('effective_corrector_time_limit_s')!r}")
+        digests.extend(observed)
 
     time_limit_failures = sum(1 for s in artifacts["stage_statuses"] if s == 1)
     if time_limit_failures:

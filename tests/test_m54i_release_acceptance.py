@@ -282,8 +282,9 @@ def test_digest_count_must_match_processes(tmp_path):
     """`processes` 与实际 digest 个数不符 -> 证据不可信。"""
     run_dir = _write_batch(tmp_path, "a")
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    # digest 格式合法（64 位小写十六进制），但数量与 processes 不符
     report["release_gate"]["observations"][0]["processes"] = 6
-    report["release_gate"]["observations"][0]["digests"] = ["a", "a", "a"]
+    report["release_gate"]["observations"][0]["digests"] = [_SHA256] * 3
     (run_dir / "report.json").write_text(json.dumps(report), encoding="utf-8")
     aggregated = probe.aggregate_release_batches([
         run_dir, _write_batch(tmp_path, "b"), _write_batch(tmp_path, "c"),
@@ -293,10 +294,9 @@ def test_digest_count_must_match_processes(tmp_path):
 
 
 def test_empty_digests_fail(tmp_path):
-    aggregated = probe.aggregate_release_batches([
-        _write_batch(tmp_path, "a"), _write_batch(tmp_path, "b"),
-        _write_batch(tmp_path, "c", digests=()),
-    ])
+    batches = [_write_batch(tmp_path, n) for n in ("a", "b", "c")]
+    _set_obs(batches[2], digests=[])  # processes 仍为 6，只清空 digests
+    aggregated = probe.aggregate_release_batches(batches)
     assert aggregated["passed"] is False
     assert "digests_empty" in _failures(aggregated)
 
@@ -551,7 +551,10 @@ def _set_provenance(path: pathlib.Path, name: str, **fields) -> pathlib.Path:
 def test_any_provenance_mismatch_in_any_file_fails(tmp_path, filename, field):
     """config/report/manifest 任意一处、任意字段不一致 -> 聚合必须失败。"""
     a, b, c = (_write_batch(tmp_path, n) for n in ("a", "b", "c"))
-    tampered = {"effective_corrector_time_limit_s": 99.0}.get(field, "tampered")
+    # 篡改值必须与字段类型相容：预算用数值，来源用字符串
+    # （否则会先触发 provenance_not_scalar，掩盖「三方不一致」这条判据）。
+    tampered = 0.5 if field in ("production_corrector_time_limit_s",
+                                "effective_corrector_time_limit_s") else "tampered"
     _set_provenance(a, filename, **{field: tampered})
     aggregated = probe.aggregate_release_batches([a, b, c])
     assert aggregated["passed"] is False, f"{filename}:{field} 不一致必须失败"
@@ -688,7 +691,9 @@ def test_unconvertible_processes_fails_closed(tmp_path, bad):
         obj["release_gate"]["observations"][0].__setitem__("processes", bad), obj)[1])
     aggregated = probe.aggregate_release_batches(batches)
     assert aggregated["passed"] is False
-    assert "malformed_batch_artifact" in _failures(aggregated)
+    # M5.4i 第三次返修迁移：原因码细化为 count_not_integer（更严，不再是笼统的
+    # malformed_batch_artifact）。
+    assert "count_not_integer" in _failures(aggregated)
 
 
 @pytest.mark.parametrize("bad", ("abc", {}, []))
@@ -698,7 +703,7 @@ def test_unconvertible_steps_fails_closed(tmp_path, bad):
         obj["release_gate"]["observations"][0].__setitem__("steps", bad), obj)[1])
     aggregated = probe.aggregate_release_batches(batches)
     assert aggregated["passed"] is False
-    assert "malformed_batch_artifact" in _failures(aggregated)
+    assert "count_not_integer" in _failures(aggregated)
 
 
 @pytest.mark.parametrize("bad", ("abc", [], {}))
@@ -709,7 +714,7 @@ def test_unconvertible_budget_fails_closed(tmp_path, bad):
             "effective_corrector_time_limit_s", bad), obj)[1])
     aggregated = probe.aggregate_release_batches(batches)
     assert aggregated["passed"] is False
-    assert "malformed_batch_artifact" in _failures(aggregated)
+    assert "budget_not_production_default" in _failures(aggregated)
 
 
 @pytest.mark.parametrize("bad", ("abc", float("nan")))
