@@ -1,0 +1,123 @@
+{
+  "canonical_manifest_path": "data/manifest/singapore_2024_half_hour.json",
+  "canonical_manifest_sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667",
+  "canonical_parquet_path": "data/processed/singapore_2024/half_hour.parquet",
+  "canonical_parquet_sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+  "episode_origin_rule": "episode origin 的最后一个执行点必须仍在该 split 内：origin_index + H <= row_end_exclusive",
+  "forecast_origin_rule": "forecast 可见点 [origin, origin + C) 必须完全属于该 split：origin_index + C <= row_end_exclusive；H >= C 时不得重复扣除 C；lookback 只允许读 origin 之前的数据",
+  "frequency": "30min",
+  "frozen_at_utc": "2026-09-15T00:00:00+00:00",
+  "leap_day_split": "train",
+  "materializer_revision": "6f7e866bb6b32ce2db630fc953f234ece95f8fa8",
+  "no_gap": true,
+  "no_overlap": true,
+  "randomized": false,
+  "readiness": {
+    "forecast_ready": false,
+    "formal_scenario_bundle_ready": false,
+    "formal_training_ready": false,
+    "truth_splits_ready": true
+  },
+  "schema": "m1.3d-singapore-2024-splits-v1",
+  "splits": {
+    "test": {
+      "end_exclusive": "2025-01-01T00:00:00+08:00",
+      "row_count": 4416,
+      "row_end_exclusive": 17568,
+      "row_start": 13152,
+      "start": "2024-10-01T00:00:00+08:00"
+    },
+    "train": {
+      "end_exclusive": "2024-08-01T00:00:00+08:00",
+      "row_count": 10224,
+      "row_end_exclusive": 10224,
+      "row_start": 0,
+      "start": "2024-01-01T00:00:00+08:00"
+    },
+    "validation": {
+      "end_exclusive": "2024-10-01T00:00:00+08:00",
+      "row_count": 2928,
+      "row_end_exclusive": 13152,
+      "row_start": 10224,
+      "start": "2024-08-01T00:00:00+08:00"
+    }
+  },
+  "step_minutes": 30,
+  "timezone": "Asia/Singapore",
+  "total_rows": 17568,
+  "train_only_statistics": {
+    "ghi_w_per_m2": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 960.0,
+      "mean": 195.9037558685446,
+      "min": 0.0,
+      "negative_count": 0
+    },
+    "national_igs_mwh_per_half_hour": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 240.002,
+      "mean": 37.7685725743349,
+      "min": -0.114,
+      "negative_count": 4519
+    },
+    "price_sgd_per_kwh": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 4.5,
+      "mean": 0.18778093114241004,
+      "min": -0.02017,
+      "negative_count": 3
+    },
+    "system_load_mw": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 8029.238,
+      "mean": 6782.109525827384,
+      "min": 5162.536583050944,
+      "negative_count": 0
+    },
+    "temperature_deg_c": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 33.2,
+      "mean": 27.779557902973398,
+      "min": 23.0,
+      "negative_count": 0
+    },
+    "wind_speed_10m_mps": {
+      "count": 10224,
+      "finite_count": 10224,
+      "max": 6.09,
+      "mean": 2.4207100938967137,
+      "min": 0.0,
+      "negative_count": 0
+    }
+  },
+  "train_only_statistics_source": {
+    "canonical_parquet_sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+    "columns": [
+      "price_sgd_per_kwh",
+      "system_load_mw",
+      "national_igs_mwh_per_half_hour",
+      "temperature_deg_c",
+      "wind_speed_10m_mps",
+      "ghi_w_per_m2"
+    ],
+    "end_exclusive": "2024-08-01T00:00:00+08:00",
+    "note": "描述统计，**不得**自动冒充正式 normalization refs；正式 refs 最迟在 M1.3g 训练接线前冻结",
+    "row_end_exclusive": 10224,
+    "row_start": 0,
+    "split": "train",
+    "start": "2024-01-01T00:00:00+08:00",
+    "statistics_implementation_revision": "6f7e866bb6b32ce2db630fc953f234ece95f8fa8"
+  },
+  "unavailable_not_materialized": {
+    "arrival": "unavailable: 未冻结；不得用默认曲线/常数/全零/未来真值填充",
+    "carbon_intensity": "unavailable: 未冻结；不得用默认曲线/常数/全零/未来真值填充",
+    "local_pv_kw": "unavailable: 未冻结；不得用默认曲线/常数/全零/未来真值填充",
+    "wind_generation_kw": "unavailable: 未冻结；不得用默认曲线/常数/全零/未来真值填充"
+  },
+  "year": 2024
+}
