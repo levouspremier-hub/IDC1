@@ -41,7 +41,7 @@
   "end": "2024-12-31T23:30:00+08:00",
   "frequency": "30min",
   "frozen_at_utc": "2026-09-15T00:00:00+00:00",
-  "materializer_revision": "751caac1943027785cd60fccdfce9088a915e90a",
+  "materializer_revision": "7007f363a3e3d52696ffcf0d67d4712ff7751f2d",
   "missing_data_policy": "reject; no imputation",
   "observed_value_ranges": {
     "ghi_w_per_m2": {
