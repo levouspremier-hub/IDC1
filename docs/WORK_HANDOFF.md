@@ -6,7 +6,7 @@
 > （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`；M1.3b **已通过**，M1.3c 只读接线审计已完成（等待人工确认）
+> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`；M1.3b **已通过**，M1.3c 审计通过（四项人工决定已下），M1.3d **truth split 已冻结**（等待人工审查）
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
@@ -219,7 +219,48 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7F. M1.3c：正式 ScenarioBundle 接线前置审计（只读，**等待人工确认**）
+## 7G. M1.3d：连续 truth split 已冻结（等待人工审查）
+
+`docs/task_cards/M1.3d.md`（`49084b6` → `4d82317`）。**M1.3c 审计通过**，
+人工**批准月对齐方案 B**。本卡**只**冻结 truth 切分与 train-only 描述统计。
+
+- **冻结切分**（半开区间、`Asia/Singapore`、半小时）：
+
+  | split | 区间 | 行段 | 行数 |
+  |---|---|---|---|
+  | `train` | `[2024-01-01T00:00+08:00, 2024-08-01T00:00+08:00)` | [0, 10224) | 10224 |
+  | `validation` | `[2024-08-01T00:00+08:00, 2024-10-01T00:00+08:00)` | [10224, 13152) | 2928 |
+  | `test` | `[2024-10-01T00:00+08:00, 2025-01-01T00:00+08:00)` | [13152, 17568) | 4416 |
+
+  合计 **17,568** 行；无重叠、无缺口、不随机打散；**Feb 29 只在 train**。
+- **api**：`scenario/splits.py` 的 `load_truth_split(split, *, canonical_parquet_path,
+  canonical_manifest_path, split_manifest_path)`（逐级校验 hash，返回副本，不截断/不换段）
+  与 `validate_episode_origin` / `validate_forecast_origin`。
+- **origin 门禁（取代草案的「统一 `H+C` purge」）**：`origin_index + H <= row_end_exclusive`
+  且 `origin_index + C <= row_end_exclusive`；**`H >= C` 不重复扣除 `C`**（有专门回归）；
+  `origin` 为 **split 本地** step，越界**报错不截断**；`H`/`C` 必须是严格正整数。
+- **train-only 描述统计**（真实数据实测）：`national_igs_mwh_per_half_hour`
+  count=10224、negative=**4519**、min=**-0.1140**；`price_sgd_per_kwh`
+  count=10224、negative=**3**、min=**-0.0202** —— **signed IGS 与负电价原值保留**。
+  只由 train 行参与（validation/test mutation 不改变统计，有回归）。
+  **这些只是描述统计，不得冒充正式 normalization refs**。
+- **manifest**：`data/manifest/singapore_2024_splits.json`，`materializer_revision`
+  由 Git 解析（= 最后修改 split 生成实现的提交），路径**仓库相对**、无绝对路径，
+  **幂等**（重跑 bytes/sha/`mtime_ns` 不变）、**原子**（失败回滚不留半成品）、
+  已存在且不同则拒绝覆盖、generator dirty 时拒绝。
+- **readiness**：`truth_splits_ready=true`，而 `forecast_ready=false`、
+  `formal_scenario_bundle_ready=false`、`formal_training_ready=false`。
+  **`train.json` / `validation.json` / `test.json` 一律未创建**（保留名）。
+
+**truth 仍然不能当 forecast**：本卡只冻结历史事实切分；
+四项缺口（`local_pv_kw` / `wind_generation_kw` / `carbon_intensity` / `arrival`）
+**仍 unavailable**；`configs/frozen_refs/refs.json` **未动**，
+其正式冻结**最迟必须在 M1.3g 训练接线前**完成（**不是 M6**）。
+**正式 `ScenarioBundle`、训练与 M6 仍未开始**；`make train` 仍 exit 2。
+
+**下一步是 M1.3e（forecast provenance / contract-v8），不是 M6。不新增 M5.5。**
+
+## 7F. M1.3c：正式 ScenarioBundle 接线前置审计（**已通过**）
 
 `docs/task_cards/M1.3c.md`。**M1.3b 第二次返修已正式通过**；本卡是**只读**审计 ——
 不改任何代码/数据/契约/manifest，不创建 `train.json`，不开始训练。
