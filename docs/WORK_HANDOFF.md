@@ -2,9 +2,9 @@
 
 > 更新时间：2026-09-14（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
-> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i **第二次返修**实现终点 `4f759fb`
+> 当前 HEAD：`p4-safeppo-m51a-rollout-contract`，M5.4i **第三次返修**实现终点 `2cab5a1`
 > （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
-> **M5.4i 首轮与第二轮人工审核均未通过**，已两轮返修，**仍等待再次人工审核**。
+> **M5.4i 已连续三轮人工审核未通过**，已三轮返修，**仍等待再次人工审核**。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -53,7 +53,7 @@ git diff --check
 | `p2-physics` | `4e070bc` | M3 物理链卡片与实现证据。 |
 | `p3-corrector` | `da0a28c` | M4 规划器证据。 |
 | `p4-safeppo` | `fef12f6` | 早期 M5 链。 |
-| `p4-safeppo-m51a-rollout-contract` | `4f759fb` | **当前继续工作分支**；包含 M5.1–M5.4i 的累计链（`4f759fb` 为 M5.4i **第二次返修**实现终点）。 |
+| `p4-safeppo-m51a-rollout-contract` | `2cab5a1` | **当前继续工作分支**；包含 M5.1–M5.4i 的累计链（`2cab5a1` 为 M5.4i **第三次返修**实现终点）。 |
 | `p5-eval-viz` | `05612f9` | M4.4c 终点及早期评估/契约工作。 |
 
 不同分支尚未进行人工批准的整合。不得把 `p1-data-contracts`、当前 p4 分支或其他
@@ -213,13 +213,31 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 8. 当前授权状态：M5.4i 两轮审核均未通过，第二次返修后等待再次审核
+## 8. 当前授权状态：M5.4i 三轮审核均未通过，第三次返修后等待再次审核
 
 `M5.4h2` **已通过人工审查并被接受**（2026-09-14）。
 
 `M5.4i` **首轮执行后人工审核未通过**（2026-09-14），已按审核意见在原卡返修
 （`d6f875b` → `771a33d`；见 `docs/task_cards/M5.4i.md` §9 与 §10）。
 **返修仍等待再次人工审核。**
+
+**第三轮审核未通过的三个原因**（详见任务卡 §12.1）：
+
+1. **容器型 provenance 在 set 构造时泄漏 `TypeError`**：三处同为 `list`/`dict` 时，
+   逐字段比较不会报错（三处相等），但随后 `{...}` 集合构造因不可哈希而抛
+   `unhashable type: 'list'/'dict'` 并泄漏给调用方。
+2. **非字符串 digest 被 `str()` 后错误放行**：`digests.extend(str(d) ...)` 把错误类型
+   洗成看似合法的证据；三批全为 `[1]*6` 时 `aggregate_distinct=1` → `passed=true`。
+3. **`processes`/`steps`/`status` 的宽松 `int()` 会截断非整数**：
+   `processes=6.9`、`steps=8.9`、`processes="6"`、`status=0.5` 全部 `passed=true`。
+   另有 `manifest.run_id` 与输入目录名不一致时未被检查。
+
+**第三轮返修要点**：新增严格校验器（`_strict_int` 拒绝 bool/字符串/浮点、
+`_strict_finite_float` 用 `math.isfinite` 并显式拒绝 bool、`_strict_sha256` 固定
+`^[0-9a-f]{64}$`、`_strict_load`/`_strict_machine` 校验类型与语义）；
+`_check_batch` 写入摘要前把不合法值归一为 `None`，后续 `set`/`sorted`/`json.dumps`
+不再接触未验证容器；新增原因码 `provenance_not_scalar`、`digest_malformed`、
+`count_not_integer`、`manifest_run_id_mismatch`。合法产物语义不变。
 
 **第二轮审核未通过的三个原因**（详见任务卡 §11.1）：
 
@@ -279,7 +297,14 @@ M5.4 released。`M5.4h2` 的执行通过**不构成**正式训练、性能评估
   如实记录但绝不参与放行判定。M5.4h2 的 fail-closed 规则保留。
 - **Stage A/B 共享 0.25 s deadline**：由 runtime spy 证明（`planning/model.py` 未改）。
 
-**发布批次证据（第二次返修后，`runs/m54i_release_v4/`，全部修订 `4f759fb`）**：
+**发布批次证据（第三次返修后，`runs/m54i_release_v5/`，全部修订 `2cab5a1`）**：
+no-load / hogs4 / hogs8 各 3 个独立批次 + 1 个显式 0.05 诊断 run +
+每种负载 1 个标准聚合 run（共 13 个 run）。三组聚合均 `passed=true`、`failures=[]`、
+`production_default_satisfied=true`、每负载 36 个进程观测、`aggregate distinct=1`、
+`time_limit failures=0`。
+`runs/m54i_release_v4/` 标记 `superseded_pre_strict_external_type_validation`（保留不删）。
+
+**上一代（已作废的）发布批次证据**（`runs/m54i_release_v4/`，修订 `4f759fb`）：
 no-load / hogs4 / hogs8 各 3 个独立批次 + 1 个显式 0.05 诊断 run +
 每种负载 1 个标准聚合 run（共 13 个 run）。三组聚合均 `passed=true`、
 `failures=[]`、`production_default_satisfied=true`、每负载 36 个进程观测、
@@ -338,9 +363,10 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得说 M5.4 已解除 blocked；只有在**人工**发布确认后才可以这么说。
 - 不得把 M5.4i 的 3 负载 × 3 批稳定证据表述为「已发布」或「跨机器保证」；
   它是**本机**候选证据，发布决定权在人工。
-- 不得引用 `runs/m54i_release_v2/`（`superseded_pre_aggregation_gate_fix`）或
-  `runs/m54i_release_v3/`（`superseded_pre_second_aggregation_gate_fix`）
-  作为发布证据；最终证据是 `runs/m54i_release_v4/`。
+- 不得引用 `runs/m54i_release_v2/`（`superseded_pre_aggregation_gate_fix`）、
+  `runs/m54i_release_v3/`（`superseded_pre_second_aggregation_gate_fix`）或
+  `runs/m54i_release_v4/`（`superseded_pre_strict_external_type_validation`）
+  作为发布证据；最终证据是 `runs/m54i_release_v5/`。
 - 不得把 M5.4h/M5.4h1/M5.4h2 的 0.05 s blocked 结论套用到当前的 0.25 s 默认上。
 - 不得把 `mip_max_nodes` 的未绑定实验称为确定性的根因或生产方案。
 - 不得以任务卡提交数、测试数或绿灯替代真实集成验收。
