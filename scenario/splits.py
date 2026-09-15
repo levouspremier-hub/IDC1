@@ -350,10 +350,10 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
             )
     if manifest.get("leap_day_split") != "train":
         raise SplitError("split manifest leap_day_split 必须严格为 'train'")
-    for field, expected in (("episode_origin_rule", EPISODE_ORIGIN_RULE),
-                            ("forecast_origin_rule", FORECAST_ORIGIN_RULE)):
-        if manifest.get(field) != expected:
-            raise SplitError(f"split manifest {field} 必须等于冻结规则")
+    for rule_field, rule_text in (("episode_origin_rule", EPISODE_ORIGIN_RULE),
+                                  ("forecast_origin_rule", FORECAST_ORIGIN_RULE)):
+        if manifest.get(rule_field) != rule_text:
+            raise SplitError(f"split manifest {rule_field} 必须等于冻结规则")
 
     readiness = _require_dict(manifest.get("readiness"), field="readiness")
     if readiness != EXPECTED_READINESS:
