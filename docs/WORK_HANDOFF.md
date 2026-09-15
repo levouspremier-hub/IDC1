@@ -219,7 +219,62 @@ runs/m54h2r1_matrix/m54h2r1_underpowered        # processes<6 -> insufficient_ev
 但**没有**解决「一次幸运抽样即可通过门禁」。是否引入跨 run 证据合并或最小重复次数，
 属 M5.4h2 范围之外，**待人工决定**。
 
-## 7H. M1.3d 第一轮审核返修：严格校验 split manifest 与 canonical 时间轴（等待人工复审）
+## 7I. M1.3d-R2 第二轮返修：外部字段类型审计 + 审计账本勘误（等待人工复审）
+
+**M1.3d 第二轮审核不通过**，问题与修正（详见 `docs/task_cards/M1.3d.md` §12）：
+
+1. **`train_only_statistics_source.columns` 的类型审计泄漏 `TypeError`**：
+   原写法 `list(source.get("columns") or [])` 对 `int`/`bool`/`float` 等**不可迭代标量**
+   直接抛 `TypeError`。现改为 `_require_str_list()`：必须是 `list`、元素全为 `str`、
+   顺序与内容**严格等于** `STATISTIC_COLUMNS`。
+2. **`unavailable_not_materialized` 的容器条目被接受**：原先把非字符串条目
+   `json.dumps` 成文本再查关键词，于是 `["unavailable"]` / `{"status":"unavailable"}`
+   可以绕过。现在每个条目**必须是字符串**，容器**即使文本含 "unavailable" 也一律拒绝**。
+3. **`frozen_at_utc` 完全未校验**：缺失 / 非字符串 / 无时区 / 非规范格式此前**全部被接受**。
+   现由 `_require_canonical_utc()` 在索引任何其他字段**之前**校验：必须是**规范 UTC**
+   （`fromisoformat` 可解析、带 `tzinfo`、归一化后与原串逐字符相等、以 `+00:00` 结尾）。
+4. **其余所有嵌套外部字段**统一走严格校验器，**任何**畸形输入都不泄漏
+   `KeyError`/`TypeError`/`AttributeError`/`IndexError`（测试侧由 `_assert_no_leak` 强制）。
+
+**审计账本勘误（本轮补记）**：
+
+- **补列真实提交 `2c0b8c1`**（`feat: regenerate the M1.3d split manifest under strict
+  validation`）—— 首轮返修链的真实成员，首轮任务卡表格当时漏列。
+- **`3327346..e3aafdc` 首轮返修链实际有 8 个提交**（不是 5 个）：
+  `d60f597 45e5a29 6a2ca5d 2c0b8c1 076923b 37ca45b 373b392 e3aafdc`。
+- `3327346..HEAD` 迄今共 **12 个提交**（首轮 8 + R2 4）。
+
+**改前 16 failed**（直接原因：3 项 `TypeError: 'int'/'float'/'bool' object is not
+iterable`，13 项 `DID NOT RAISE`）；**改后** `tests/test_m13d_splits.py`
+**224 非 slow + 1 slow 全绿**（首轮 129 项全部保留、未弱化）；
+`make check` **exit 0**（1514 passed）；`make smoke` **exit 0**；
+`make train` 仍 **exit 2**、不回退 synthetic、无 checkpoint、
+`train.json`/`validation.json`/`test.json` **未创建**。
+
+**最终 split manifest**：`materializer_revision` = `1ab6fca`
+（`1ab6fcacdc86e3114942ca2bc0c956a73acec37e`）；SHA-256 = `f8006aa0db32a80504304cd1c3d8655887e2742b6860d75ed1687fff96398be1`；
+最终 HEAD 上复跑物化命令两次均 `exit=0`，bytes/sha/`mtime_ns` 不变。
+
+**上游未变**：`singapore_2024.json` `d4e24d6f…`、
+`singapore_2024_half_hour.json` `e6484d6b…`、`half_hour.parquet` `dec76ea2…`；
+raw 与 `configs/frozen_refs/refs.json` 未动；**split 边界与行数未变**。
+
+**精确回滚（含 `2c0b8c1`；已用临时 detached worktree **只读**验证可恢复 `3327346` 的树）**：
+
+```bash
+git revert 4a64077 1ab6fca 0b18471 3c851b1 \
+           e3aafdc 373b392 37ca45b 076923b 2c0b8c1 6a2ca5d 45e5a29 d60f597
+```
+
+```text
+3327346 的树                = 19120a3c9ca21157bc4f82568db9f6233a677ee9
+revert 链后 HEAD^{tree}     = 19120a3c9ca21157bc4f82568db9f6233a677ee9   ✅ 一致
+```
+
+**M1.3e 尚未开始**：forecast provenance / contract-v8 未动；`forecast_ready=false`，
+正式 `ScenarioBundle` 与训练**仍 blocked**；四项缺口仍 unavailable。
+
+## 7H. M1.3d 第一轮审核返修（已被 7I 取代）
 
 **M1.3d 第一轮审核不通过**，两个根因（详见 `docs/task_cards/M1.3d.md` §11）：
 
