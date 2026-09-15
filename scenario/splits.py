@@ -104,6 +104,20 @@ EXPECTED_READINESS = {
 }
 # unavailable 四项必须完整存在，且**不得**被伪造成 available
 EXPECTED_UNAVAILABLE_STATUS = "unavailable"
+# 冻结 schema 的**精确**键集合（M1.3d-R3）：未知字段一律拒绝，扩展必须 bump schema
+SPLIT_ENTRY_KEYS = ("start", "end_exclusive", "row_start", "row_end_exclusive", "row_count")
+MANIFEST_KEYS = (
+    "canonical_manifest_path", "canonical_manifest_sha256", "canonical_parquet_path",
+    "canonical_parquet_sha256", "episode_origin_rule", "forecast_origin_rule",
+    "frequency", "frozen_at_utc", "leap_day_split", "materializer_revision",
+    "no_gap", "no_overlap", "randomized", "readiness", "schema", "splits",
+    "step_minutes", "timezone", "total_rows", "train_only_statistics",
+    "train_only_statistics_source", "unavailable_not_materialized", "year",
+)
+STATISTICS_SOURCE_KEYS = (
+    "split", "row_start", "row_end_exclusive", "start", "end_exclusive", "columns",
+    "canonical_parquet_sha256", "statistics_implementation_revision", "note",
+)
 _FORBIDDEN_AVAILABLE_MARKERS = ("available", "materialized", "ready", "present")
 
 
@@ -168,6 +182,22 @@ def _require_git_sha40(value: Any, *, field: str) -> str:
     if not ok:
         raise SplitError(f"{field} 必须是 40 位小写十六进制 Git 提交，实际 {value!r}")
     return value
+
+
+def _require_exact_keys(mapping: dict, *, field: str, expected: tuple[str, ...]) -> None:
+    """键集合必须**精确**等于期望值：多一个未声明字段或少了字段都拒绝。
+
+    「未知字段静默通过」会让冻结 schema 形同虚设；需要扩展时必须 bump schema。
+    """
+    actual = set(mapping)
+    expected_set = set(expected)
+    extra = sorted(actual - expected_set)
+    missing = sorted(expected_set - actual)
+    if extra or missing:
+        raise SplitError(
+            f"{field} 的键集合必须精确等于 {sorted(expected_set)}；"
+            f"多出={extra} 缺少={missing}"
+        )
 
 
 def _require_str_list(value: Any, *, field: str, expected: tuple[str, ...]) -> list[str]:
@@ -353,6 +383,7 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
     except (OSError, json.JSONDecodeError) as error:
         raise SplitError(f"split manifest 不可读：{error}") from error
     manifest = _require_dict(manifest, field="split manifest")
+    _require_exact_keys(manifest, field="split manifest", expected=MANIFEST_KEYS)
 
     _require_canonical_utc(manifest.get("frozen_at_utc"), field="frozen_at_utc")
     if manifest.get("schema") != SPLIT_SCHEMA:
@@ -403,6 +434,7 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
             raise SplitError(f"split manifest {rule_field} 必须等于冻结规则")
 
     readiness = _require_dict(manifest.get("readiness"), field="readiness")
+    _require_exact_keys(readiness, field="readiness", expected=tuple(EXPECTED_READINESS))
     if readiness != EXPECTED_READINESS:
         raise SplitError(
             f"split manifest readiness 必须严格等于 {EXPECTED_READINESS}，实际 {readiness!r}"
@@ -410,11 +442,8 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
 
     unavailable = _require_dict(manifest.get("unavailable_not_materialized"),
                                 field="unavailable_not_materialized")
-    if set(unavailable) != set(UNAVAILABLE_COLUMNS):
-        raise SplitError(
-            "unavailable_not_materialized 必须完整覆盖四项 "
-            f"{list(UNAVAILABLE_COLUMNS)}，实际 {sorted(unavailable)}"
-        )
+    _require_exact_keys(unavailable, field="unavailable_not_materialized",
+                        expected=UNAVAILABLE_COLUMNS)
     for column, entry in unavailable.items():
         # 条目必须是**字符串**：容器（list/dict）即使文本里含 "unavailable" 也必须拒绝
         if not isinstance(entry, str):
@@ -434,8 +463,11 @@ def _read_split_manifest(path: Path, *, canonical_parquet_path: Path,
             raise SplitError(f"{column} 不得被伪造成 available/materialized（命中 {hit}）")
 
     splits = _require_dict(manifest.get("splits"), field="splits")
+    _require_exact_keys(splits, field="splits", expected=SPLIT_NAMES)
     for name in SPLIT_NAMES:
         entry = _require_dict(splits.get(name), field=f"splits.{name}")
+        # 每个 split entry 的键集合必须精确（未声明字段不得静默通过）
+        _require_exact_keys(entry, field=f"splits.{name}", expected=SPLIT_ENTRY_KEYS)
         spec = SPLIT_SPECS[name]
         for key in ("start", "end_exclusive", "row_start", "row_end_exclusive", "row_count"):
             if entry.get(key) != spec[key]:
@@ -537,6 +569,8 @@ def _verify_train_statistics(frame: pd.DataFrame, split_manifest: dict) -> None:
     """
     source = _require_dict(split_manifest.get("train_only_statistics_source"),
                            field="train_only_statistics_source")
+    _require_exact_keys(source, field="train_only_statistics_source",
+                        expected=STATISTICS_SOURCE_KEYS)
     spec = SPLIT_SPECS["train"]
     if source.get("split") != "train":
         raise SplitError("train_only_statistics_source.split 必须严格为 'train'")
@@ -575,20 +609,14 @@ def _verify_train_statistics(frame: pd.DataFrame, split_manifest: dict) -> None:
 
     declared = _require_dict(split_manifest.get("train_only_statistics"),
                              field="train_only_statistics")
-    if set(declared) != set(STATISTIC_COLUMNS):
-        raise SplitError(
-            "train_only_statistics 必须精确覆盖六列 "
-            f"{list(STATISTIC_COLUMNS)}，实际 {sorted(declared)}"
-        )
+    _require_exact_keys(declared, field="train_only_statistics",
+                        expected=STATISTIC_COLUMNS)
     train_frame = frame.iloc[spec["row_start"]:spec["row_end_exclusive"]]
     recomputed = train_only_statistics(train_frame)
     for column in STATISTIC_COLUMNS:
         entry = _require_dict(declared.get(column), field=f"train_only_statistics.{column}")
-        if set(entry) != set(STATISTIC_FIELDS):
-            raise SplitError(
-                f"train_only_statistics.{column} 字段必须是 {list(STATISTIC_FIELDS)}，"
-                f"实际 {sorted(entry)}"
-            )
+        _require_exact_keys(entry, field=f"train_only_statistics.{column}",
+                            expected=STATISTIC_FIELDS)
         for field in ("count", "finite_count", "negative_count"):
             value = entry[field]
             if isinstance(value, bool) or not isinstance(value, int):
