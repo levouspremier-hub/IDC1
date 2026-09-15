@@ -165,7 +165,8 @@ def test_leap_day_belongs_only_to_train(tmp_path):
     for split in SPLIT_NAMES:
         frame = _load(fixture, result["manifest_path"], split)
         has_leap = ((frame["timestamp"].dt.month == 2) & (frame["timestamp"].dt.day == 29)).any()
-        assert has_leap is (split == "train"), f"Feb 29 只应属于 train，实际出现在 {split}"
+        assert bool(has_leap) == (split == "train"), \
+            f"Feb 29 只应属于 train，实际出现在 {split}"
 
 
 def test_split_reader_returns_a_copy_with_canonical_columns(tmp_path):
@@ -218,9 +219,15 @@ def test_forecast_origin_last_legal_and_first_illegal():
 
 
 def test_forecast_origin_may_reach_the_boundary_exactly():
-    """`origin + C == row_end_exclusive` 合法（半开区间，最后可见点仍在段内）。"""
-    end = EXPECTED_ROW_COUNTS["validation"] + EXPECTED_ROW_COUNTS["train"]
-    assert _forecast("validation", end - 6, 6) == end - 6
+    """`origin + C == row_end_exclusive` 合法（半开区间，最后可见点仍在段内）。
+
+    `origin` 是**该 split 内**从 0 开始的 half-hour step；返回值是**全局**行号。
+    """
+    local_end = EXPECTED_ROW_COUNTS["validation"]
+    global_start = EXPECTED_ROW_COUNTS["train"]
+    assert _forecast("validation", local_end - 6, 6) == global_start + local_end - 6
+    with pytest.raises(ValueError):
+        _forecast("validation", local_end - 5, 6)
 
 
 def test_h_ge_c_does_not_double_purge():
@@ -246,13 +253,19 @@ def test_horizon_and_cutoff_must_be_strict_positive_integers(bad):
 
 
 def test_origin_must_belong_to_the_named_split():
-    """origin 落在别的 split 必须报错，不得自动换段。"""
-    first_validation = EXPECTED_ROW_COUNTS["train"]
+    """origin 只在该 split 内有效；不得自动换段、不得截断。
+
+    `origin` 是 split-**本地** step：train 的合法本地 step 上界是 10223，
+    把它当作 validation 的本地 step 同样越界 —— 两个方向都必须报错，
+    绝不能「自动换到另一个 split」。
+    """
+    train_last_local = EXPECTED_ROW_COUNTS["train"] - 1
+    assert _episode("train", train_last_local, 1) == train_last_local
     with pytest.raises(ValueError):
-        _episode("train", first_validation, 4)
+        _episode("train", EXPECTED_ROW_COUNTS["train"], 1)
     with pytest.raises(ValueError):
-        _forecast("train", first_validation, 4)
-    assert _episode("validation", first_validation, 4) == first_validation
+        _episode("validation", train_last_local, 1)     # 不是 validation 的本地 step
+    assert _episode("validation", 0, 1) == EXPECTED_ROW_COUNTS["train"]
 
 
 def test_case_does_not_change_delta_t():
@@ -345,13 +358,17 @@ def test_validation_and_test_values_do_not_change_train_statistics(tmp_path):
     stats_a = _stats(json.loads(
         pathlib.Path(result_a["manifest_path"]).read_text(encoding="utf-8")))
 
-    # 只改 validation/test 区间的 IGS（row >= 10224）
-    shifted = write_canonical_fixture(tmp_path / "b", igs_offset=1000.0)
+    # 只改 validation/test 区间的 IGS（row >= 10224）；**train 行必须逐字节不变**
+    shifted = write_canonical_fixture(tmp_path / "b")
     out_b = tmp_path / "out_b"
     module = importlib.import_module(MATERIALIZER)
     frame = pd.read_parquet(shifted["parquet"])
     frame.loc[frame.index >= EXPECTED_ROW_COUNTS["train"],
               "national_igs_mwh_per_half_hour"] += 5000.0
+    base_frame = pd.read_parquet(write_canonical_fixture(tmp_path / "a")["parquet"])
+    assert frame.iloc[:EXPECTED_ROW_COUNTS["train"]].equals(
+        base_frame.iloc[:EXPECTED_ROW_COUNTS["train"]]
+    ), "本用例的 train 行必须与基准完全一致"
     frame.to_parquet(shifted["parquet"], index=False)
     shifted["canonical_manifest"].write_text(json.dumps({
         "schema": CANONICAL_SCHEMA, "year": 2024, "timezone": TIMEZONE,

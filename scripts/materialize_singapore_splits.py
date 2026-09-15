@@ -252,35 +252,24 @@ def materialize_splits(
     )
 
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temp_name = tempfile.mkstemp(
-        dir=manifest_path.parent, prefix=f".{manifest_path.name}.", suffix=".tmp")
-    os.close(handle)
-    temp_manifest = Path(temp_name)
-    installed = False
-    try:
-        temp_manifest.write_text(_canonical_json(candidate) + "\n", encoding="utf-8")
-        if manifest_path.exists():
-            frozen = json.loads(manifest_path.read_text(encoding="utf-8"))
-            if not isinstance(frozen, dict):
-                raise ValueError("已存在的 split manifest 顶层必须是 object")
-            if _canonical_json(frozen) != _canonical_json(candidate):
-                differing = sorted(
-                    key for key in set(frozen) | set(candidate)
-                    if frozen.get(key) != candidate.get(key)
-                )
-                raise ValueError(
-                    f"{manifest_path} 已存在且内容不同（差异字段：{differing}）；不得静默覆盖"
-                )
-            return {
-                "manifest_path": str(manifest_path),
-                "manifest": candidate,
-                "written": False,
-            }
-        os.replace(temp_manifest, manifest_path)
-        installed = True
-    finally:
-        if not installed:
-            temp_manifest.unlink(missing_ok=True)
+    content = _canonical_json(candidate) + "\n"
+
+    if manifest_path.exists():
+        frozen = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(frozen, dict):
+            raise ValueError("已存在的 split manifest 顶层必须是 object")
+        if _canonical_json(frozen) != _canonical_json(candidate):
+            differing = sorted(
+                key for key in set(frozen) | set(candidate)
+                if frozen.get(key) != candidate.get(key)
+            )
+            raise ValueError(
+                f"{manifest_path} 已存在且内容不同（差异字段：{differing}）；不得静默覆盖"
+            )
+        return {"manifest_path": str(manifest_path), "manifest": candidate, "written": False}
+
+    # 首次冻结：原子安装；失败由 `_atomic_write_text` 自行清理临时文件
+    _atomic_write_text(manifest_path, content)
 
     return {"manifest_path": str(manifest_path), "manifest": candidate, "written": True}
 
