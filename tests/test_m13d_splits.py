@@ -44,6 +44,7 @@ CANONICAL_COLUMNS = (
 )
 UNAVAILABLE = ("local_pv_kw", "wind_generation_kw", "carbon_intensity", "arrival")
 SPLIT_MODULE = "scenario.splits"
+STATISTIC_COLUMNS = importlib.import_module(SPLIT_MODULE).STATISTIC_COLUMNS
 MATERIALIZER = "scripts.materialize_singapore_splits"
 
 
@@ -803,3 +804,197 @@ def test_upstream_manifests_and_raw_are_untouched_by_this_card():
         cwd=REPO_ROOT, capture_output=True, text=True, check=True,
     ).stdout.strip()
     assert status == "", f"上游资产被改动：{status}"
+
+
+# --- 14. M1.3d-R2：外部字段的类型审计（不得泄漏异常） -----------------------
+
+LEAKY_EXCEPTIONS = (KeyError, TypeError, AttributeError, IndexError)
+
+
+def _assert_no_leak(excinfo, label):
+    assert not isinstance(excinfo.value, LEAKY_EXCEPTIONS), (
+        f"{label}: 泄漏了 {type(excinfo.value).__name__}: {excinfo.value}"
+    )
+
+
+def _reject(fixture, manifest_path, label, split="train"):
+    """断言被拒绝，且**只**抛 ValueError（含 SplitError）/FileNotFoundError。"""
+    with pytest.raises((ValueError, FileNotFoundError)) as excinfo:
+        _load(fixture, manifest_path, split)
+    _assert_no_leak(excinfo, label)
+
+
+def _source_tamper(value):
+    return lambda m: {
+        **m,
+        "train_only_statistics_source": {
+            **m["train_only_statistics_source"], "columns": value},
+    }
+
+
+@pytest.mark.parametrize("label,value", [
+    ("int", 5), ("bool_true", True), ("bool_false", False), ("float", 1.5),
+    ("string", "abc"), ("dict", {"a": 1}), ("null", None),
+    ("nested_list", [["price_sgd_per_kwh"]]),
+])
+def test_statistics_source_columns_scalar_types_are_rejected_cleanly(tmp_path, label, value):
+    """`columns` 为标量/容器时必须是 ValueError 一族，**不得泄漏 TypeError**。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, _source_tamper(value))
+    _reject(fixture, manifest_path, f"columns={label}")
+
+
+@pytest.mark.parametrize("label,value", [
+    ("truncated", ["price_sgd_per_kwh"]),
+    ("reversed", list(reversed(list(STATISTIC_COLUMNS)))),
+    ("extra", [*STATISTIC_COLUMNS, "extra"]),
+    ("non_string_elements", [1, 2, 3, 4, 5, 6]),
+    ("mixed_elements", [STATISTIC_COLUMNS[0], 2, 3, 4, 5, 6]),
+    ("tuple_instead_of_list", tuple(STATISTIC_COLUMNS)),
+])
+def test_statistics_source_columns_must_be_exactly_the_frozen_list(tmp_path, label, value):
+    """`columns` 必须是精确 `list[str]`，顺序与内容严格等于 `STATISTIC_COLUMNS`。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, _source_tamper(value))
+    _reject(fixture, manifest_path, f"columns={label}")
+
+
+def test_statistics_source_columns_accepts_the_exact_frozen_list(tmp_path):
+    """正例：精确等于冻结列表时必须通过。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    assert len(_load(fixture, manifest_path, "train")) == EXPECTED_ROW_COUNTS["train"]
+
+
+@pytest.mark.parametrize("label,value", [
+    ("list_with_keyword", ["unavailable"]),
+    ("dict_with_keyword", {"status": "unavailable"}),
+    ("list_of_dicts", [{"status": "unavailable", "reason": "x"}]),
+    ("bare_int", 1), ("bare_bool", True), ("bare_null", None), ("bare_float", 1.5),
+    ("empty_list", []), ("empty_dict", {}),
+    ("string_without_keyword", "frozen and fine"),
+])
+def test_unavailable_entries_must_be_strings_labelled_unavailable(tmp_path, label, value):
+    """每个 unavailable 条目必须是标注为 unavailable 的**字符串**；容器一律拒绝。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, v=value: {
+        **m, "unavailable_not_materialized": {
+            k: v for k in m["unavailable_not_materialized"]}})
+    _reject(fixture, manifest_path, f"unavailable={label}")
+
+
+@pytest.mark.parametrize("label,value", [
+    ("empty_string", ""),
+    ("no_keyword", "frozen"),
+    ("claims_available", "available: present"),
+    ("claims_materialized", "materialized and ready"),
+    ("dict_in_string", "{'status': 'available'}"),
+])
+def test_unavailable_strings_must_actually_say_unavailable(tmp_path, label, value):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, lambda m, v=value: {
+        **m, "unavailable_not_materialized": {
+            k: v for k in m["unavailable_not_materialized"]}})
+    _reject(fixture, manifest_path, f"unavailable-text={label}")
+
+
+@pytest.mark.parametrize("label,value", [
+    ("missing", "MISSING"), ("int", 12345), ("bool", True), ("null", None),
+    ("list", ["2026-09-15T00:00:00+00:00"]),
+    ("no_timezone", "2026-09-15T00:00:00"),
+    ("not_iso", "yesterday"),
+    ("date_only", "2026-09-15"),
+    ("non_utc_offset", "2026-09-15T08:00:00+08:00"),
+])
+def test_frozen_at_utc_must_be_a_canonical_utc_timestamp(tmp_path, label, value):
+    """`frozen_at_utc` 必须是规范 UTC（带 `+00:00`）；缺失/异构/非规范一律拒绝。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    if value == "MISSING":
+        mutation = lambda m: {k: v for k, v in m.items() if k != "frozen_at_utc"}  # noqa: E731
+    else:
+        mutation = lambda m, v=value: {**m, "frozen_at_utc": v}  # noqa: E731
+    _tampered_manifest(manifest_path, mutation)
+    _reject(fixture, manifest_path, f"frozen_at_utc={label}")
+
+
+def test_frozen_at_utc_accepts_the_canonical_form(tmp_path):
+    """正例：`2026-09-15T00:00:00+00:00` 必须保持通过。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["frozen_at_utc"] == "2026-09-15T00:00:00+00:00"
+    assert len(_load(fixture, manifest_path, "train")) == EXPECTED_ROW_COUNTS["train"]
+
+
+NESTED_FIELD_TAMPERS = {
+    "splits_not_dict": lambda m: {**m, "splits": []},
+    "split_entry_not_dict": lambda m: {**m, "splits": {**m["splits"], "train": "x"}},
+    "split_entry_missing_key": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            k: v for k, v in m["splits"]["train"].items() if k != "start"}}},
+    "split_row_count_string": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            **m["splits"]["train"], "row_count": "10224"}}},
+    "split_row_count_bool": lambda m: {
+        **m, "splits": {**m["splits"], "train": {
+            **m["splits"]["train"], "row_count": True}}},
+    "readiness_not_dict": lambda m: {**m, "readiness": "ready"},
+    "readiness_extra_key": lambda m: {
+        **m, "readiness": {**m["readiness"], "extra": True}},
+    "unavailable_not_dict": lambda m: {**m, "unavailable_not_materialized": []},
+    "statistics_not_dict": lambda m: {**m, "train_only_statistics": "x"},
+    "statistics_entry_not_dict": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": 5}},
+    "statistics_entry_missing_field": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": {
+                k: v for k, v in m["train_only_statistics"]["price_sgd_per_kwh"].items()
+                if k != "mean"}}},
+    "statistics_mean_string": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "mean": "0.1"}}},
+    "statistics_count_container": lambda m: {
+        **m, "train_only_statistics": {
+            **m["train_only_statistics"], "price_sgd_per_kwh": {
+                **m["train_only_statistics"]["price_sgd_per_kwh"], "count": [1]}}},
+    "statistics_source_not_dict": lambda m: {
+        **m, "train_only_statistics_source": ["train"]},
+    "statistics_source_missing_key": lambda m: {
+        **m, "train_only_statistics_source": {
+            k: v for k, v in m["train_only_statistics_source"].items()
+            if k != "split"}},
+    "materializer_revision_null": lambda m: {**m, "materializer_revision": None},
+    "materializer_revision_list": lambda m: {**m, "materializer_revision": []},
+    "canonical_hash_null": lambda m: {**m, "canonical_parquet_sha256": None},
+    "canonical_hash_list": lambda m: {**m, "canonical_manifest_sha256": ["x"]},
+    "manifest_top_level_list": lambda m: [],
+    "manifest_top_level_string": lambda m: "nope",
+    "year_list": lambda m: {**m, "year": [2024]},
+    "no_overlap_string": lambda m: {**m, "no_overlap": "true"},
+    "leap_day_split_list": lambda m: {**m, "leap_day_split": ["train"]},
+    "origin_rule_null": lambda m: {**m, "episode_origin_rule": None},
+}
+
+
+@pytest.mark.parametrize("label", sorted(NESTED_FIELD_TAMPERS))
+def test_nested_tampering_never_leaks_a_python_exception(tmp_path, label):
+    """所有嵌套外部字段的畸形输入都必须干净 fail closed，不泄漏任何内建异常。"""
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, NESTED_FIELD_TAMPERS[label])
+    _reject(fixture, manifest_path, label)
+
+
+@pytest.mark.parametrize("label", sorted(NESTED_FIELD_TAMPERS))
+def test_nested_tampering_is_also_rejected_by_the_materializer(tmp_path, label):
+    fixture = write_canonical_fixture(tmp_path)
+    manifest_path = _materialize_and_get_manifest(fixture, tmp_path / "out")
+    _tampered_manifest(manifest_path, NESTED_FIELD_TAMPERS[label])
+    _assert_clean_rejection(lambda: _materialize(fixture, tmp_path / "out"), label)
