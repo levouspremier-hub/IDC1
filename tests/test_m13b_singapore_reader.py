@@ -13,6 +13,7 @@ import json
 import math
 import pathlib
 import subprocess
+import sys
 import tempfile
 import zipfile
 from datetime import datetime, timedelta
@@ -810,3 +811,155 @@ def test_frozen_manifest_and_parquet_agree_after_materialization(tmp_path):
     assert manifest["output_parquet_sha256"] == hashlib.sha256(
         (out / "half_hour.parquet").read_bytes()
     ).hexdigest()
+
+
+# --- 10. 第二次返修：首冻失败原子性、外部 manifest 严格校验、dirty generator ---
+
+def _materialize_kwargs(fixture, out):
+    return dict(
+        raw_dir=fixture["raw_dir"], source_manifest_path=fixture["source_manifest"],
+        output_dir=out, manifest_path=out / "canon.json",
+        frozen_at_utc="2026-09-15T00:00:00+00:00",
+    )
+
+
+def test_first_freeze_manifest_failure_leaves_no_half_state(tmp_path, monkeypatch):
+    """首冻时 manifest 安装失败：正式 parquet/manifest 都不得存在，且无临时文件。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+
+    def boom(path, text):
+        raise OSError("injected manifest install failure")
+
+    monkeypatch.setattr(module, "_atomic_write_text", boom)
+    with pytest.raises(OSError):
+        module.materialize(**_materialize_kwargs(fixture, out))
+
+    assert not (out / "canon.json").exists(), "manifest 不得存在"
+    assert not (out / "half_hour.parquet").exists(), "首冻失败不得留下孤立 parquet"
+    assert [p.name for p in out.iterdir()] == [], "不得留下任何半成品或临时文件"
+
+
+@pytest.mark.parametrize("stage", ("write", "replace"))
+def test_first_freeze_manifest_install_rollback(tmp_path, monkeypatch, stage):
+    """manifest 临时写入失败与 os.replace 失败都必须完整回滚。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+
+    if stage == "write":
+        def broken_mkstemp(*args, **kwargs):
+            raise OSError("injected manifest temp write failure")
+        monkeypatch.setattr(module.tempfile, "mkstemp", broken_mkstemp)
+    else:
+        real_replace = module.os.replace
+        calls = {"n": 0}
+
+        def flaky_replace(src, dst):
+            calls["n"] += 1
+            if str(dst).endswith("canon.json"):
+                raise OSError("injected manifest os.replace failure")
+            return real_replace(src, dst)
+        monkeypatch.setattr(module.os, "replace", flaky_replace)
+
+    with pytest.raises(OSError):
+        module.materialize(**_materialize_kwargs(fixture, out))
+
+    assert not (out / "half_hour.parquet").exists(), f"{stage}: 不得留下孤立 parquet"
+    assert not (out / "canon.json").exists(), f"{stage}: 不得留下 manifest"
+    assert [p.name for p in out.iterdir()] == [], f"{stage}: 不得留下临时文件"
+
+
+def test_orphan_parquet_without_manifest_fails_closed(tmp_path):
+    """manifest 不存在但正式 parquet 已存在 -> fail closed，且原 parquet 完全不动。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    orphan = out / "half_hour.parquet"
+    orphan.write_bytes(b"pre-existing unknown parquet")
+    before = _snap(orphan)
+
+    with pytest.raises((ValueError, FileExistsError)):
+        module.materialize(**_materialize_kwargs(fixture, out))
+
+    assert orphan.exists(), "不得删除既有 parquet"
+    assert _snap(orphan) == before, "既有 parquet 的 bytes/hash/mtime_ns 不得变化"
+    assert not (out / "canon.json").exists(), "不得创建 manifest"
+    assert sorted(p.name for p in out.iterdir()) == ["half_hour.parquet"], "不得留下临时文件"
+
+
+@pytest.mark.parametrize("mutation,label", [
+    (lambda m: [], "顶层不是 object"),
+    (lambda m: {k: v for k, v in m.items() if k != "output_parquet_sha256"},
+     "缺 output_parquet_sha256"),
+    (lambda m: {**m, "output_parquet_sha256": "not-hex"}, "hash 不是 64 位小写十六进制"),
+    (lambda m: {**m, "output_parquet_sha256": "A" * 64}, "hash 含大写"),
+    (lambda m: {k: v for k, v in m.items() if k != "materializer_revision"},
+     "缺 materializer_revision"),
+    (lambda m: {**m, "materializer_revision": "zzz"}, "revision 非法"),
+])
+def test_malformed_frozen_manifest_fails_closed(tmp_path, mutation, label):
+    """畸形 frozen manifest 必须 fail closed，且不改动任何正式产物。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(**_materialize_kwargs(fixture, out))
+
+    parquet, manifest = out / "half_hour.parquet", out / "canon.json"
+    good = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest.write_text(json.dumps(mutation(good)), encoding="utf-8")
+    before = (_snap(parquet), _snap(manifest))
+
+    with pytest.raises(ValueError):
+        module.materialize(**_materialize_kwargs(fixture, out))
+
+    assert _snap(parquet) == before[0], f"{label}: parquet 被改动"
+    assert _snap(manifest) == before[1], f"{label}: manifest 被改动"
+
+
+def test_malformed_frozen_manifest_exits_cleanly_via_cli(tmp_path):
+    """畸形 frozen manifest 必须由 CLI 干净 exit 1，不得泄漏 traceback。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+    module.materialize(**_materialize_kwargs(fixture, out))
+    (out / "canon.json").write_text('{"output_parquet_sha256": "short"}', encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "scripts/materialize_singapore_2024.py",
+         "--raw-dir", str(fixture["raw_dir"]),
+         "--source-manifest", str(fixture["source_manifest"]),
+         "--output-dir", str(out), "--manifest", str(out / "canon.json"),
+         "--frozen-at-utc", "2026-09-15T00:00:00+00:00"],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Traceback" not in result.stderr and "Traceback" not in result.stdout
+    assert "KeyError" not in result.stderr and "TypeError" not in result.stderr
+
+
+def test_dirty_generator_is_rejected(tmp_path, monkeypatch):
+    """生成实现文件有未提交修改时必须拒绝正式物化。"""
+    import importlib
+
+    module = importlib.import_module(MATERIALIZER)
+    fixture = cached_valid_fixture()
+    out = tmp_path / "out"
+
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: True)
+    with pytest.raises(ValueError, match="未提交"):
+        module.materialize(**_materialize_kwargs(fixture, out))
+    assert not (out / "half_hour.parquet").exists()
+    assert not (out / "canon.json").exists()
