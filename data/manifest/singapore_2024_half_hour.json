@@ -1,5 +1,4 @@
 {
-  "code_revision": "d9df46ae85061bef6aef768a9bba67faaaa4f2e5",
   "columns": {
     "ghi_w_per_m2": {
       "semantic": "ERA5 前一小时平均 GHI；M1.2 未重采样",
@@ -42,6 +41,7 @@
   "end": "2024-12-31T23:30:00+08:00",
   "frequency": "30min",
   "frozen_at_utc": "2026-09-15T00:00:00+00:00",
+  "materializer_revision": "751caac1943027785cd60fccdfce9088a915e90a",
   "missing_data_policy": "reject; no imputation",
   "observed_value_ranges": {
     "ghi_w_per_m2": {
@@ -84,28 +84,28 @@
   "raw_files": {
     "emc_metered_generation": {
       "bytes": 891699,
-      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/emc_metered_generation_2024.zip",
+      "path": "data/raw/singapore_2024/emc_metered_generation_2024.zip",
       "sha256": "4ff06ea9044d17bb24c69515cebd2c518deb0c96e169463b98a028e521ae83fd"
     },
     "emc_usep": {
       "bytes": 354185,
-      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/emc_usep_2024.zip",
+      "path": "data/raw/singapore_2024/emc_usep_2024.zip",
       "sha256": "3e86e162526e2c3f499571c607c9b4d414a1648ea3e96fae65461bfaaefd306a"
     },
     "open_meteo_weather": {
       "bytes": 280497,
-      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/open_meteo_era5_2024.csv",
+      "path": "data/raw/singapore_2024/open_meteo_era5_2024.csv",
       "sha256": "9732f1b2e740da1917a191191706026c1b9a2c6b99e1eee1023642425cf1ea7d"
     },
     "sasea_demand": {
       "bytes": 15176981,
-      "path": "/Users/levous/Desktop/IDC/data/raw/singapore_2024/sasea_demand_2024.zip",
+      "path": "data/raw/singapore_2024/sasea_demand_2024.zip",
       "sha256": "1264e192171c36fb86a580974c5b0ae64b41917ab7c2330e369f1791532c3e89"
     }
   },
   "row_count": 17568,
   "schema": "m1.3b-singapore-2024-half-hour-v1",
-  "source_manifest_path": "/Users/levous/Desktop/IDC/data/manifest/singapore_2024.json",
+  "source_manifest_path": "data/manifest/singapore_2024.json",
   "source_manifest_sha256": "d4e24d6f4e00408b8acf8e7ed7bd570db5db0eec6d8762284e97bbafdad2a7a9",
   "start": "2024-01-01T00:00:00+08:00",
   "timezone": "Asia/Singapore",
