@@ -6,12 +6,17 @@
 from __future__ import annotations
 
 from contracts.models import (
+    BUNDLE_FORECAST_FIELDS,
+    FORECAST_PURPOSES,
+    NON_FORMAL_SOURCE_KINDS,
     DispatchProposal,
     DispatchResult,
     PlanningExogenousForecast,
     ScenarioBundle,
     SystemSnapshot,
     TaskAllocation,
+    validate_bundle_forecast_provenance,
+    validate_forecast_series_provenance,
 )
 
 _PLANNING_VECTORS = (
@@ -70,7 +75,7 @@ _FORECAST_FIELDS = (
 
 
 def validate_scenario(scenario: ScenarioBundle) -> None:
-    """时间轴长度一致 + 单位/来源齐备。"""
+    """时间轴长度一致 + 单位齐备 + **结构化 provenance** 完备（contract-v8）。"""
     lengths = {name: len(getattr(scenario, name)) for name in _FORECAST_FIELDS}
     if len(set(lengths.values())) != 1:
         raise ValueError(f"预测时间轴长度不一致: {lengths}")
@@ -82,8 +87,7 @@ def validate_scenario(scenario: ScenarioBundle) -> None:
     for name in _FORECAST_FIELDS:
         if name not in scenario.UNITS:
             raise ValueError(f"缺少单位声明: {name}")
-    if not scenario.source_hashes:
-        raise ValueError("缺少来源 hash（source_hashes 为空）")
+    validate_scenario_provenance(scenario)
 
 
 def validate_snapshot(snapshot: SystemSnapshot) -> None:
@@ -190,3 +194,41 @@ def validate_dispatch_result(result: DispatchResult) -> None:
         raise ValueError("soc_next_kwh 为负")
     if result.cost_sgd < 0:
         raise ValueError("cost_sgd 为负")
+
+
+# --- M1.3e：contract-v8 provenance 与 purpose gate --------------------------
+#
+# 逐序列 / 整体的 provenance 校验实现放在 `contracts.models`：`ScenarioBundle` 与
+# `ForecastSeriesProvenance` 必须在**构造时**就 fail closed，而 `models` 不能反过来
+# 导入 `validators`（会成环）。此处提供对外入口，语义完全一致。
+
+validate_series_provenance = validate_forecast_series_provenance
+validate_scenario_provenance = validate_bundle_forecast_provenance
+
+
+def validate_forecast_purpose(scenario: ScenarioBundle, *, purpose: str) -> None:
+    """**purpose gate**：`training`/`evaluation` 必须拒绝 synthetic 与 oracle_debug，
+    只有 `debug` 接受。
+
+    正式训练接线属 **M1.3g**；本卡只建立 gate 本身。
+    """
+    if purpose not in FORECAST_PURPOSES:
+        raise ValueError(
+            f"未知 purpose：{purpose!r}，必须属于 {list(FORECAST_PURPOSES)}"
+        )
+    if purpose == "debug":
+        return
+    # training/evaluation **只**接受 mode=formal；synthetic、oracle_debug 以及任何
+    # 不是正式 ScenarioBundle 的对象（例如 available-exogenous forecast artifact）一律拒绝。
+    mode = getattr(scenario, "mode", None)
+    if mode != "formal":
+        raise ValueError(
+            f"purpose={purpose} 只接受 mode=formal 的场景，实际 mode={mode!r}（仅 debug 可用）"
+        )
+    kinds = {
+        getattr(scenario.forecast_provenance, name).source_kind
+        for name in BUNDLE_FORECAST_FIELDS
+    }
+    forbidden = sorted(kinds & set(NON_FORMAL_SOURCE_KINDS))
+    if forbidden:
+        raise ValueError(f"purpose={purpose} 不得使用 {forbidden} 来源（仅 debug 可用）")

@@ -6,14 +6,17 @@ M3.10c：`CONTRACT_VERSION_ID` 是本仓库**唯一**的契约版本源。
 必须先于 `contracts.models` 导入定义，以避免循环导入。
 """
 
-CONTRACT_VERSION_ID = "contract-v7"
+CONTRACT_VERSION_ID = "contract-v8"
 
 from contracts.models import (  # noqa: E402
+    ArtifactDigest,
     DispatchProposal,
     DispatchResult,
     EvaluationRecord,
+    ForecastSeriesProvenance,
     PlanningExogenousForecast,
     ScenarioBundle,
+    ScenarioForecastProvenance,
     SystemSnapshot,
     TaskAllocation,
     TaskState,
@@ -21,6 +24,9 @@ from contracts.models import (  # noqa: E402
 
 __all__ = [
     "CONTRACT_VERSION_ID",
+    "ArtifactDigest",
+    "ForecastSeriesProvenance",
+    "ScenarioForecastProvenance",
     "ScenarioBundle",
     "SystemSnapshot",
     "DispatchProposal",
