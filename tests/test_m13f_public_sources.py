@@ -133,10 +133,11 @@ def test_manifest_paths_are_repo_relative_posix():
     assert "/Users/" not in text
     assert str(REPO_ROOT) not in text
     for entry in payload["sources"]:
-        path = entry["logical_path"]
+        path = entry.get("logical_path")
         if path is None:
-            # 未冻结来源（blocked / refused_over_size_cap）本就没有本地路径
+            # 未冻结来源（blocked / refused_over_size_cap）按键集合**不带**该键
             assert entry["status"] != "frozen", entry["source_id"]
+            assert "logical_path" not in entry, entry["source_id"]
             continue
         assert not path.startswith("/") and "\\" not in path
         assert not any(seg in (".", "..", "") for seg in path.split("/"))
@@ -382,3 +383,371 @@ def test_real_sources_match_the_frozen_manifest():
         body = module.fetch_bytes(spec["url"])
         assert len(body) == spec["bytes"]
         assert hashlib.sha256(body).hexdigest() == spec["sha256"]
+
+
+# --- 7. M1.3f-b-R1：严格 manifest 校验（单一入口） ---------------------------
+
+import copy  # noqa: E402
+
+TOP_KEYS = (
+    "schema", "contract_version", "max_source_bytes", "max_source_bytes_anchor",
+    "frozen_at_utc", "sources", "human_approved_parameters",
+    "unapproved_parameters", "red_lines", "readiness",
+)
+SOURCE_COMMON_KEYS = (
+    "source_id", "route", "role", "classification", "status", "url", "license",
+    "license_url", "pinned_ref", "data_year", "resolution",
+)
+STATUS_EXTRA_KEYS = {
+    "frozen": ("logical_path", "bytes", "sha256"),
+    "blocked": ("blocked_reason",),
+    "refused_over_size_cap": ("refused_reason", "observed_content_length"),
+}
+PARAM_KEYS = ("value", "unit", "status", "decision_id", "approved_on")
+
+
+def _load():
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def _put(tmp_path, payload):
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def _rejects(tmp_path, payload):
+    module = mod()
+    with pytest.raises(module.SourcePolicyError):
+        module.validate_public_source_manifest(_put(tmp_path, payload), REPO_ROOT)
+
+
+def _entry(payload, source_id):
+    return next(e for e in payload["sources"] if e["source_id"] == source_id)
+
+
+def test_validate_entry_point_exists_and_accepts_the_real_manifest():
+    module = mod()
+    result = module.validate_public_source_manifest(MANIFEST, REPO_ROOT)
+    assert result["ok"] is True
+    assert result["sources"] == len(module.SOURCE_SPECS)
+
+
+def test_validate_also_checks_blocked_and_refused_sources():
+    """§二：blocked / refused 来源同样必须被校验，**不得被 verify 跳过**。"""
+    module = mod()
+    payload = _load()
+    assert any(e["status"] != "frozen" for e in payload["sources"])
+    skipped = module.validated_source_ids(MANIFEST, REPO_ROOT)
+    for entry in payload["sources"]:
+        assert entry["source_id"] in skipped, entry["source_id"]
+
+
+# --- 7.1 source 集合与顺序 ----------------------------------------------------
+
+def test_empty_sources_is_rejected(tmp_path):
+    payload = _load()
+    payload["sources"] = []
+    _rejects(tmp_path, payload)
+
+
+MISSING_SOURCE_IDS: tuple[str, ...] = (
+    "pvlib_pvwatts_license", "windpowerlib_power_curves",
+    "ema_grid_emission_factor_annual", "azure_functions_2019_trace",
+)
+
+
+@pytest.mark.parametrize("source_id", MISSING_SOURCE_IDS)
+def test_missing_source_id_is_rejected(tmp_path, source_id):
+    payload = _load()
+    payload["sources"] = [e for e in payload["sources"] if e["source_id"] != source_id]
+    _rejects(tmp_path, payload)
+
+
+def test_duplicated_source_id_is_rejected(tmp_path):
+    payload = _load()
+    payload["sources"] = payload["sources"] + [copy.deepcopy(payload["sources"][0])]
+    _rejects(tmp_path, payload)
+
+
+def test_unknown_source_id_is_rejected(tmp_path):
+    payload = _load()
+    entry = copy.deepcopy(payload["sources"][0])
+    entry["source_id"] = "shadow_source"
+    payload["sources"] = payload["sources"] + [entry]
+    _rejects(tmp_path, payload)
+
+
+def test_reordered_sources_are_rejected(tmp_path):
+    payload = _load()
+    payload["sources"] = list(reversed(payload["sources"]))
+    _rejects(tmp_path, payload)
+
+
+# --- 7.2 逐字段篡改矩阵 -------------------------------------------------------
+
+def _t_url(p):
+    _entry(p, "pvlib_pvwatts_model")["url"] = "https://evil.example.invalid/x.py"
+
+
+def _t_license(p):
+    _entry(p, "pvlib_pvwatts_license")["license"] = "Apache-2.0"
+
+
+def _t_pinned_ref(p):
+    _entry(p, "windpowerlib_power_curves")["pinned_ref"] = "v9.9.9"
+
+
+def _t_logical_path(p):
+    _entry(p, "windpowerlib_turbine_data")["logical_path"] = "data/raw/other.csv"
+
+
+def _t_bytes(p):
+    _entry(p, "pvlib_pvwatts_model")["bytes"] = 1
+
+
+def _t_sha256(p):
+    _entry(p, "windpowerlib_power_curves")["sha256"] = "0" * 64
+
+
+def _t_classification(p):
+    _entry(p, "pvlib_pvwatts_model")["classification"] = "observed"
+
+
+def _t_status_frozen(p):
+    _entry(p, "ema_grid_emission_factor_annual")["status"] = "frozen"
+
+
+def _t_status_refused(p):
+    _entry(p, "azure_functions_2019_trace")["status"] = "frozen"
+
+
+def _t_resolution(p):
+    _entry(p, "ema_grid_emission_factor_annual")["resolution"] = "half_hourly"
+
+
+def _t_drop_blocked_reason(p):
+    _entry(p, "ema_grid_emission_factor_annual").pop("blocked_reason")
+
+
+def _t_drop_refused_reason(p):
+    _entry(p, "azure_functions_2019_trace").pop("refused_reason")
+
+
+def _t_carbon_frozen(p):
+    entry = _entry(p, "ema_grid_emission_factor_annual")
+    entry["status"] = "frozen"
+    entry["bytes"] = 1
+    entry["sha256"] = "0" * 64
+    entry["logical_path"] = "data/raw/public_benchmarks/fake.json"
+    entry.pop("blocked_reason")
+
+
+def _t_readiness(p):
+    p["readiness"]["carbon_intensity_ready"] = True
+
+
+def _t_red_lines(p):
+    p["red_lines"] = p["red_lines"][:-1]
+
+
+def _t_params(p):
+    p["human_approved_parameters"]["local_pv_kw"]["pv_capacity_kw"]["value"] = 999.0
+
+
+def _t_unapproved(p):
+    p["unapproved_parameters"] = {}
+
+
+def _t_cap(p):
+    p["max_source_bytes"] = 32 * 1024 * 1024
+
+
+def _t_schema(p):
+    p["schema"] = "m1.3f-public-sources-v0"
+
+
+def _t_contract_version(p):
+    p["contract_version"] = "contract-v7"
+
+
+def _t_anchor(p):
+    p["max_source_bytes_anchor"] = "arbitrary"
+
+
+def _t_frozen_at(p):
+    p["frozen_at_utc"] = "2026-09-16T00:00:00"
+
+
+def _t_unknown_top(p):
+    p["future_extension"] = 1
+
+
+def _t_unknown_entry(p):
+    _entry(p, "pvlib_pvwatts_license")["extra_note"] = "x"
+
+
+def _t_unknown_readiness(p):
+    p["readiness"]["extra_ready"] = False
+
+
+def _t_unknown_param_key(p):
+    p["human_approved_parameters"]["local_pv_kw"]["tilt_deg"]["extra"] = 1
+
+
+def _t_drop_param_field(p):
+    p["human_approved_parameters"]["local_pv_kw"]["tilt_deg"].pop("decision_id")
+
+
+def _t_legacy_inherited(p):
+    entry = p["human_approved_parameters"]["local_pv_kw"]["pv_capacity_kw"]
+    entry["status"] = "legacy_inherited"
+
+
+def _t_bool_as_int(p):
+    _entry(p, "pvlib_pvwatts_license")["bytes"] = True
+
+
+MANIFEST_TAMPERINGS = [
+    ("url", _t_url), ("license", _t_license), ("pinned_ref", _t_pinned_ref),
+    ("logical_path", _t_logical_path), ("bytes", _t_bytes), ("sha256", _t_sha256),
+    ("classification", _t_classification), ("carbon_status_frozen", _t_status_frozen),
+    ("arrival_status_frozen", _t_status_refused), ("resolution", _t_resolution),
+    ("drop_blocked_reason", _t_drop_blocked_reason),
+    ("drop_refused_reason", _t_drop_refused_reason),
+    ("carbon_frozen", _t_carbon_frozen), ("readiness", _t_readiness),
+    ("red_lines", _t_red_lines), ("params", _t_params), ("unapproved", _t_unapproved),
+    ("cap", _t_cap), ("schema", _t_schema), ("contract_version", _t_contract_version),
+    ("anchor", _t_anchor), ("frozen_at", _t_frozen_at), ("unknown_top", _t_unknown_top),
+    ("unknown_entry", _t_unknown_entry), ("unknown_readiness", _t_unknown_readiness),
+    ("unknown_param_key", _t_unknown_param_key),
+    ("drop_param_field", _t_drop_param_field),
+    ("legacy_inherited", _t_legacy_inherited), ("bool_as_int", _t_bool_as_int),
+]
+
+
+@pytest.mark.parametrize("name,tamper", MANIFEST_TAMPERINGS)
+def test_manifest_tampering_is_rejected(tmp_path, name, tamper):
+    payload = copy.deepcopy(_load())
+    tamper(payload)
+    _rejects(tmp_path, payload)
+
+
+MALFORMED_MANIFESTS: tuple = (
+    None, 42, True, "text", [], [1, 2], {"schema": "x"},
+    {"sources": []}, {"sources": {}}, {"sources": [None]},
+    {"sources": ["x"]}, {"sources": [{"source_id": 1}]},
+    {"readiness": []}, {"red_lines": "x"},
+)
+
+@pytest.mark.parametrize("bad", MALFORMED_MANIFESTS)
+def test_malformed_manifest_never_leaks_builtin_errors(tmp_path, bad):
+    """§一.8：只抛 SourcePolicyError，不泄漏 KeyError/TypeError/AttributeError。"""
+    module = mod()
+    path = tmp_path / "m.json"
+    path.write_text(json.dumps(bad), encoding="utf-8")
+    with pytest.raises(module.SourcePolicyError):
+        module.validate_public_source_manifest(path, REPO_ROOT)
+
+
+def test_missing_manifest_file_is_a_policy_error(tmp_path):
+    module = mod()
+    with pytest.raises(module.SourcePolicyError):
+        module.validate_public_source_manifest(tmp_path / "nope.json", REPO_ROOT)
+
+
+# --- 7.3 不可变性与重复 --fetch ----------------------------------------------
+
+def test_write_manifest_refuses_a_semantically_different_manifest(tmp_path):
+    module = mod()
+    path = tmp_path / "m.json"
+    payload = _load()
+    module.write_manifest_atomic(payload, path)
+    changed = copy.deepcopy(payload)
+    changed["max_source_bytes"] = 32
+    with pytest.raises(module.SourcePolicyError):
+        module.write_manifest_atomic(changed, path)
+    assert json.loads(path.read_text(encoding="utf-8")) == payload
+
+
+def test_write_manifest_is_a_noop_for_identical_content(tmp_path):
+    module = mod()
+    path = tmp_path / "m.json"
+    payload = _load()
+    module.write_manifest_atomic(payload, path)
+    st = path.stat()
+    before = (st.st_size, _sha256(path.read_bytes()), st.st_mtime_ns)
+    module.write_manifest_atomic(payload, path)
+    st = path.stat()
+    assert (st.st_size, _sha256(path.read_bytes()), st.st_mtime_ns) == before
+
+
+def test_repeated_fetch_reuses_the_existing_frozen_at_utc(tmp_path, monkeypatch):
+    """§一.11：重复 --fetch 必须复用现存合法 frozen_at_utc，不得随墙钟漂移。"""
+    module = mod()
+    dest = tmp_path / "raw"
+    manifest = tmp_path / "m.json"
+
+    frozen_dir = REPO_ROOT / "data/raw/public_benchmarks"
+    monkeypatch.setattr(
+        module, "fetch_bytes",
+        lambda url, **kw: (frozen_dir / _local_for(url)).read_bytes(),
+    )
+    monkeypatch.setattr(module, "_now_utc", lambda: "2026-09-16T00:00:00+00:00")
+    module.run_fetch(dest_dir=dest, manifest_path=manifest)
+    first = manifest.read_bytes()
+    assert json.loads(first)["frozen_at_utc"] == "2026-09-16T00:00:00+00:00"
+
+    monkeypatch.setattr(module, "_now_utc", lambda: "2027-01-01T00:00:00+00:00")
+    module.run_fetch(dest_dir=dest, manifest_path=manifest)
+    second = manifest.read_bytes()
+    assert json.loads(second)["frozen_at_utc"] == "2026-09-16T00:00:00+00:00"
+    assert first == second
+
+
+def _local_for(url: str) -> str:
+    spec = next(s for s in mod().SOURCE_SPECS if s["url"] == url)
+    return spec["local_name"]
+
+
+# --- 7.4 审批守卫（可延续） ---------------------------------------------------
+
+_APPROVED = {
+    "value": 500.0, "unit": "kW", "status": "human_approved",
+    "decision_id": "B4", "approved_on": "2026-09-16",
+}
+
+
+def test_structured_human_approval_is_accepted():
+    module = mod()
+    module.assert_parameters_approved({"pv_capacity_kw": dict(_APPROVED)}, route="B")
+
+
+@pytest.mark.parametrize("mutation", [
+    {"decision_id": ""},
+    {"decision_id": None},
+    {"status": "legacy_inherited"},
+    {"status": "UNAPPROVED"},
+    {"approved_on": "2026-09-16T00:00:00"},
+])
+def test_incomplete_or_legacy_approvals_are_rejected(mutation):
+    module = mod()
+    entry = dict(_APPROVED)
+    entry.update(mutation)
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved({"pv_capacity_kw": entry}, route="B")
+
+
+@pytest.mark.parametrize("bad", [500.0, "500", None, True, [500.0]])
+def test_unstructured_parameter_values_are_rejected(bad):
+    module = mod()
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved({"pv_capacity_kw": bad}, route="B")
+
+
+def test_the_real_approved_parameters_block_validates():
+    module = mod()
+    payload = _load()
+    for route, group in (("B", "local_pv_kw"), ("C", "wind_generation_kw")):
+        module.assert_parameters_approved(
+            payload["human_approved_parameters"][group], route=route)
