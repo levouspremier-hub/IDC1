@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 from contracts.models import (
+    AVAILABLE_DRIVER_SERIES,
+    AVAILABLE_FORECAST_SOURCE_KIND,
     BUNDLE_FORECAST_FIELDS,
     FORECAST_PURPOSES,
     NON_FORMAL_SOURCE_KINDS,
+    AvailableExogenousForecast,
     DispatchProposal,
     DispatchResult,
     PlanningExogenousForecast,
@@ -204,6 +207,36 @@ def validate_dispatch_result(result: DispatchResult) -> None:
 
 validate_series_provenance = validate_forecast_series_provenance
 validate_scenario_provenance = validate_bundle_forecast_provenance
+
+
+def validate_available_forecast(artifact: AvailableExogenousForecast) -> None:
+    """driver forecast artifact 的显式完整性校验（**防御性第二道**）。
+
+    模型在构造时已自校验；此入口用于对「经由 `model_copy` 等手段绕开构造校验」
+    的对象再验一次，语义与构造时一致。
+    """
+    if len(artifact.target_timestamps) != artifact.forecast_cutoff:
+        raise ValueError(
+            "target_timestamps 长度 "
+            f"{len(artifact.target_timestamps)} != forecast_cutoff {artifact.forecast_cutoff}"
+        )
+    for driver in AVAILABLE_DRIVER_SERIES:
+        if len(artifact.series[driver]) != artifact.forecast_cutoff:
+            raise ValueError(
+                f"series.{driver} 长度 {len(artifact.series[driver])} != "
+                f"forecast_cutoff {artifact.forecast_cutoff}"
+            )
+        entry = artifact.provenance[driver]
+        validate_forecast_series_provenance(entry, expected_series_name=driver)
+        if entry.source_kind != AVAILABLE_FORECAST_SOURCE_KIND:
+            raise ValueError(
+                f"provenance.{driver}.source_kind 必须是 "
+                f"{AVAILABLE_FORECAST_SOURCE_KIND!r}，实际 {entry.source_kind!r}"
+            )
+        if entry.generated_at != artifact.generated_at:
+            raise ValueError(
+                f"provenance.{driver}.generated_at 必须等于 artifact.generated_at"
+            )
 
 
 def validate_forecast_purpose(scenario: ScenarioBundle, *, purpose: str) -> None:

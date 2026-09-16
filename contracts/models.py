@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from typing import ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -21,6 +22,21 @@ class ContractBase(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: str = Field(default=CONTRACT_VERSION_ID)
+
+    @field_validator("schema_version")
+    @classmethod
+    def _lock_schema_version(cls, value: object) -> object:
+        """**在基底类统一锁定**契约版本：显式声明旧版本或任意字符串一律拒绝。
+
+        `schema_version` 不是「可覆盖的默认值」——全仓唯一版本源是
+        `contracts.CONTRACT_VERSION_ID`（M1.3e-R1）。
+        """
+        if value != CONTRACT_VERSION_ID:
+            raise ValueError(
+                f"schema_version 必须是 {CONTRACT_VERSION_ID!r}，实际 {value!r}"
+                "（版本只能来自 contracts.CONTRACT_VERSION_ID，不得显式覆盖）"
+            )
+        return value
 
 
 # --- M1.3e：contract-v8 结构化 forecast provenance -------------------------
@@ -39,19 +55,28 @@ BUNDLE_FORECAST_FIELDS: tuple[str, ...] = (
 # `mode=formal` 禁止出现的来源类别
 NON_FORMAL_SOURCE_KINDS: tuple[str, ...] = ("synthetic", "oracle_debug", "unavailable")
 
-# 每个 `mode` **允许**的来源类别：`mode` 是**声明**，不是装饰。
-# - `formal`：只接受「真实可得」来源，不得携带 synthetic / oracle_debug / unavailable；
-# - `synthetic`：不得声称外部真实预测产品或 oracle；
-# - `oracle_debug`：只允许明确标注为 oracle_debug / synthetic 的「非真实」来源。
+# 每个 `mode` 允许的来源类别：`mode` 是**精确声明**，不是装饰（M1.3e-R1 收紧）。
+# - `formal`：只接受「真实可得」来源；不得携带 synthetic / oracle_debug / unavailable；
+# - `synthetic`：**七条序列必须全部** `synthetic`（见 MODE_EXACT_SOURCE_KINDS）；
+# - `oracle_debug`：**七条序列必须全部** `oracle_debug`。
 MODE_ALLOWED_SOURCE_KINDS: dict[str, tuple[str, ...]] = {
     "formal": (
         "external_forecast", "seasonal_naive", "persistence", "modeled_scenario",
     ),
-    "synthetic": (
-        "seasonal_naive", "persistence", "modeled_scenario", "synthetic", "unavailable",
-    ),
-    "oracle_debug": ("oracle_debug", "synthetic"),
+    "synthetic": ("synthetic",),
+    "oracle_debug": ("oracle_debug",),
 }
+
+# 这两个 mode 要求**七条逐项**等于唯一的来源类别（不是「允许集合」）
+MODE_EXACT_SOURCE_KINDS: dict[str, str] = {
+    "synthetic": "synthetic",
+    "oracle_debug": "oracle_debug",
+}
+
+# **任何** `ScenarioBundle` 都不得携带的来源类别：完整 bundle 的七条序列都有值，
+# 声明某条「不可得」是自相矛盾；`unavailable` 只用于尚未 materialize 的字段登记
+# （split manifest 的 `unavailable_not_materialized`），不得进入场景契约。
+BUNDLE_FORBIDDEN_SOURCE_KINDS: tuple[str, ...] = ("unavailable",)
 
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
@@ -239,19 +264,41 @@ def validate_bundle_forecast_provenance(bundle: ScenarioBundle) -> None:
             f"实际 {type(provenance).__name__}（不得用自由 dict 承载 provenance）"
         )
 
+    forbidden = set(BUNDLE_FORBIDDEN_SOURCE_KINDS)
+    exact_kind = MODE_EXACT_SOURCE_KINDS.get(mode)
     allowed = MODE_ALLOWED_SOURCE_KINDS[mode]
     rejected: list[tuple[str, str]] = []
+    mismatched_generated_at: list[tuple[str, str]] = []
     for name in BUNDLE_FORECAST_FIELDS:
         entry = getattr(provenance, name)
         if not isinstance(entry, ForecastSeriesProvenance):
             raise ValueError(f"forecast_provenance.{name} 必须是 ForecastSeriesProvenance")
         validate_forecast_series_provenance(entry, expected_series_name=name)
-        if entry.source_kind not in allowed:
+        if entry.source_kind in forbidden:
             rejected.append((name, entry.source_kind))
+            continue
+        if exact_kind is not None:
+            # synthetic / oracle_debug 要求**七条逐项**等于该 mode 的唯一来源类别
+            if entry.source_kind != exact_kind:
+                rejected.append((name, entry.source_kind))
+        elif entry.source_kind not in allowed:
+            rejected.append((name, entry.source_kind))
+        if entry.generated_at != bundle.generated_at:
+            mismatched_generated_at.append((name, entry.generated_at))
     if rejected:
+        expectation = (
+            f"该 mode 要求七条逐项为 {exact_kind!r}"
+            if exact_kind is not None
+            else f"该 mode 允许的来源为 {list(allowed)}"
+        )
         raise ValueError(
             f"mode={mode!r} 不接受以下来源声明：{rejected}；"
-            f"该 mode 允许的来源为 {list(allowed)}"
+            f"禁止的来源类别为 {list(BUNDLE_FORBIDDEN_SOURCE_KINDS)}；{expectation}"
+        )
+    if mismatched_generated_at:
+        raise ValueError(
+            "forecast_provenance 的 generated_at 必须与 ScenarioBundle.generated_at "
+            f"逐项恒等，实际不一致：{mismatched_generated_at}"
         )
 
 
@@ -294,6 +341,239 @@ class ScenarioBundle(ContractBase):
 
     def content_hash(self) -> str:
         """确定性内容 hash（与 dict 键顺序无关）；**覆盖全部 provenance**。"""
+        return hashlib.sha256(
+            json.dumps(self.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+
+# --- M1.3e-R1：available exogenous forecast artifact ------------------------
+#
+# 这是**五个 canonical truth driver 的因果 forecast artifact**的严格冻结契约。
+# 它**不是**完整 `ScenarioBundle`（没有 PV / 风电发电量 / 碳强度 / arrival），
+# 因此**不得**被当作完整场景用于训练或评估（由 purpose gate 拒绝）。
+
+AVAILABLE_DRIVER_SERIES: tuple[str, ...] = (
+    "price_sgd_per_kwh",
+    "system_load_mw",
+    "temperature_deg_c",
+    "wind_speed_10m_mps",
+    "ghi_w_per_m2",
+)
+DRIVER_UNITS: dict[str, str] = {
+    "price_sgd_per_kwh": "SGD/kWh",
+    "system_load_mw": "MW",
+    "temperature_deg_c": "degC",
+    "wind_speed_10m_mps": "m/s",
+    "ghi_w_per_m2": "W/m2",
+}
+# 本 artifact 的**冻结来源类别**：trailing seasonal-naive。
+AVAILABLE_FORECAST_SOURCE_KIND = "seasonal_naive"
+
+
+class AvailableSeries(BaseModel):
+    """五个 driver 的预测向量：**冻结、定长元组**，不暴露可变内部 list/dict。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    price_sgd_per_kwh: tuple[float, ...]
+    system_load_mw: tuple[float, ...]
+    temperature_deg_c: tuple[float, ...]
+    wind_speed_10m_mps: tuple[float, ...]
+    ghi_w_per_m2: tuple[float, ...]
+
+    def __getitem__(self, driver: str) -> tuple[float, ...]:
+        try:
+            return getattr(self, driver)
+        except AttributeError as error:
+            raise KeyError(f"未知 driver：{driver!r}") from error
+
+    def as_dict(self) -> dict[str, tuple[float, ...]]:
+        return {driver: self[driver] for driver in AVAILABLE_DRIVER_SERIES}
+
+
+class AvailableDriverProvenance(BaseModel):
+    """五个 driver 的**逐序列**结构化 provenance（无自由 dict）。"""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    price_sgd_per_kwh: ForecastSeriesProvenance
+    system_load_mw: ForecastSeriesProvenance
+    temperature_deg_c: ForecastSeriesProvenance
+    wind_speed_10m_mps: ForecastSeriesProvenance
+    ghi_w_per_m2: ForecastSeriesProvenance
+
+    def __getitem__(self, driver: str) -> ForecastSeriesProvenance:
+        try:
+            return getattr(self, driver)
+        except AttributeError as error:
+            raise KeyError(f"未知 driver：{driver!r}") from error
+
+
+class AvailableExogenousForecast(ContractBase):
+    """**严格冻结**的 driver forecast artifact（contract-v8）。
+
+    与 `ScenarioBundle` 的区别是**结构性**的：这里只有五个 driver，没有
+    PV / 风电发电量 / 碳强度 / arrival；因此它带 `policy_manifest_path` 与四个
+    来源 SHA-256，可被审计到**完整的冻结资产链**（policy → split → canonical →
+    parquet），且被 purpose gate 在 `training`/`evaluation` 下拒绝。
+    """
+
+    split: str
+    origin: int
+    global_origin: int
+    forecast_cutoff: int
+    frequency: str
+    method: str
+    period_steps: int
+    generated_at: str
+    target_timestamps: tuple[str, ...]
+    series: AvailableSeries
+    provenance: AvailableDriverProvenance
+    policy_manifest_path: str
+    policy_manifest_sha256: str
+    canonical_parquet_sha256: str
+    canonical_manifest_sha256: str
+    split_manifest_sha256: str
+    code_revision: str
+
+    @field_validator(
+        "origin", "global_origin", "forecast_cutoff", "period_steps", mode="before"
+    )
+    @classmethod
+    def _reject_bool_integers(cls, value: object) -> object:
+        """pydantic 宽松模式会把 `True` 变成 `1`；整数语义字段必须显式拒绝 bool。"""
+        if isinstance(value, bool):
+            raise ValueError("整数语义字段不得为 bool")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_available_forecast(self) -> AvailableExogenousForecast:
+        if not self.split:
+            raise ValueError("split 不得为空")
+        for name in ("origin", "global_origin"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{name} 必须是非负整数，实际 {value!r}")
+        if self.global_origin < self.origin:
+            raise ValueError("global_origin 不得小于 split 本地的 origin")
+        if (
+            isinstance(self.forecast_cutoff, bool)
+            or not isinstance(self.forecast_cutoff, int)
+            or self.forecast_cutoff < 1
+        ):
+            raise ValueError(f"forecast_cutoff 必须是严格正整数，实际 {self.forecast_cutoff!r}")
+        if (
+            isinstance(self.period_steps, bool)
+            or not isinstance(self.period_steps, int)
+            or self.period_steps < 1
+        ):
+            raise ValueError(f"period_steps 必须是严格正整数，实际 {self.period_steps!r}")
+        for name in ("frequency", "method"):
+            if not getattr(self, name):
+                raise ValueError(f"{name} 不得为空")
+        _require_canonical_timestamp(self.generated_at, field="generated_at")
+        if not _is_lower_hex(self.code_revision, 40):
+            raise ValueError(
+                f"code_revision 必须是 40 位小写 Git SHA，实际 {self.code_revision!r}"
+            )
+        for name in (
+            "policy_manifest_sha256", "canonical_parquet_sha256",
+            "canonical_manifest_sha256", "split_manifest_sha256",
+        ):
+            if not _is_lower_hex(getattr(self, name), 64):
+                raise ValueError(
+                    f"{name} 必须是 64 位小写十六进制，实际 {getattr(self, name)!r}"
+                )
+        if not self.policy_manifest_path:
+            raise ValueError("policy_manifest_path 不得为空")
+
+        if len(self.target_timestamps) != self.forecast_cutoff:
+            raise ValueError(
+                "target_timestamps 长度 "
+                f"{len(self.target_timestamps)} != forecast_cutoff {self.forecast_cutoff}"
+            )
+        for stamp in self.target_timestamps:
+            _require_canonical_timestamp(stamp, field="target_timestamps[*]")
+
+        for driver in AVAILABLE_DRIVER_SERIES:
+            values = self.series[driver]
+            if len(values) != self.forecast_cutoff:
+                raise ValueError(
+                    f"series.{driver} 长度 {len(values)} != forecast_cutoff "
+                    f"{self.forecast_cutoff}"
+                )
+            for value in values:
+                if not math.isfinite(value):
+                    raise ValueError(f"series.{driver} 含非有限值：{value!r}")
+            entry = self.provenance[driver]
+            if entry.series_name != driver:
+                raise ValueError(
+                    f"provenance.{driver}.series_name 必须是 {driver!r}，"
+                    f"实际 {entry.series_name!r}"
+                )
+            if entry.source_kind != AVAILABLE_FORECAST_SOURCE_KIND:
+                raise ValueError(
+                    f"provenance.{driver}.source_kind 必须是 "
+                    f"{AVAILABLE_FORECAST_SOURCE_KIND!r}，实际 {entry.source_kind!r}"
+                )
+            if entry.method != self.method:
+                raise ValueError(
+                    f"provenance.{driver}.method 必须等于 artifact.method "
+                    f"{self.method!r}，实际 {entry.method!r}"
+                )
+            for field, expected in (
+                ("generated_at", self.generated_at),
+                ("information_cutoff_exclusive", self.generated_at),
+                ("lookback_end_exclusive", self.generated_at),
+                ("target_start", self.generated_at),
+            ):
+                actual = getattr(entry, field)
+                if actual != expected:
+                    raise ValueError(
+                        f"provenance.{driver}.{field} 必须是 {expected!r}，实际 {actual!r}"
+                    )
+            if entry.target_end_exclusive != self._target_end_exclusive():
+                raise ValueError(
+                    f"provenance.{driver}.target_end_exclusive 必须等于 "
+                    f"artifact 的 target 末端 {self._target_end_exclusive()!r}，"
+                    f"实际 {entry.target_end_exclusive!r}"
+                )
+        return self
+
+    def _target_end_exclusive(self) -> str:
+        """target 窗口右端：最后一个 target 时间戳 + 一个 step（30min）。
+
+        没有外部输入时用 `target_timestamps[-1]` 加固定 30 分钟；调用方必须保证
+        `target_timestamps` 是严格 30 分钟网格（由 provenance 的窗口语义约束）。
+        """
+        return (
+            datetime.fromisoformat(self.target_timestamps[-1]) + timedelta(minutes=30)
+        ).isoformat()
+
+    def to_dict(self) -> dict:
+        return self.model_dump(mode="json")
+
+    def prediction_hash(self) -> str:
+        """**只覆盖预测数值、单位与顺序**（用于证明预测不随未来真值变化）。
+
+        刻意**不含**上游 SHA-256 与 revision：那些会随上游文件字节变化，
+        而预测值未必变化。
+        """
+        payload = {
+            "units": {driver: DRIVER_UNITS[driver] for driver in AVAILABLE_DRIVER_SERIES},
+            "series": {
+                driver: list(self.series[driver]) for driver in AVAILABLE_DRIVER_SERIES
+            },
+        }
+        return hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()
+
+    def content_hash(self) -> str:
+        """**覆盖完整 artifact**，含 policy/split/canonical provenance 与 revision。
+
+        不得为了通过 leakage 测试而让它忽略审计 provenance（M1.3e-R1）。
+        """
         return hashlib.sha256(
             json.dumps(self.model_dump(mode="json"), sort_keys=True).encode("utf-8")
         ).hexdigest()
