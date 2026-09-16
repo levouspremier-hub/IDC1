@@ -800,8 +800,8 @@ EMC 的 USEP/IGS 月表、SASEA 的 demand —— **四项缺口在 raw 中没�
 切入-额定-切出/额定容量/空气密度/功率曲线本身（且 ERA5 只有 10 m 风速）。
 碳强度缺半小时燃料结构与排放因子版本；arrival 缺过程族与参数。
 
-**结论：四项全部 `BLOCKED`**。卡片给出机器可核对的决策矩阵（17 列 × 10 行，
-未知值一律写 `UNKNOWN`/`BLOCKED`）、**六项需人工决定清单**，以及后续最小卡序列
+**结论：四项全部 `BLOCKED`**。卡片给出机器可核对的决策矩阵（**15 列 × 9 个数据
+行**，未知值一律写 `UNKNOWN`/`BLOCKED`）、**六项需人工决定清单**，以及后续最小卡序列
 **M1.3f-b**（获批数据冻结或 modeled policy manifest）→ **M1.3f-c**（四类 causal
 provider + 泄漏测试 + provenance）→ **M1.3g**（formal `ScenarioBundle` +
 normalization refs + env/train 接线 + 三个正式 split manifest）。
@@ -813,6 +813,13 @@ normalization refs + env/train 接线 + 三个正式 split manifest）。
 **只读验收**：`make check` exit 0（**2048 passed**）、`make smoke` exit 0、
 `make train` exit 2（不回退 synthetic）、checkpoint **0**、三个保留名不存在；
 raw 四项与上游五项资产 SHA-256 **逐字节未变**；`git diff --check` 为空。
+
+**M1.3f-a 已通过人工审核**（2026-09-16）。
+
+> **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
+> 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
+> 本行已更正；提交 `4519a29` 的提交信息保留原错误表述（Git 历史不重写）。
+> 以 `docs/task_cards/M1.3f.md` §11.2 为准。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
