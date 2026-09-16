@@ -30,13 +30,14 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
-from pvlib import inverter, irradiance, solarposition, temperature, pvsystem
+from pvlib import inverter, irradiance, pvsystem, solarposition, temperature
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -172,9 +173,9 @@ def pv_ac_limit_kw(
 
 def local_pv_kw(
     times: pd.DatetimeIndex,
-    ghi_w_per_m2: Sequence[float],
-    temp_air_deg_c: Sequence[float],
-    wind_speed_10m_mps: Sequence[float],
+    ghi_w_per_m2: Sequence[float] | np.ndarray,
+    temp_air_deg_c: Sequence[float] | np.ndarray,
+    wind_speed_10m_mps: Sequence[float] | np.ndarray,
     *,
     params: dict[str, Any] | None = None,
 ) -> np.ndarray:
@@ -301,7 +302,7 @@ def load_wind_power_curve(
         power.append(float(value) * WIND_CURVE_W_TO_KW)
     if len(speeds) < 2:
         raise ExogenousDriverError(f"{turbine_type} 的定义点不足")
-    if any(b <= a for a, b in zip(speeds, speeds[1:])):
+    if any(b <= a for a, b in zip(speeds, speeds[1:], strict=True)):
         raise ExogenousDriverError("功率曲线的风速定义点必须严格递增")
     return WindPowerCurve(
         turbine_type=turbine_type, speeds_mps=tuple(speeds),
@@ -310,7 +311,7 @@ def load_wind_power_curve(
 
 
 def hub_wind_speed(
-    wind_speed_10m_mps: Sequence[float],
+    wind_speed_10m_mps: Sequence[float] | np.ndarray,
     *,
     hub_height_m: float = WIND_PARAMS["hub_height_m"],
     reference_height_m: float = WIND_PARAMS["reference_height_m"],
@@ -324,7 +325,7 @@ def hub_wind_speed(
 
 
 def power_from_curve(
-    v_hub_mps: Sequence[float],
+    v_hub_mps: Sequence[float] | np.ndarray,
     *,
     curve: WindPowerCurve,
     rated_capacity_kw: float = WIND_PARAMS["rated_capacity_kw"],
@@ -357,7 +358,7 @@ def power_from_curve(
 
 
 def wind_generation_kw(
-    wind_speed_10m_mps: Sequence[float],
+    wind_speed_10m_mps: Sequence[float] | np.ndarray,
     *,
     curve: WindPowerCurve | None = None,
     hub_height_m: float = WIND_PARAMS["hub_height_m"],
@@ -435,7 +436,9 @@ def arrival_rate_template_from_cache(
     if not manifest_path.is_file():
         raise ExogenousDriverError(f"缺少 {manifest_path}")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    template = np.asarray(payload["arrival"]["rate_template"], dtype=float)
+    template = np.asarray(
+        payload["columns"]["arrival"]["rate_template"], dtype=float
+    )
     if template.shape != ARRIVAL_TEMPLATE_SHAPE:
         raise ExogenousDriverError(
             f"冻结 template 形状必须是 {ARRIVAL_TEMPLATE_SHAPE}，实际 {template.shape}"

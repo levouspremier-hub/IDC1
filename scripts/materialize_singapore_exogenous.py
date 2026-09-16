@@ -42,9 +42,10 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -64,15 +65,14 @@ from scenario.exogenous_drivers import (
     CARBON_RESOLUTION,
     CARBON_SOURCE_URL,
     CARBON_UNIT,
-    PVLIB_DEFAULTS_NOT_HUMAN_APPROVED,
     PV_PARAMS,
     PV_UNIT,
+    PVLIB_DEFAULTS_NOT_HUMAN_APPROVED,
     SPLIT_MANIFEST,
     WIND_CURVE_FILE,
     WIND_CURVE_SHA256,
     WIND_PARAMS,
     WIND_UNIT,
-    ExogenousDriverError,
     FrozenInputs,
     arrival_counts_from_trace,
     arrival_rate_template,
@@ -374,6 +374,7 @@ def trace_minute_totals(path: Path = ARRIVAL_ARCHIVE) -> pd.Series:
 
 # --- 物化 ---------------------------------------------------------------------
 
+
 def _column_stats(values: np.ndarray) -> dict:
     values = np.asarray(values, dtype=float)
     return {
@@ -421,7 +422,10 @@ def build_manifest(
                 "parameters": dict(PV_PARAMS),
                 "pvlib_defaults_not_human_approved":
                     dict(PVLIB_DEFAULTS_NOT_HUMAN_APPROVED),
-                "note": "**modeled**，不是 IDC 本地 PV 现场实测；输入只来自同 timestamp 的 ERA5 GHI/温度/风速",
+                "note": (
+                    "**modeled**，不是 IDC 本地 PV 现场实测；"
+                    "输入只来自同 timestamp 的 ERA5 GHI/温度/风速"
+                ),
             },
             "wind_generation_kw": {
                 "classification": "modeled_scenario",
@@ -445,19 +449,30 @@ def build_manifest(
                 "value": CARBON_KG_PER_KWH,
                 "source_url": CARBON_SOURCE_URL,
                 "human_decision": {"decision_id": "B1", "approved_on": "2026-09-16"},
-                "note": "**不是**半小时观测，**不是**实时边际排放因子；env 默认日曲线与 carbon_factor_ref 均未使用",
+                "note": (
+                    "**不是**半小时观测，**不是**实时边际排放因子；"
+                    "env 默认日曲线与 carbon_factor_ref 均未使用"
+                ),
             },
             "arrival": {
                 "classification": "modeled_scenario_calibrated_from_benchmark_trace",
                 "unit": ARRIVAL_UNIT,
                 "method": "poisson_forward_generation_from_frozen_template",
                 "seed": ARRIVAL_SEED,
-                "mean_arrival_work_units_per_half_hour":
+                "mean_arrival_work_units_per_half_hour_scale":
                     ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
+                "realized_annual_mean": float(frame["arrival"].mean()),
+                "realized_mean_note": (
+                    "尺度参数固定为 1000.0；2024 的星期分布并非恰好均匀"
+                    "（闰年 366 天），故实现年均略低于 1000"
+                ),
                 "scale_basis": ARRIVAL_SCALE_BASIS,
                 "rate_template": [[float(v) for v in row] for row in template],
                 "date_mapping": TRACE_DATE_MAPPING,
-                "note": "2019 trace 只校准**分布形状**，不重放、不改称 2024 真实到达；生成只依赖冻结 template、星期/时刻与固定 seed",
+                "note": (
+                    "2019 trace 只校准**分布形状**，不重放、不改称 2024 真实到达；"
+                    "生成只依赖冻结 template、星期/时刻与固定 seed"
+                ),
             },
         },
         "azure": {

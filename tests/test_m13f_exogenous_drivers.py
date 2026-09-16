@@ -236,7 +236,8 @@ def test_arrival_is_non_negative_integer(frame):
 def test_arrival_is_reproducible_with_the_frozen_seed(frame):
     module = drivers()
     template = np.asarray(
-        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["arrival"]["rate_template"]
+        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["columns"]["arrival"]
+        ["rate_template"]
     )
     again = module.generate_arrival(
         pd.DatetimeIndex(frame["timestamp"]), template, seed=ARRIVAL_SEED)
@@ -246,7 +247,8 @@ def test_arrival_is_reproducible_with_the_frozen_seed(frame):
 def test_arrival_changes_with_a_different_seed(frame):
     module = drivers()
     template = np.asarray(
-        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["arrival"]["rate_template"]
+        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["columns"]["arrival"]
+        ["rate_template"]
     )
     other = module.generate_arrival(
         pd.DatetimeIndex(frame["timestamp"]), template, seed=ARRIVAL_SEED + 1)
@@ -255,7 +257,7 @@ def test_arrival_changes_with_a_different_seed(frame):
 
 def test_arrival_template_is_normalised_and_shaped(frame):
     module = drivers()
-    template = module.arrival_rate_template_from_manifest()
+    template = module.arrival_rate_template_from_cache()
     assert template.shape == (7, 48)
     assert np.isfinite(template).all()
     assert (template >= 0).all()
@@ -264,7 +266,7 @@ def test_arrival_template_is_normalised_and_shaped(frame):
 
 def test_arrival_is_exactly_poisson_with_the_frozen_rate(frame):
     module = drivers()
-    template = module.arrival_rate_template_from_manifest()
+    template = module.arrival_rate_template_from_cache()
     stamps = pd.DatetimeIndex(frame["timestamp"])
     rates = np.array([
         template[stamp.weekday(), stamp.hour * 2 + stamp.minute // 30] * ARRIVAL_MEAN
@@ -273,7 +275,10 @@ def test_arrival_is_exactly_poisson_with_the_frozen_rate(frame):
     rng = np.random.default_rng(ARRIVAL_SEED)
     expected = rng.poisson(rates)
     assert np.array_equal(expected, frame["arrival"].to_numpy())
-    assert rates.mean() == pytest.approx(ARRIVAL_MEAN, rel=1e-9)
+    # **尺度参数**固定为 1000；2024 的星期分布并非恰好均匀（闰年 366 天），
+    # 因此**实现**的全年均值是 999.979 而不是精确 1000——两者都如实登记在 manifest。
+    assert ARRIVAL_MEAN == 1000.0
+    assert rates.mean() == pytest.approx(ARRIVAL_MEAN, rel=1e-3)
 
 
 def test_arrival_is_not_a_replay_of_the_2019_trace(frame):
@@ -283,16 +288,41 @@ def test_arrival_is_not_a_replay_of_the_2019_trace(frame):
     assert arrival.mean() == pytest.approx(ARRIVAL_MEAN, rel=0.05)
 
 
-def test_arrival_template_ignores_validation_and_test_truth(tmp_path):
-    """修改 validation/test truth **不得**改变 arrival rate template。"""
+def test_arrival_template_does_not_read_2024_truth(monkeypatch):
+    """arrival 的 rate template 只来自 2019 trace：**不得**读取任何 2024 数据。"""
     module = drivers()
     baseline = module.arrival_rate_template_from_cache()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("arrival template 不得读取 2024 truth")
+
+    monkeypatch.setattr(pd, "read_parquet", forbidden)
+    again = module.arrival_rate_template_from_cache()
+    assert np.array_equal(baseline, again)
+
+
+def test_validation_and_test_truth_mutation_does_not_change_arrival(tmp_path):
+    """改 validation/test 段真值 → PV/风电必变，但 **arrival 必须完全相同**。"""
+    module = drivers()
+    baseline_inputs = module.load_frozen_inputs(
+        canonical_parquet_path=CANONICAL_PARQUET,
+        canonical_manifest_path=CANONICAL_MANIFEST,
+        split_manifest_path=SPLIT_MANIFEST,
+    )
     mutated = _mutated_chain(tmp_path)
-    other = module.arrival_rate_template_from_cache(root=mutated)
-    assert np.array_equal(baseline, other)
+    other_inputs = module.load_frozen_inputs(
+        canonical_parquet_path=mutated / "data/processed/singapore_2024/half_hour.parquet",
+        canonical_manifest_path=mutated / "data/manifest/singapore_2024_half_hour.json",
+        split_manifest_path=mutated / "data/manifest/singapore_2024_splits.json",
+    )
+    template = module.arrival_rate_template_from_cache()
+    baseline = module.build_drivers(baseline_inputs, template=template)
+    after = module.build_drivers(other_inputs, template=template)
+    assert not np.array_equal(baseline["local_pv_kw"], after["local_pv_kw"])
+    assert np.array_equal(baseline["arrival"], after["arrival"])
 
 
-def _mutated_chain(tmp_path: pathlib.Path) -> pathlib.Path:
+def _mutated_chain(tmp_path: pathlib.Path, *, sync_hashes: bool = True) -> pathlib.Path:
     """复制上游资产并**篡改 validation/test 段**（train 段与 trace 不变）。"""
     root = tmp_path / "root"
     (root / "data/processed/singapore_2024").mkdir(parents=True, exist_ok=True)
@@ -303,22 +333,34 @@ def _mutated_chain(tmp_path: pathlib.Path) -> pathlib.Path:
     frame.loc[frame.index >= 10224, "temperature_deg_c"] += 5.0
     parquet = root / "data/processed/singapore_2024/half_hour.parquet"
     frame.to_parquet(parquet, index=False)
-    payload = json.loads((root / "data/manifest/singapore_2024_half_hour.json").read_text())
-    payload["output_parquet_sha256"] = _sha256(parquet)
-    (root / "data/manifest/singapore_2024_half_hour.json").write_text(json.dumps(payload))
-    splits = json.loads((root / "data/manifest/singapore_2024_splits.json").read_text())
-    splits["canonical_parquet_sha256"] = _sha256(parquet)
-    splits["canonical_manifest_sha256"] = _sha256(
-        root / "data/manifest/singapore_2024_half_hour.json")
-    (root / "data/manifest/singapore_2024_splits.json").write_text(json.dumps(splits))
+    if sync_hashes:
+        payload = json.loads(
+            (root / "data/manifest/singapore_2024_half_hour.json").read_text())
+        payload["output_parquet_sha256"] = _sha256(parquet)
+        (root / "data/manifest/singapore_2024_half_hour.json").write_text(
+            json.dumps(payload))
+        splits = json.loads(
+            (root / "data/manifest/singapore_2024_splits.json").read_text())
+        splits["canonical_parquet_sha256"] = _sha256(parquet)
+        splits["canonical_manifest_sha256"] = _sha256(
+            root / "data/manifest/singapore_2024_half_hour.json")
+        # M1.3d 要求路径声明等于调用者实际提供的 logical repo path；
+        # 临时根目录下的 logical 形式是 `<external>/<name>`
+        splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
+        splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+        splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(
+            parquet)
+        (root / "data/manifest/singapore_2024_splits.json").write_text(
+            json.dumps(splits))
     return root
 
 
 # --- 7. 失败关闭与不可覆盖 ----------------------------------------------------
 
 def test_source_hash_mismatch_fails_closed(tmp_path):
+    """篡改 parquet 而**不**同步更新 manifest hash → 必须 fail closed。"""
     module = drivers()
-    root = _mutated_chain(tmp_path)
+    root = _mutated_chain(tmp_path, sync_hashes=False)
     with pytest.raises((ValueError, FileNotFoundError)):
         module.load_frozen_inputs(
             canonical_parquet_path=root / "data/processed/singapore_2024/half_hour.parquet",
@@ -363,7 +405,7 @@ def test_output_manifest_records_the_required_fields():
                 "public_source_manifest_path", "public_source_manifest_sha256",
                 "materialization_sources_path", "materialization_sources_sha256",
                 "pyproject_sha256", "uv_lock_sha256",
-                "columns", "azure", "output", "arrival", "readiness"):
+                "columns", "azure", "output", "readiness"):
         assert key in payload, key
 
 
