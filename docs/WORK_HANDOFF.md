@@ -952,6 +952,55 @@ git revert 6db8aef 941c657 e1e4731 614e488 9c38ad7
 
 **M1.3f-c 未开始**；**M1.3 正式链仍 blocked**，不新增 M5.5，不进入 M6。
 
+### 7M.2 M1.3f-b-R2：第二轮审核返修（**执行完成，等待复审**）
+
+**M1.3f-b 第二轮人工审核不通过**；返修区间 `f5a2ced..`（见卡片 §F–§G）。
+
+**审核指出 12 项真实绕过（改前实测 17 处 ACCEPTED）与六项修复要求，全部完成**：
+
+1. **frozen entry 全字段严格恒等**：抽出 `expected_source_entry(spec)`
+   （`build_manifest` 与校验共用），校验改为整条 entry 与冻结登记**逐字段恒等**
+   并列出差异——**同时**覆盖 `SOURCE_COMMON_KEYS` 与 `STATUS_EXTRA_KEYS` 的**每个**
+   字段；`blocked_reason` / `refused_reason` 必须**逐字恒等**，
+   不再有「只验类型、不验冻结值」的字段。
+2. **`logical_path` 逐字绑定**：新增 `_require_canonical_logical_path()`
+   （拒绝绝对路径、反斜杠、`.`/`..`/空段）与 `expected_logical_path(spec)`；
+   必须逐字等于 `data/raw/public_benchmarks/<spec.local_name>`
+   ——指向另一份**同内容/hash** 的文件也被拒。
+3. **审批守卫验证完整冻结参数组**：参数名集合必须**精确等于**该路线的冻结批准组
+   （B→`local_pv_kw`、C→`wind_generation_kw`），每项五键精确且与冻结记录
+   **逐字段恒等**；值是**有限 plain int/float**（bool 不算数值）或非空字符串。
+   空集、子集、额外、改名、自造 `decision_id`、容器、`None`、数字字符串全部拒绝。
+4. **特例上限绑定**：`exception_cap_applies()` 要求
+   `source_id`+精确 URL+`pinned_ref`+`decision_id=B3`+固定 cap **五个字段全中**；
+   任一不符即回落默认 16 MiB（自造 spec 无法绕过）。
+5. **`run_fetch` 复核刚下载的目标**：新增
+   `validation_root_for(dest_dir)`（要求以 `data/raw/public_benchmarks` 结尾并
+   据此反推 root），不再固定用 `REPO_ROOT`；临时下载文件被删除/破坏后
+   最终复核必然失败，**即使仓库正式文件仍在**。
+6. **分类只有一套**：`CLASSIFICATIONS` 补入
+   `human_approved_external_low_resolution` 并参与校验。
+
+**先红实测**：`ab7b98c` 上 149 项中 **31 failed**（`Failed: DID NOT RAISE
+SourcePolicyError`、`AttributeError: … 'validation_root_for'` 等）。
+
+**`data/manifest/m13f_public_sources.json` 未变**（schema 未变，只有校验变严；
+`--verify` 与真实 `--fetch` 后均逐字节相同）。**未改 B1–B4 任何已批准值，
+未改变任何 readiness**（七项仍只有 `public_source_frozen=true`）。
+
+**验收**：focused **149 + 1** 全绿；`--verify` 两次 exit 0 且 bytes/sha/mtime 不变、
+0 临时文件；真实 `--fetch` 后 manifest 逐字节不变；`make check` exit 0
+（**2197 passed**）；`make smoke` exit 0；`make train` exit 2 且不回退 synthetic；
+checkpoint 0；三个保留名未创建；上游十项资产 hash 未变；范围外修改**无**。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert 79be777 8f9bf64 ab7b98c 942d663
+```
+
+**M1.3f-c 未开始**；**M1.3 正式链仍 blocked**，不新增 M5.5，不进入 M6。
+
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
 > 本行已更正；提交 `4519a29` 的提交信息保留原错误表述（Git 历史不重写）。
