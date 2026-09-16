@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 import tempfile
@@ -168,9 +169,10 @@ UNAPPROVED_PARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
     },
 }
 
-# 分类口径（卡面 §B.3）
-CLASSIFICATIONS = (
-    "observed", "external_low_resolution", "modeled_scenario", "benchmark_trace",
+# 分类口径（卡面 §B.3）：**唯一**的分类枚举，`SOURCE_SPECS` 的每个取值都必须在其中
+CLASSIFICATIONS: tuple[str, ...] = (
+    "observed", "external_low_resolution", "human_approved_external_low_resolution",
+    "modeled_scenario", "benchmark_trace",
 )
 # 尚未被人工批准的物理参数：出现即拒绝生成正式 PV / 风电
 UNAPPROVED = "UNAPPROVED"
@@ -424,6 +426,29 @@ def _require_canonical_utc(value: Any, *, field: str) -> str:
     return value
 
 
+def _require_canonical_logical_path(value: Any, *, field: str) -> str:
+    """规范**仓库相对 POSIX** 逻辑路径：拒绝绝对路径、反斜杠、`.`/`..`/空段。"""
+    if not isinstance(value, str) or not value:
+        raise SourcePolicyError(f"{field} 必须是非空字符串，实际 {value!r}")
+    if value != value.strip() or any(c.isspace() for c in value):
+        raise SourcePolicyError(f"{field} 不得含空白（含前后缀）：{value!r}")
+    if value.startswith("/"):
+        raise SourcePolicyError(f"{field} 不得是绝对路径：{value!r}")
+    if "\\" in value:
+        raise SourcePolicyError(f"{field} 必须是 POSIX 路径（不得含反斜杠）：{value!r}")
+    for segment in value.split("/"):
+        if segment == "":
+            raise SourcePolicyError(f"{field} 不得含空路径片段：{value!r}")
+        if segment in (".", ".."):
+            raise SourcePolicyError(f"{field} 不得含 '.' 或 '..' 片段：{value!r}")
+    return value
+
+
+def expected_logical_path(spec: dict) -> str:
+    """frozen 来源的**唯一**合法逻辑路径：`<prefix>/<spec.local_name>`。"""
+    return f"{_LOGICAL_PREFIX}/{spec['local_name']}"
+
+
 def _require_plain_date(value: Any, *, field: str) -> str:
     from datetime import date
 
@@ -440,13 +465,37 @@ def _require_plain_date(value: Any, *, field: str) -> str:
 
 # --- 校验守卫 ----------------------------------------------------------------
 
+# 160 MiB 特例**只**绑定这一组精确身份（B3）
+EXCEPTION_BINDING: dict[str, Any] = {
+    "source_id": "azure_functions_2019_trace",
+    "pinned_ref": "dataset-functions-2019",
+    "decision_id": "B3",
+    "exception_cap_bytes": 160 * 1024 * 1024,
+}
+
+
+def exception_cap_applies(spec: dict) -> bool:
+    """该 spec 是否有资格使用 160 MiB 特例：**五个绑定字段全部精确匹配**。
+
+    任一字段（`source_id` / `url` / `pinned_ref` / `decision_id` /
+    `exception_cap_bytes`）不符即**回落**到默认 16 MiB——自造 spec 无法靠
+    加一个 `exception_cap_bytes` 绕过。
+    """
+    frozen = next((s for s in SOURCE_SPECS
+                   if s["source_id"] == EXCEPTION_BINDING["source_id"]), None)
+    if frozen is None:
+        return False
+    for field, expected in EXCEPTION_BINDING.items():
+        if spec.get(field) != expected:
+            return False
+    return spec.get("url") == frozen["url"]
+
+
 def effective_cap(spec: dict) -> int:
-    """该来源适用的上限：默认 16 MiB；**仅**经人工特例批准的 pinned URL 可放宽。"""
-    exception = spec.get("exception_cap_bytes")
-    if exception is None:
-        return MAX_SOURCE_BYTES
-    return max(MAX_SOURCE_BYTES, _require_plain_int(
-        exception, field=f"{spec.get('source_id')}.exception_cap_bytes"))
+    """该来源适用的上限：默认 16 MiB；**仅**精确绑定的 B3 来源可放宽到 160 MiB。"""
+    if exception_cap_applies(spec):
+        return EXCEPTION_BINDING["exception_cap_bytes"]
+    return MAX_SOURCE_BYTES
 
 
 def assert_within_size_cap(spec: dict) -> None:
@@ -480,40 +529,56 @@ def assert_resolution_matches(spec: dict, *, required: str) -> None:
         )
 
 
-def assert_parameters_approved(params: dict, *, route: str) -> None:
-    """参数守卫：只有**结构化人工批准**的参数才可用于正式 PV / 风电。
+ROUTE_GROUPS: dict[str, str] = {
+    "B": "local_pv_kw",
+    "C": "wind_generation_kw",
+}
 
-    `pv_capacity_kw` **可以**是 500 —— 只要它是一次**新的人工批准**
-    （带 `decision_id` 与批准日期），而不是从旧仿真假设「legacy 继承」来的。
-    这条区分是本轮修复的重点：原先「只要出现 `pv_capacity_kw` 就一律拒绝」
-    的逻辑不可延续（合法的批准路径也被堵死）。
+
+def assert_parameters_approved(params: dict, *, route: str) -> None:
+    """参数守卫：必须**完整等于**该路线冻结的批准参数组。
+
+    要求（缺一不可）：
+
+    - 参数名集合**精确等于** `HUMAN_APPROVED_PARAMETERS[route 对应组]`
+      —— 不接受**空集、子集、额外参数或改名**；
+    - 每项**五键精确**，且与冻结批准记录**逐字段恒等**
+      —— 不接受任意自造的 `decision_id`、`unit`、`approved_on` 或 `value`；
+    - 数值必须是**有限 plain int/float**（bool 不算数值）；文本与 `unit` 非空字符串。
+
+    `pv_capacity_kw=500` **可以**通过 —— 但它必须**完整等于** B4 的冻结批准记录
+    （即一次**新的人工批准**），而不是从旧仿真假设「legacy 继承」而来。
     """
-    if route not in ("B", "C"):
-        raise SourcePolicyError(f"route 必须是 'B' 或 'C'，实际 {route!r}")
+    group = ROUTE_GROUPS.get(route)
+    if group is None:
+        raise SourcePolicyError(f"route 必须是 {list(ROUTE_GROUPS)} 之一，实际 {route!r}")
     if not isinstance(params, dict):
         raise SourcePolicyError(f"参数块必须是 object，实际 {type(params).__name__}")
+    expected = HUMAN_APPROVED_PARAMETERS[group]
+    if set(params) != set(expected):
+        raise SourcePolicyError(
+            f"{route} 路线的参数名集合必须精确等于冻结批准组 {sorted(expected)}；"
+            f"多出={sorted(set(params) - set(expected))} "
+            f"缺少={sorted(set(expected) - set(params))}"
+        )
     for name, entry in params.items():
+        want = expected[name]
         if not isinstance(entry, dict):
             raise SourcePolicyError(
                 f"{route} 路线参数 {name} 必须是结构化的批准记录（含 value/unit/"
                 f"status/decision_id/approved_on），"
                 f"实际 {type(entry).__name__}（{entry!r}）"
             )
-        if set(entry) != set(PARAM_KEYS):
-            raise SourcePolicyError(
-                f"{route} 路线参数 {name} 键集合必须精确等于 {list(PARAM_KEYS)}，"
-                f"实际 {sorted(entry)}"
-            )
-        status = entry["status"]
-        if status == "legacy_inherited":
+        _require_exact_keys(entry, field=f"{route}.{name}", expected=PARAM_KEYS)
+        if entry["status"] == "legacy_inherited":
             raise SourcePolicyError(
                 f"{route} 路线参数 {name} 标记为 legacy_inherited："
                 "不得从旧仿真假设继承为正式口径"
             )
-        if status != "human_approved":
+        if entry["status"] != want["status"]:
             raise SourcePolicyError(
-                f"{route} 路线参数 {name} 的状态是 {status!r}："
-                "未经人工批准的参数不得生成正式输出"
+                f"{route} 路线参数 {name} 的 status 必须是 {want['status']!r}，"
+                f"实际 {entry['status']!r}"
             )
         decision_id = entry["decision_id"]
         if not isinstance(decision_id, str) or not decision_id:
@@ -521,7 +586,46 @@ def assert_parameters_approved(params: dict, *, route: str) -> None:
                 f"{route} 路线参数 {name} 缺少 decision_id："
                 "人工批准必须可追溯到具体决定"
             )
+        if decision_id != want["decision_id"]:
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 的 decision_id 必须是 "
+                f"{want['decision_id']!r}，实际 {decision_id!r}"
+            )
         _require_plain_date(entry["approved_on"], field=f"{name}.approved_on")
+        if entry["approved_on"] != want["approved_on"]:
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 的 approved_on 必须等于冻结批准记录"
+            )
+        unit = entry["unit"]
+        if not isinstance(unit, str) or not unit:
+            raise SourcePolicyError(f"{route} 路线参数 {name} 的 unit 必须是非空字符串")
+        if unit != want["unit"]:
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 的 unit 必须是 {want['unit']!r}，实际 {unit!r}"
+            )
+        _require_approved_value(entry["value"], field=f"{name}.value")
+        if entry != want:
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 必须与冻结批准记录**逐字段恒等**："
+                f"实际 {entry!r}"
+            )
+
+
+def _require_approved_value(value: Any, *, field: str) -> None:
+    """批准值必须是**有限的 plain int/float**（bool 不算数值）或非空字符串。"""
+    if isinstance(value, bool):
+        raise SourcePolicyError(f"{field} 不得为 bool（bool 不算数值）")
+    if isinstance(value, (int, float)):
+        if not math.isfinite(float(value)):
+            raise SourcePolicyError(f"{field} 必须是有限数值，实际 {value!r}")
+        return
+    if isinstance(value, str):
+        if not value:
+            raise SourcePolicyError(f"{field} 不得为空字符串")
+        return
+    raise SourcePolicyError(
+        f"{field} 必须是有限的 int/float 或非空字符串，实际 {type(value).__name__}"
+    )
 
 
 def assert_no_silent_replay(*, trace_year: int, target_year: int) -> None:
@@ -651,6 +755,51 @@ def download_to_temp(spec: dict, dest_dir: Path, *,
 
 # --- manifest ----------------------------------------------------------------
 
+def expected_source_entry(spec: dict) -> dict[str, Any]:
+    """`SOURCE_SPECS` → manifest entry 的**唯一**规范化形式。
+
+    `build_manifest` 与 `validate_public_source_manifest` 共用它，
+    因此「期望值」只有一处定义，不存在第二套较弱的规则。
+    """
+    entry: dict[str, Any] = {
+        "source_id": spec["source_id"],
+        "route": spec["route"],
+        "role": spec["role"],
+        "classification": spec["classification"],
+        "status": spec["status"],
+        "url": spec["url"],
+        "license": spec["license"],
+        "license_url": spec["license_url"],
+        "pinned_ref": spec["pinned_ref"],
+        "data_year": spec["data_year"],
+        "resolution": spec["resolution"],
+    }
+    if spec["status"] == "frozen":
+        entry.update({
+            "logical_path": expected_logical_path(spec),
+            "bytes": spec["bytes"],
+            "sha256": spec["sha256"],
+        })
+    elif spec["status"] == "blocked":
+        entry["blocked_reason"] = spec["blocked_reason"]
+    else:
+        entry.update({
+            "refused_reason": spec["refused_reason"],
+            "observed_content_length": spec["observed_content_length"],
+            "exception_cap_bytes": spec["exception_cap_bytes"],
+            "decision_id": spec["decision_id"],
+        })
+    return entry
+
+
+def _entry_diff(entry: dict, expected: dict) -> list[str]:
+    return [
+        f"{key}: 实际 {entry.get(key)!r} != 冻结值 {expected.get(key)!r}"
+        for key in sorted(set(entry) | set(expected))
+        if entry.get(key) != expected.get(key)
+    ]
+
+
 def _require_spec_field(spec: dict, entry: dict, field: str) -> Any:
     expected = spec.get(field)
     actual = entry.get(field)
@@ -660,6 +809,24 @@ def _require_spec_field(spec: dict, entry: dict, field: str) -> Any:
             f"期望 {expected!r}，实际 {actual!r}"
         )
     return actual
+
+
+def validation_root_for(dest_dir: Path) -> Path:
+    """由 `dest_dir` 反推 manifest 的 `logical_path` 所对应的 validation root。
+
+    `dest_dir` 必须形如 `<root>/data/raw/public_benchmarks`；否则 fail closed。
+    这样「临时下载目录」的复核就会校验**临时资产**，而不是偷偷依赖仓库正式文件。
+    """
+    dest_dir = Path(dest_dir)
+    parts = _LOGICAL_PREFIX.split("/")
+    if len(dest_dir.parts) < len(parts) or dest_dir.parts[-len(parts):] != tuple(parts):
+        raise SourcePolicyError(
+            f"dest_dir 必须以 {_LOGICAL_PREFIX!r} 结尾，实际 {dest_dir}"
+        )
+    root = dest_dir
+    for _ in parts:
+        root = root.parent
+    return root
 
 
 def validate_public_source_manifest(
@@ -720,52 +887,53 @@ def validate_public_source_manifest(
             entry, field=f"sources[{spec['source_id']}]",
             expected=SOURCE_COMMON_KEYS + STATUS_EXTRA_KEYS[status],
         )
-        # 固定声明必须与代码内 SOURCE_SPECS **逐字段恒等**
-        for field in ("route", "role", "classification", "status", "url", "license",
-                      "license_url", "pinned_ref", "data_year", "resolution"):
-            _require_spec_field(spec, entry, field)
+        # classification 必须落在**唯一**的分类枚举内
+        if entry["classification"] not in CLASSIFICATIONS:
+            raise SourcePolicyError(
+                f"{spec['source_id']}.classification 未知：{entry['classification']!r}"
+            )
+
+        # 整条 entry 必须与 `expected_source_entry(spec)` **逐字段恒等**：
+        # 这一条同时覆盖 SOURCE_COMMON_KEYS 与 STATUS_EXTRA_KEYS 的**每个**字段
+        # （包括 blocked_reason / refused_reason / logical_path），
+        # 不存在「只验类型、不验冻结值」的字段。
+        expected_entry = expected_source_entry(spec)
+        if entry != expected_entry:
+            raise SourcePolicyError(
+                f"sources[{spec['source_id']}] 必须与冻结登记逐字段恒等："
+                + "; ".join(_entry_diff(entry, expected_entry))
+            )
+
         _require_str(entry["url"], field=f"{spec['source_id']}.url")
         _require_str(entry["license"], field=f"{spec['source_id']}.license")
 
         if status == "frozen":
-            _require_str(entry["logical_path"],
-                         field=f"{spec['source_id']}.logical_path")
-            if _require_plain_int(entry["bytes"],
-                                  field=f"{spec['source_id']}.bytes") != spec["bytes"]:
-                raise SourcePolicyError(f"{spec['source_id']}.bytes 与冻结值不符")
-            if entry["sha256"] != spec["sha256"]:
-                raise SourcePolicyError(f"{spec['source_id']}.sha256 与冻结值不符")
-            target = Path(root) / entry["logical_path"]
+            # 逻辑路径必须**逐字**等于 <prefix>/<spec.local_name>（先做规范校验）
+            logical_path = _require_canonical_logical_path(
+                entry["logical_path"], field=f"{spec['source_id']}.logical_path"
+            )
+            if logical_path != expected_logical_path(spec):
+                raise SourcePolicyError(
+                    f"{spec['source_id']}.logical_path 必须逐字等于 "
+                    f"{expected_logical_path(spec)!r}，实际 {logical_path!r}"
+                )
+            _require_plain_int(entry["bytes"], field=f"{spec['source_id']}.bytes")
+            target = Path(root) / logical_path
             if not target.is_file():
                 raise SourcePolicyError(
-                    f"{spec['source_id']} 缺少本地冻结文件 {entry['logical_path']}"
+                    f"{spec['source_id']} 缺少本地冻结文件 {logical_path}"
                 )
             validate_frozen_file(spec, target)
         else:
             # blocked / refused 来源**同样校验**，不得被跳过
-            reason_field = ("blocked_reason" if status == "blocked"
-                            else "refused_reason")
-            _require_str(entry[reason_field],
-                         field=f"{spec['source_id']}.{reason_field}")
-            if status == "refused_over_size_cap":
-                if _require_plain_int(
-                    entry["observed_content_length"],
-                    field=f"{spec['source_id']}.observed_content_length",
-                ) != spec["observed_content_length"]:
-                    raise SourcePolicyError(
-                        f"{spec['source_id']}.observed_content_length 与实测值不符"
-                    )
-                if _require_plain_int(
-                    entry["exception_cap_bytes"],
-                    field=f"{spec['source_id']}.exception_cap_bytes",
-                ) != spec["exception_cap_bytes"]:
-                    raise SourcePolicyError(
-                        f"{spec['source_id']}.exception_cap_bytes 与批准的例外上限不符"
-                    )
-                if entry["decision_id"] != spec["decision_id"]:
-                    raise SourcePolicyError(
-                        f"{spec['source_id']}.decision_id 与人工决定不符"
-                    )
+            _require_plain_int(
+                entry.get("observed_content_length", 0),
+                field=f"{spec['source_id']}.observed_content_length",
+            )
+            _require_str(
+                entry.get("blocked_reason") or entry.get("refused_reason"),
+                field=f"{spec['source_id']}.reason",
+            )
 
     # 参数块：已批准与未批准都必须**完整恒等**
     for key, expected in (("human_approved_parameters", HUMAN_APPROVED_PARAMETERS),
@@ -816,38 +984,7 @@ def build_manifest(*, frozen_at_utc: str) -> dict:
         "max_source_bytes": MAX_SOURCE_BYTES,
         "max_source_bytes_anchor": MAX_SOURCE_BYTES_ANCHOR,
         "frozen_at_utc": frozen_at_utc,
-        "sources": [
-            {
-                "source_id": spec["source_id"],
-                "route": spec["route"],
-                "role": spec["role"],
-                "classification": spec["classification"],
-                "status": spec["status"],
-                "url": spec["url"],
-                "license": spec["license"],
-                "license_url": spec["license_url"],
-                "pinned_ref": spec["pinned_ref"],
-                "data_year": spec["data_year"],
-                "resolution": spec["resolution"],
-                **(
-                    {
-                        "logical_path": f"{_LOGICAL_PREFIX}/{spec['local_name']}",
-                        "bytes": spec["bytes"],
-                        "sha256": spec["sha256"],
-                    }
-                    if spec["status"] == "frozen"
-                    else {"blocked_reason": spec["blocked_reason"]}
-                    if spec["status"] == "blocked"
-                    else {
-                        "refused_reason": spec["refused_reason"],
-                        "observed_content_length": spec["observed_content_length"],
-                        "exception_cap_bytes": spec["exception_cap_bytes"],
-                        "decision_id": spec["decision_id"],
-                    }
-                ),
-            }
-            for spec in SOURCE_SPECS
-        ],
+        "sources": [expected_source_entry(spec) for spec in SOURCE_SPECS],
         "human_approved_parameters": _copy_block(HUMAN_APPROVED_PARAMETERS),
         "unapproved_parameters": _copy_block(UNAPPROVED_PARAMETERS),
         "red_lines": list(RED_LINES),
@@ -922,7 +1059,8 @@ def run_fetch(dest_dir: Path = RAW_DIR, *, manifest_path: Path = MANIFEST_PATH,
         download_to_temp(spec, dest_dir, opener=opener)
     frozen_at = existing_frozen_at_utc(manifest_path) or _now_utc()
     write_manifest_atomic(build_manifest(frozen_at_utc=frozen_at), manifest_path)
-    validate_public_source_manifest(manifest_path, REPO_ROOT)
+    # 复核**刚下载的临时目标**，而不是仓库正式文件
+    validate_public_source_manifest(manifest_path, validation_root_for(dest_dir))
     return {"fetched": [s["source_id"] for s in FROZEN_SPECS],
             "refused": [s["source_id"] for s in SOURCE_SPECS
                         if s["status"] != "frozen"],
