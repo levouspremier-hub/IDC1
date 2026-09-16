@@ -1095,9 +1095,9 @@ revision                                  a3fe4c0a1824833668bbb1f8029d6565120118
 
 ```text
 exogenous_drivers_v2.parquet              11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf
-singapore_2024_exogenous_v2.json          0e27848109735eae02bdc0cdd46a03f84aed1f926bed59f34982e01c2c0a6fdf
+singapore_2024_exogenous_v2.json          640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9
 m13f_materialization_sources_v3.json      4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6
-revision                                  9aedf744a58eedfeec872a06d540b25875b59e8a
+revision                                  bd7be9dd04e47b9db77198c3fdc3e1da2ae0884a
 ```
 
 **v2 四列实测**：`local_pv_kw` 0–**357.6032** kW（均值 72.57；v1 为 415.45，
@@ -1108,8 +1108,17 @@ revision                                  9aedf744a58eedfeec872a06d540b25875b59e
 **先红实测**：`30ebd70` 上 50 项中 **21 failed + 21 errors**，含
 `AssertionError: exogenous_drivers.py 含 'weekday'` 与 v2 产物缺失。
 
-**验收**：focused **50 + 1** 全绿；`m12/m13/contracts` 组 **1073 passed**；
-`make check` exit 0（**2247 passed**）；`make smoke` exit 0；`make train` exit 2
+> **恢复期补修（2026-09-16，`bd7be9d`）**：接手时发现
+> `scenario/exogenous_drivers.py` 模块 docstring 的「无未来泄漏」小节仍残留 v1 的
+> `arrival 依赖 timestamp 的星期与时刻` 表述——与 date-free 实现（仅 hour/minute）
+> 矛盾，也违反 §五.3「删除 weekday 依赖相关文档表述」。已改为
+> 「时刻（hour/minute，**不读星期**）」并新增回归
+> `test_arrival_source_does_not_claim_a_weekday_dependency`。因生成文件变更，
+> `materializer_revision` 由 `9aedf74` 前移到 `bd7be9d`；v2 parquet 与 v3 来源
+> manifest **逐字节不变**，仅 v2 输出 manifest 的 revision 字段变化。
+
+**验收**：focused **51 + 1** 全绿；`m12/m13/contracts` 组 **1074 passed**；
+`make check` exit 0（**2248 passed**）；`make smoke` exit 0；`make train` exit 2
 且不回退 synthetic；checkpoint 0；三个保留名未创建；连续物化两次 bytes/hash/
 `mtime_ns` 全不变、0 临时文件；**上游十一项（含 v1 三产物与 v1 source manifest）
 hash 全部未变**；范围外修改**无**。
@@ -1117,7 +1126,7 @@ hash 全部未变**；范围外修改**无**。
 **回滚（由新到旧）**：
 
 ```bash
-git revert c1d6a3e 094047c 9aedf74 30ebd70 896edf7
+git revert d96fcd8 bd7be9d c1d6a3e 094047c 9aedf74 30ebd70 896edf7
 ```
 
 **M1.3g 未开始**：**不得**称 Azure trace 有经证实的真实日期映射；
