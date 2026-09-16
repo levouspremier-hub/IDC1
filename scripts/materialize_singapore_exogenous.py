@@ -137,6 +137,26 @@ def _now_utc() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
+def existing_frozen_at_utc(manifest_path: Path) -> str | None:
+    """已存在且含规范 `frozen_at_utc` 的 manifest 的时间戳；否则 None。
+
+    重复物化必须**复用**它，否则正式 manifest 会随墙钟漂移。
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.is_file():
+        return None
+    try:
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))[
+            "frozen_at_utc"]
+        from datetime import datetime as _dt
+        parsed = _dt.fromisoformat(value)
+        if parsed.tzinfo is None or not str(value).endswith("+00:00"):
+            return None
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    return str(value)
+
+
 def _git(*args: str) -> str:
     return subprocess.run(
         ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True
@@ -567,7 +587,9 @@ def materialize_exogenous_drivers(
     """计算并**原子**安装输出表与 manifest。任一步失败不留半成品。"""
     out_parquet = Path(out_parquet)
     out_manifest = Path(out_manifest)
-    frozen_at_utc = frozen_at_utc or _now_utc()
+    frozen_at_utc = (frozen_at_utc
+                     or existing_frozen_at_utc(out_manifest)
+                     or _now_utc())
 
     inputs = load_frozen_inputs(
         canonical_parquet_path=CANONICAL_PARQUET,

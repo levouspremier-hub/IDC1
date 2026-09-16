@@ -379,6 +379,38 @@ def test_existing_different_output_is_not_overwritten(tmp_path):
     assert (_sha256(target), target.stat().st_mtime_ns) == before
 
 
+def test_rematerialization_is_idempotent(tmp_path, monkeypatch):
+    """重复物化必须复用 `frozen_at_utc` 且三个产物 bytes/mtime 全不变。"""
+    module = materializer()
+    out_dir = tmp_path / "processed"
+    out_dir.mkdir()
+    out_manifest = tmp_path / "exogenous.json"
+    src_manifest = REPO_ROOT / "data/manifest/m13f_materialization_sources.json"
+    monkeypatch.setattr(module, "SOURCE_MANIFEST", tmp_path / "sources.json")
+    out_parquet = out_dir / "exogenous_drivers.parquet"
+    first = module.materialize_exogenous_drivers(
+        out_parquet=out_parquet, out_manifest=out_manifest)
+    before = {
+        "parquet": (_sha256(out_parquet), out_parquet.stat().st_mtime_ns),
+        "manifest": (_sha256(out_manifest), out_manifest.stat().st_mtime_ns),
+        "sources": (_sha256(tmp_path / "sources.json"),
+                    (tmp_path / "sources.json").stat().st_mtime_ns),
+    }
+    frozen_at = json.loads(out_manifest.read_text())["frozen_at_utc"]
+    module.materialize_exogenous_drivers(
+        out_parquet=out_parquet, out_manifest=out_manifest)
+    after = {
+        "parquet": (_sha256(out_parquet), out_parquet.stat().st_mtime_ns),
+        "manifest": (_sha256(out_manifest), out_manifest.stat().st_mtime_ns),
+        "sources": (_sha256(tmp_path / "sources.json"),
+                    (tmp_path / "sources.json").stat().st_mtime_ns),
+    }
+    assert before == after
+    assert json.loads(out_manifest.read_text())["frozen_at_utc"] == frozen_at
+    assert first["rows"] == TOTAL_ROWS
+    assert src_manifest.exists()
+
+
 def test_first_freeze_failure_leaves_no_partial_artifacts(tmp_path, monkeypatch):
     module = materializer()
     out_dir = tmp_path / "processed"
