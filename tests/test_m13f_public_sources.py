@@ -18,7 +18,6 @@ import http.server
 import importlib
 import json
 import pathlib
-import socket
 import threading
 
 import pytest
