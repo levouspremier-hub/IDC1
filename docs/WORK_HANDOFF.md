@@ -12,11 +12,14 @@
 > ⚠️ **M1.3e 通过不解除正式链的门禁**：`forecast_ready=false`、
 > `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
 > **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
-> **M1.3f-a 已通过人工审核**（结论：四项 `BLOCKED`）；
-> **M1.3f-b 已完成**（公开源获取/校验框架 + 冻结 B/C 模型来源 + 登记 A/D 拒绝）。
+> **M1.3f-a 已通过人工审核**；**M1.3f-b（含 R1/R2）已通过人工审核**；
+> **M1.3f-c 已执行完成**（17,568 行四类外生驱动表已物化，等待审核）。
 > ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 仍全为
 > `false`，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
-> **M1.3f-c 未开始**（需先由人工决定 §B.5 的 B1–B4）。
+> **M1.3f-c 已执行完成**（四类外生驱动表已物化，见 §7N），**等待人工审核**。
+> ⚠️ 四项 ready 只表示驱动表已物化，**不代表已接入训练**；
+> `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
+> **M1.3g 未开始**。
 > 详见 §7K（M1.3e）、§7L（M1.3f-a）、§7M（M1.3f-b）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
@@ -1000,6 +1003,62 @@ git revert 79be777 8f9bf64 ab7b98c 942d663
 ```
 
 **M1.3f-c 未开始**；**M1.3 正式链仍 blocked**，不新增 M5.5，不进入 M6。
+
+### 7N. M1.3f-c：四类正式外生驱动的可复现实物化（**执行完成，等待人工审核**）
+
+`docs/task_cards/M1.3f.md` §H–§I。生成
+`data/processed/singapore_2024/exogenous_drivers.parquet`（**17,568 行 × 5 列**：
+`timestamp` / `local_pv_kw` / `wind_generation_kw` / `carbon_intensity` /
+`arrival`），并冻结来源与依赖。
+
+| 列 | 方法 | 实测 min–max（mean） | 关键约束 |
+|---|---|---|---|
+| `local_pv_kw` | pvlib **v0.15.2**：position → `erbs` 分解 → `isotropic` 透射 → `sapm_cell`(open_rack_glass_polymer) → `pvwatts_dc` → `inverter.pvwatts` | 0 – **415.4520** kW（84.53） | AC 上限 **416.6667** kW；**夜间全零**（8,376 行） |
+| `wind_generation_kw` | `v_hub = v_10m × (60/10)^(1/7)` + 冻结 windpowerlib v0.2.2 **E48/800** 曲线线性插值 | 0 – **262.3179** kW（19.23） | 额定 **800** kW；低于切入或超出曲线定义域均为 **0** |
+| `carbon_intensity` | 年内常数 | **恒 0.402** kgCO2/kWh | B1 批准；**不是**半小时观测 |
+| `arrival` | Azure 2019 trace 校准的 **7×48** weekday × half-hour template + `Poisson(template × 1000)` 前向生成，seed **20240916** | 整数 **739 – 1321**（1000.14） | 尺度参数固定 **1000.0**；trace **只校准形状**，不重放 |
+
+**Azure archive（B3 批准的唯一大包）**：`142,968,140` B（与批准值一致），SHA-256
+`aff8b3ca7240a41a109e4ee598e0a96e45fcb92e7b8395ac19cb3748cd260d89`，CC-BY-4.0；
+**14 个** `invocations_per_function_md.anon.d01..d14.csv` 被使用，**26 个**其它成员
+未使用；**流式**读取（`tarfile` `r|xz`）不解压到磁盘；成员路径做安全校验；
+下载前先取 `Content-Length` 判定特例上限、核验**最终 URL**（允许 GitHub release
+asset 302 到其自有 CDN，但必须在 GitHub 资产域内且文件名精确一致）。
+
+> ⚠️ **两处必须人工确认的显式假设（都不是「已批准参数」）**：
+> 1. **PV 的两处 pvlib 默认**：`erbs` 分解、`isotropic` 透射、`albedo=0.25`；
+>    B4 **未**批准这三项，已以 `PVLIB_DEFAULTS_NOT_HUMAN_APPROVED` 写入 manifest。
+> 2. **Azure trace 的日期映射**：官方 archive 的**成员名不含任何日期**，官方说明
+>    只写「collected in July of 2019」「14 files, one file per 24-h period」。
+>    本卡据**官方分析 notebook** 的绘图轴（`2019-07-15 14:00 UTC … 2019-07-28
+>    23:59 UTC`）取 **`d_k ↔ 2019-07-15 + (k-1) 天`**，文件内第 `m` 分钟视为该日
+>    第 `m` 分钟。
+
+**依赖冻结**：`pvlib==0.15.2`（BSD-3-Clause）及锁定依赖 `h5py==3.16.0`、
+`requests==2.34.2`、`urllib3==2.8.0`、`certifi==2026.7.22`、
+`charset-normalizer==3.5.1`、`idna==3.19`；`pyproject.toml`/`uv.lock` 的 SHA-256
+写入**新的** v2 来源 manifest `data/manifest/m13f_materialization_sources.json`
+（v1 `m13f_public_sources.json` **字节不变**，仍 `f5a5f506…`）。
+
+**输出 manifest** `data/manifest/singapore_2024_exogenous.json`：materializer
+revision、四个上游 hash、依赖锁 hash、四列口径与实测统计、Azure hash/成员/seed、
+七项 readiness（五项 ready；`formal_scenario_bundle_ready` /
+`formal_training_ready` **仍为 false**）、`realized_annual_mean` 与尺度参数。
+
+**验收**：focused **37 + 1**（slow）全绿；`m12/m13/contracts` 组 **1061 passed**；
+`make check` exit 0（**2235 passed**）；`make smoke` exit 0；`make train` **exit 2**
+且原因仍为 M1.3 正式数据集未完成、不回退 synthetic；checkpoint **0**；
+三个保留名未创建；**连续物化两次 bytes/hash/`mtime_ns` 全不变、0 临时文件**；
+**上游十项 + v1 manifest hash 全部未变**；范围外修改**无**。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert 81b4888 387531c 1a072a6 a3fe4c0 0945128 b09ef8c 02484b3 7e838ff d324b33 ddda91a
+```
+
+**M1.3g 未开始**：四项 ready 只表示驱动表已物化，**不代表已接入训练**；
+正式 `ScenarioBundle`、训练与评估仍 blocked。**不新增 M5.5，不进入 M6。**
 
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
