@@ -1,13 +1,18 @@
-"""M1.3f-c 测试：四类正式外生驱动的**可复现实物化**。
+"""M1.3f-c 测试：四类正式外生驱动的**可复现实物化**（含 R1 返修）。
 
-改前缺陷（本文件在实现前必须为红）：`scenario/exogenous_drivers.py` 与
-`scripts/materialize_singapore_exogenous.py` 都还不存在，
-`data/processed/singapore_2024/exogenous_drivers.parquet` 与
-`data/manifest/singapore_2024_exogenous.json` 都还没有。
+**R1 改前缺陷**（本文件在实现前必须为红）：
 
-**测试聚焦实际训练风险**（按卡片 §H.8）：时间轴/单位/范围、PV 夜间与 AC 上限、
-风电额定上限、carbon 严格常量、arrival 的**因果性/可复现性/非重放**、
-source hash fail closed、产物不可覆盖、正式训练不得提前放行。
+1. `losses_pct` **从未被应用**（0/14/99 输出逐位相同）；
+2. PV 参数块缺失或篡改时**不报错**；
+3. arrival 的 7×48 模板依赖**未经验证**的「文件顺序→日历星期」映射；
+4. archive 的文件顺序/虚构日期会影响聚合；
+5. arrival 缺少 B5 批准记录时仍会物化；
+6. carbon 可能被误述为 `modeled_scenario`；
+7. 旧 v1 产物可能被重写、不同的 v2 产物可能被覆盖。
+
+**测试聚焦实际训练风险**（时间轴/单位/范围、PV 损耗与上限、风电额定、
+carbon 严格常量、arrival 的**因果性/可复现性/非重放/无日期依赖**、
+source hash fail closed、产物不可覆盖、正式训练不得提前放行）。
 **不做**大规模任意 JSON 类型 fuzz。
 """
 
@@ -25,10 +30,23 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DRIVERS_MODULE = "scenario.exogenous_drivers"
 MATERIALIZER = "scripts.materialize_singapore_exogenous"
 
-OUT_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers.parquet"
-OUT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"
-SRC_MANIFEST = REPO_ROOT / "data/manifest/m13f_materialization_sources.json"
-V1_MANIFEST = REPO_ROOT / "data/manifest/m13f_public_sources.json"
+# v2（本卡候选证据）
+OUT_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers_v2.parquet"
+OUT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous_v2.json"
+SRC_MANIFEST = REPO_ROOT / "data/manifest/m13f_materialization_sources_v3.json"
+# v1（**superseded**，原样保留）
+V1_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers.parquet"
+V1_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"
+V1_SRC_MANIFEST = REPO_ROOT / "data/manifest/m13f_materialization_sources.json"
+V1_SHA256 = {
+    "parquet": "0c5e65d8fdc25ed8ced228e8087f13eb0605d0146d7e258caf54a552a246287c",
+    "manifest": "46d88c38247bf1eb1568e84abc48647f1f4aeb58a5c0b525a30b8bfb0b2ac224",
+    "sources": "6a80886a53056df80944db1fc536176d590f9cc10b315064d826436ae0bb1a72",
+}
+PUBLIC_SOURCE_V1 = REPO_ROOT / "data/manifest/m13f_public_sources.json"
+PUBLIC_SOURCE_V1_SHA256 = (
+    "f5a5f506c579da1b9c258d38103ca4549ac483ebd2d9f501b8d686ae9cbc3faa"
+)
 CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
 CANONICAL_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
 SPLIT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
@@ -42,8 +60,8 @@ DC_AC_RATIO = 1.2
 RATED_CAPACITY_KW = 800.0
 ARRIVAL_SEED = 20240916
 ARRIVAL_MEAN = 1000.0
-# M1.3f-b-R2 冻结的 v1 source manifest（**必须字节不变**）
-V1_MANIFEST_SHA256 = "f5a5f506c579da1b9c258d38103ca4549ac483ebd2d9f501b8d686ae9cbc3faa"
+ARRIVAL_SLOTS = 48
+FORBIDDEN_DATE_TOKENS = ("2019-07-15", "weekday", "date_mapping")
 
 
 def drivers():
@@ -63,19 +81,34 @@ def _sha256(path) -> str:
 def test_modules_and_entry_points_exist():
     module = drivers()
     for name in ("PV_PARAMS", "WIND_PARAMS", "CARBON_KG_PER_KWH", "ARRIVAL_SEED",
-                 "ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR", "hub_wind_speed",
-                 "power_from_curve", "load_wind_power_curve", "pv_ac_limit_kw",
-                 "local_pv_kw", "wind_generation_kw", "carbon_intensity",
-                 "arrival_rate_template", "generate_arrival"):
+                 "ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR", "B5_PV_APPROVAL",
+                 "B5_ARRIVAL_APPROVAL", "assert_pv_params", "assert_arrival_approved",
+                 "pv_loss_multiplier", "pv_dc_before_losses", "pv_ac_from_dc",
+                 "hub_wind_speed", "power_from_curve", "load_wind_power_curve",
+                 "pv_ac_limit_kw", "local_pv_kw", "wind_generation_kw",
+                 "carbon_intensity", "arrival_slot_counts", "arrival_rate_template",
+                 "generate_arrival"):
         assert hasattr(module, name), name
     assert hasattr(materializer(), "materialize_exogenous_drivers")
-    assert hasattr(materializer(), "build_manifest")
 
 
 def test_output_artifacts_exist():
-    assert OUT_PARQUET.exists(), "缺少 exogenous_drivers.parquet"
-    assert OUT_MANIFEST.exists(), "缺少 singapore_2024_exogenous.json"
-    assert SRC_MANIFEST.exists(), "缺少 m13f_materialization_sources.json"
+    for path in (OUT_PARQUET, OUT_MANIFEST, SRC_MANIFEST):
+        assert path.exists(), path
+
+
+def test_v1_artifacts_are_preserved_and_marked_superseded():
+    """§一.7：v1 产物**原样保留**，且被 v2 manifest 标为 superseded。"""
+    assert _sha256(V1_PARQUET) == V1_SHA256["parquet"]
+    assert _sha256(V1_MANIFEST) == V1_SHA256["manifest"]
+    assert _sha256(V1_SRC_MANIFEST) == V1_SHA256["sources"]
+    supersedes = json.loads(OUT_MANIFEST.read_text())["supersedes"]
+    assert supersedes["status"] == "superseded_pre_approval_and_loss_fix"
+    assert supersedes["output_parquet_sha256"] == V1_SHA256["parquet"]
+    assert supersedes["output_manifest_sha256"] == V1_SHA256["manifest"]
+    assert supersedes["source_manifest_sha256"] == V1_SHA256["sources"]
+    assert supersedes["revision"]
+    assert len(supersedes["reasons"]) >= 3
 
 
 # --- 2. 时间轴与形状 ----------------------------------------------------------
@@ -104,18 +137,73 @@ def test_timeline_is_the_frozen_2024_half_hour_grid(frame):
 
 def test_all_columns_are_finite(frame):
     for column in COLUMNS[1:]:
-        values = frame[column].to_numpy(dtype=float)
-        assert np.isfinite(values).all(), column
+        assert np.isfinite(frame[column].to_numpy(dtype=float)).all(), column
 
 
 def test_upstream_canonical_is_untouched():
     assert _sha256(CANONICAL_PARQUET) == (
         "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
     )
-    assert _sha256(V1_MANIFEST) == V1_MANIFEST_SHA256
+    assert _sha256(PUBLIC_SOURCE_V1) == PUBLIC_SOURCE_V1_SHA256
 
 
-# --- 3. PV --------------------------------------------------------------------
+# --- 3. PV：损耗必须**恰好应用一次** ------------------------------------------
+
+@pytest.fixture(scope="module")
+def pv_inputs():
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    return (
+        pd.DatetimeIndex(canonical["timestamp"]),
+        canonical["ghi_w_per_m2"].to_numpy(dtype=float),
+        canonical["temperature_deg_c"].to_numpy(dtype=float),
+        canonical["wind_speed_10m_mps"].to_numpy(dtype=float),
+    )
+
+
+def test_losses_are_applied_and_strictly_ordered(pv_inputs):
+    """§二.1：0% > 14% > 99%（在相同正 GHI 输入下）。"""
+    module = drivers()
+    times, ghi, temp, wind = pv_inputs
+    base_dc = module.pv_dc_before_losses(times, ghi, temp, wind)
+    day = ghi > 0.0
+    at_0 = base_dc * module.pv_loss_multiplier(0.0)
+    at_14 = base_dc * module.pv_loss_multiplier(14.0)
+    at_99 = base_dc * module.pv_loss_multiplier(99.0)
+    assert (at_0[day] > at_14[day]).all()
+    assert (at_14[day] > at_99[day]).all()
+    assert module.pv_loss_multiplier(0.0) == 1.0
+    assert module.pv_loss_multiplier(14.0) == pytest.approx(0.86)
+
+
+def test_losses_are_applied_exactly_once(pv_inputs):
+    """§二.1：`local_pv_kw` 必须等于「未损耗 DC → 一次损耗 → 逆变器」。"""
+    module = drivers()
+    times, ghi, temp, wind = pv_inputs
+    base_dc = module.pv_dc_before_losses(times, ghi, temp, wind)
+    once = module.pv_ac_from_dc(base_dc, ghi_w_per_m2=ghi)
+    twice = module.pv_ac_from_dc(base_dc * module.pv_loss_multiplier(14.0),
+                                 ghi_w_per_m2=ghi)
+    assert np.array_equal(module.local_pv_kw(times, ghi, temp, wind), once)
+    assert not np.array_equal(once, twice)          # 双重套用会被发现
+
+
+@pytest.mark.parametrize("mutation", ["drop", "tamper_zero", "tamper_99", "extra"])
+def test_pv_param_block_must_be_the_frozen_block(pv_inputs, mutation):
+    """§二.2：PV 参数块缺失或篡改（含 `losses_pct`）必须拒绝。"""
+    module = drivers()
+    times, ghi, temp, wind = pv_inputs
+    params = dict(module.PV_PARAMS)
+    if mutation == "drop":
+        params.pop("losses_pct")
+    elif mutation == "tamper_zero":
+        params["losses_pct"] = 0.0
+    elif mutation == "tamper_99":
+        params["losses_pct"] = 99.0
+    else:
+        params["shadow_kw"] = 1.0
+    with pytest.raises(module.ExogenousDriverError):
+        module.local_pv_kw(times, ghi, temp, wind, params=params)
+
 
 def test_pv_is_non_negative_and_within_the_ac_limit(frame):
     module = drivers()
@@ -136,30 +224,23 @@ def test_pv_is_zero_at_night(frame):
 
 
 def test_pv_is_positive_at_some_daytime_steps(frame):
-    pv = frame["local_pv_kw"].to_numpy(dtype=float)
-    assert (pv > 0.0).sum() > 1000
+    assert (frame["local_pv_kw"].to_numpy(dtype=float) > 0.0).sum() > 1000
 
 
-def test_pv_chain_is_deterministic_and_matches_the_frozen_parameters(frame):
-    """同一输入与同一组冻结参数必须给出**逐位相同**的结果。"""
+def test_pv_chain_is_deterministic_and_matches_the_frozen_parameters(frame, pv_inputs):
     module = drivers()
-    canonical = pd.read_parquet(CANONICAL_PARQUET)
-    times = pd.DatetimeIndex(canonical["timestamp"])
-    recomputed = module.local_pv_kw(
-        times,
-        canonical["ghi_w_per_m2"].to_numpy(dtype=float),
-        canonical["temperature_deg_c"].to_numpy(dtype=float),
-        canonical["wind_speed_10m_mps"].to_numpy(dtype=float),
-    )
+    times, ghi, temp, wind = pv_inputs
+    recomputed = module.local_pv_kw(times, ghi, temp, wind)
     assert np.array_equal(recomputed, frame["local_pv_kw"].to_numpy(dtype=float))
 
 
-def test_pv_does_not_use_the_bell_curve_or_2026_profile():
-    """`local_pv_kw` 不得来自 `_build_default_pv_curve` 等默认曲线。"""
+def test_pv_does_not_use_the_bell_curve_or_the_2026_profile():
     source = (REPO_ROOT / "scenario/exogenous_drivers.py").read_text(encoding="utf-8")
     assert "_build_default_pv_curve" not in source
     assert "use_default_pv_curve" not in source
-    assert "2026" not in source
+    # 不得引用 2026 的 EMA Solar Generation Profile（B5 批准日期里的 2026 不算）
+    assert "solar_generation_profile" not in source.lower()
+    assert "Solar Generation Profile" not in source
 
 
 # --- 4. 风电 ------------------------------------------------------------------
@@ -173,23 +254,21 @@ def test_wind_is_non_negative_and_at_most_the_rated_capacity(frame):
 def test_hub_wind_speed_follows_the_shear_law():
     module = drivers()
     v10 = np.array([0.0, 2.0, 5.0, 10.0])
-    hub = module.hub_wind_speed(v10)
-    assert np.allclose(hub, v10 * (60.0 / 10.0) ** (1.0 / 7.0))
+    assert np.allclose(module.hub_wind_speed(v10), v10 * (60.0 / 10.0) ** (1.0 / 7.0))
 
 
 def test_power_curve_below_cut_in_is_zero():
     module = drivers()
     curve = module.load_wind_power_curve()
-    below = module.power_from_curve(np.array([0.0, 0.5, 0.99]), curve=curve)
-    assert np.allclose(below, 0.0)
+    assert np.allclose(
+        module.power_from_curve(np.array([0.0, 0.5, 0.99]), curve=curve), 0.0)
 
 
 def test_power_curve_beyond_its_domain_is_zero():
-    """超出冻结曲线定义域 → 保守停机（**不得**外推制造发电）。"""
     module = drivers()
     curve = module.load_wind_power_curve()
-    beyond = module.power_from_curve(np.array([25.5, 30.0, 100.0]), curve=curve)
-    assert np.allclose(beyond, 0.0)
+    assert np.allclose(
+        module.power_from_curve(np.array([25.5, 30.0, 100.0]), curve=curve), 0.0)
 
 
 def test_power_curve_interpolation_is_deterministic_and_monotone():
@@ -197,10 +276,9 @@ def test_power_curve_interpolation_is_deterministic_and_monotone():
     curve = module.load_wind_power_curve()
     speeds = np.linspace(1.0, 25.0, 97)
     first = module.power_from_curve(speeds, curve=curve)
-    second = module.power_from_curve(speeds, curve=curve)
-    assert np.array_equal(first, second)
-    assert np.all(np.diff(first) >= -1e-9)          # 单调不减
-    assert first.max() <= RATED_CAPACITY_KW + 1e-9  # 截到额定容量
+    assert np.array_equal(first, module.power_from_curve(speeds, curve=curve))
+    assert np.all(np.diff(first) >= -1e-9)
+    assert first.max() <= RATED_CAPACITY_KW + 1e-9
 
 
 def test_wind_is_not_a_rename_of_wind_speed(frame):
@@ -208,10 +286,10 @@ def test_wind_is_not_a_rename_of_wind_speed(frame):
     v10 = canonical["wind_speed_10m_mps"].to_numpy(dtype=float)
     wind = frame["wind_generation_kw"].to_numpy(dtype=float)
     assert not np.allclose(v10, wind)
-    assert (wind == 0.0).sum() > 0                  # 切入以下为 0
+    assert (wind == 0.0).sum() > 0
 
 
-# --- 5. 碳强度 ----------------------------------------------------------------
+# --- 5. 碳强度：分类与常量都必须准确 -----------------------------------------
 
 def test_carbon_is_exactly_the_approved_constant(frame):
     carbon = frame["carbon_intensity"].to_numpy(dtype=float)
@@ -219,13 +297,94 @@ def test_carbon_is_exactly_the_approved_constant(frame):
     assert np.all(carbon == CARBON_KG_PER_KWH)
 
 
-def test_carbon_does_not_come_from_the_env_default_curve(frame):
+def test_carbon_is_not_described_as_modeled_scenario():
+    """§二.6：carbon 必须维持 `human_approved_external_low_resolution`。"""
+    payload = json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))
+    entry = payload["columns"]["carbon_intensity"]
+    assert entry["classification"] == "human_approved_external_low_resolution"
+    assert entry["classification"] != "modeled_scenario"
+    assert entry["resolution"] == "annual_constant"
+    assert entry["human_decision"]["decision_id"] == "B1"
     source = (REPO_ROOT / "scenario/exogenous_drivers.py").read_text(encoding="utf-8")
     for forbidden in ("_create_carbon_factor_curve", "carbon_factor_ref", "0.45", "0.80"):
         assert forbidden not in source, forbidden
 
 
-# --- 6. arrival ---------------------------------------------------------------
+# --- 6. arrival：**date-free** 48-slot ----------------------------------------
+
+def _manifest() -> dict:
+    return json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))
+
+
+def test_no_date_mapping_tokens_anywhere():
+    """§二.3：源码与产物中都不得出现日期/星期映射的痕迹。"""
+    for path in (REPO_ROOT / "scenario/exogenous_drivers.py",
+                 REPO_ROOT / "scripts/materialize_singapore_exogenous.py",
+                 OUT_MANIFEST, SRC_MANIFEST):
+        text = path.read_text(encoding="utf-8")
+        for token in FORBIDDEN_DATE_TOKENS:
+            assert token not in text, f"{path.name} 含 {token!r}"
+
+
+def test_arrival_template_is_48_slots_and_normalised():
+    module = drivers()
+    template = module.arrival_rate_template_from_cache()
+    assert template.shape == (ARRIVAL_SLOTS,)
+    assert np.isfinite(template).all() and (template >= 0).all()
+    assert template.mean() == pytest.approx(1.0, rel=1e-12)
+    assert _manifest()["columns"]["arrival"]["template_slots"] == ARRIVAL_SLOTS
+    assert _manifest()["columns"]["arrival"]["uses_archive_dates"] is False
+
+
+def test_slot_aggregation_is_independent_of_order_and_fabricated_dates():
+    """§二.4：文件顺序与虚构日期都不得改变 date-free slot 聚合。"""
+    module = drivers()
+    minutes = np.arange(1440)
+    values = np.abs(np.sin(minutes / 7.0)) * 100.0
+    ordered = pd.Series(values, index=pd.Index(minutes, name="minute"))
+    reversed_series = pd.Series(values[::-1], index=pd.Index(minutes[::-1], name="minute"))
+    shuffled = reversed_series.sort_index(kind="stable")
+    baseline = module.arrival_slot_counts(ordered)
+    assert np.array_equal(baseline, module.arrival_slot_counts(shuffled))
+    assert baseline.shape == (ARRIVAL_SLOTS,)
+    assert baseline.sum() == pytest.approx(values.sum())
+
+
+def test_arrival_slot_uses_only_hour_and_minute():
+    """同一 hour/minute、不同星期的 timestamp 必须落在**同一个 slot**。"""
+    module = drivers()
+    monday = pd.DatetimeIndex(["2024-01-01T09:30:00+08:00"])
+    sunday = pd.DatetimeIndex(["2024-01-07T09:30:00+08:00"])
+    assert monday.weekday[0] != sunday.weekday[0]
+    assert module.arrival_template_slot(monday) == module.arrival_template_slot(sunday)
+    assert int(module.arrival_template_slot(monday)[0]) == 19  # 09:30 → slot 19
+
+
+def test_missing_or_tampered_b5_arrival_approval_is_rejected():
+    """§二.5：缺 B5-ARRIVAL 批准记录（或字段被篡改）时不得物化。"""
+    module = drivers()
+    with pytest.raises(module.ExogenousDriverError):
+        module.assert_arrival_approved(None)
+    with pytest.raises(module.ExogenousDriverError):
+        module.assert_arrival_approved(dict(module.B5_ARRIVAL_APPROVAL, seed=123))
+    dropped = dict(module.B5_ARRIVAL_APPROVAL)
+    dropped.pop("slot_mapping")
+    with pytest.raises(module.ExogenousDriverError):
+        module.assert_arrival_approved(dropped)
+    with pytest.raises(module.ExogenousDriverError):
+        module.assert_arrival_approved(dict(module.B5_ARRIVAL_APPROVAL, shadow=1))
+    assert module.assert_arrival_approved(module.B5_ARRIVAL_APPROVAL)
+
+
+def test_b5_decisions_are_registered_in_both_manifests():
+    payload = _manifest()
+    source = json.loads(SRC_MANIFEST.read_text(encoding="utf-8"))
+    assert payload["columns"]["arrival"]["decision_id"] == "B5-ARRIVAL"
+    assert payload["columns"]["local_pv_kw"]["b5_pv_approval"]["decision_id"] == "B5-PV"
+    assert source["b5_arrival_approval"]["decision_id"] == "B5-ARRIVAL"
+    assert source["b5_pv_approval"]["decision_id"] == "B5-PV"
+    assert source["b5_arrival_approval"]["uses_archive_dates"] is False
+
 
 def test_arrival_is_non_negative_integer(frame):
     arrival = frame["arrival"].to_numpy()
@@ -235,10 +394,7 @@ def test_arrival_is_non_negative_integer(frame):
 
 def test_arrival_is_reproducible_with_the_frozen_seed(frame):
     module = drivers()
-    template = np.asarray(
-        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["columns"]["arrival"]
-        ["rate_template"]
-    )
+    template = module.arrival_rate_template_from_cache()
     again = module.generate_arrival(
         pd.DatetimeIndex(frame["timestamp"]), template, seed=ARRIVAL_SEED)
     assert np.array_equal(again, frame["arrival"].to_numpy())
@@ -246,63 +402,75 @@ def test_arrival_is_reproducible_with_the_frozen_seed(frame):
 
 def test_arrival_changes_with_a_different_seed(frame):
     module = drivers()
-    template = np.asarray(
-        json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))["columns"]["arrival"]
-        ["rate_template"]
-    )
+    template = module.arrival_rate_template_from_cache()
     other = module.generate_arrival(
         pd.DatetimeIndex(frame["timestamp"]), template, seed=ARRIVAL_SEED + 1)
     assert not np.array_equal(other, frame["arrival"].to_numpy())
 
 
-def test_arrival_template_is_normalised_and_shaped(frame):
-    module = drivers()
-    template = module.arrival_rate_template_from_cache()
-    assert template.shape == (7, 48)
-    assert np.isfinite(template).all()
-    assert (template >= 0).all()
-    assert template.mean() == pytest.approx(1.0, rel=1e-9)
-
-
 def test_arrival_is_exactly_poisson_with_the_frozen_rate(frame):
     module = drivers()
     template = module.arrival_rate_template_from_cache()
-    stamps = pd.DatetimeIndex(frame["timestamp"])
-    rates = np.array([
-        template[stamp.weekday(), stamp.hour * 2 + stamp.minute // 30] * ARRIVAL_MEAN
-        for stamp in stamps
-    ])
+    slots = module.arrival_template_slot(pd.DatetimeIndex(frame["timestamp"]))
+    rates = template[slots] * ARRIVAL_MEAN
     rng = np.random.default_rng(ARRIVAL_SEED)
-    expected = rng.poisson(rates)
-    assert np.array_equal(expected, frame["arrival"].to_numpy())
-    # **尺度参数**固定为 1000；2024 的星期分布并非恰好均匀（闰年 366 天），
-    # 因此**实现**的全年均值是 999.979 而不是精确 1000——两者都如实登记在 manifest。
+    assert np.array_equal(rng.poisson(rates), frame["arrival"].to_numpy())
     assert ARRIVAL_MEAN == 1000.0
     assert rates.mean() == pytest.approx(ARRIVAL_MEAN, rel=1e-3)
 
 
 def test_arrival_is_not_a_replay_of_the_2019_trace(frame):
-    """2019 trace 只校准**分布形状**，不得被直接重放成 2024 到达。"""
     arrival = frame["arrival"].to_numpy()
-    assert len(np.unique(arrival)) > 50          # 不是把少数 trace 值照抄
+    assert len(np.unique(arrival)) > 50
     assert arrival.mean() == pytest.approx(ARRIVAL_MEAN, rel=0.05)
 
 
-def test_arrival_template_does_not_read_2024_truth(monkeypatch):
-    """arrival 的 rate template 只来自 2019 trace：**不得**读取任何 2024 数据。"""
+# --- 7. 失败关闭与不可覆盖 ----------------------------------------------------
+
+def _mutated_chain(tmp_path: pathlib.Path, *, sync_hashes: bool = True) -> pathlib.Path:
+    """复制上游资产并篡改 validation/test 段（train 与 trace 不变）。"""
+    root = tmp_path / "root"
+    (root / "data/processed/singapore_2024").mkdir(parents=True, exist_ok=True)
+    (root / "data/manifest").mkdir(parents=True, exist_ok=True)
+    for name in ("singapore_2024_half_hour.json", "singapore_2024_splits.json"):
+        shutil.copy(REPO_ROOT / "data/manifest" / name, root / "data/manifest" / name)
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    canonical.loc[canonical.index >= 10224, "temperature_deg_c"] += 5.0
+    parquet = root / "data/processed/singapore_2024/half_hour.parquet"
+    canonical.to_parquet(parquet, index=False)
+    if sync_hashes:
+        payload = json.loads(
+            (root / "data/manifest/singapore_2024_half_hour.json").read_text())
+        payload["output_parquet_sha256"] = _sha256(parquet)
+        (root / "data/manifest/singapore_2024_half_hour.json").write_text(
+            json.dumps(payload))
+        splits = json.loads(
+            (root / "data/manifest/singapore_2024_splits.json").read_text())
+        splits["canonical_parquet_sha256"] = _sha256(parquet)
+        splits["canonical_manifest_sha256"] = _sha256(
+            root / "data/manifest/singapore_2024_half_hour.json")
+        splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
+        splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+        splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(
+            parquet)
+        (root / "data/manifest/singapore_2024_splits.json").write_text(
+            json.dumps(splits))
+    return root
+
+
+def test_source_hash_mismatch_fails_closed(tmp_path):
     module = drivers()
-    baseline = module.arrival_rate_template_from_cache()
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("arrival template 不得读取 2024 truth")
-
-    monkeypatch.setattr(pd, "read_parquet", forbidden)
-    again = module.arrival_rate_template_from_cache()
-    assert np.array_equal(baseline, again)
+    root = _mutated_chain(tmp_path, sync_hashes=False)
+    with pytest.raises((ValueError, FileNotFoundError)):
+        module.load_frozen_inputs(
+            canonical_parquet_path=root / "data/processed/singapore_2024/half_hour.parquet",
+            canonical_manifest_path=root / "data/manifest/singapore_2024_half_hour.json",
+            split_manifest_path=root / "data/manifest/singapore_2024_splits.json",
+        )
 
 
 def test_validation_and_test_truth_mutation_does_not_change_arrival(tmp_path):
-    """改 validation/test 段真值 → PV/风电必变，但 **arrival 必须完全相同**。"""
+    """§二.8：v2 的 arrival **不读取** validation/test 的任何数值真值。"""
     module = drivers()
     baseline_inputs = module.load_frozen_inputs(
         canonical_parquet_path=CANONICAL_PARQUET,
@@ -322,51 +490,15 @@ def test_validation_and_test_truth_mutation_does_not_change_arrival(tmp_path):
     assert np.array_equal(baseline["arrival"], after["arrival"])
 
 
-def _mutated_chain(tmp_path: pathlib.Path, *, sync_hashes: bool = True) -> pathlib.Path:
-    """复制上游资产并**篡改 validation/test 段**（train 段与 trace 不变）。"""
-    root = tmp_path / "root"
-    (root / "data/processed/singapore_2024").mkdir(parents=True, exist_ok=True)
-    (root / "data/manifest").mkdir(parents=True, exist_ok=True)
-    for name in ("singapore_2024_half_hour.json", "singapore_2024_splits.json"):
-        shutil.copy(REPO_ROOT / "data/manifest" / name, root / "data/manifest" / name)
-    frame = pd.read_parquet(CANONICAL_PARQUET)
-    frame.loc[frame.index >= 10224, "temperature_deg_c"] += 5.0
-    parquet = root / "data/processed/singapore_2024/half_hour.parquet"
-    frame.to_parquet(parquet, index=False)
-    if sync_hashes:
-        payload = json.loads(
-            (root / "data/manifest/singapore_2024_half_hour.json").read_text())
-        payload["output_parquet_sha256"] = _sha256(parquet)
-        (root / "data/manifest/singapore_2024_half_hour.json").write_text(
-            json.dumps(payload))
-        splits = json.loads(
-            (root / "data/manifest/singapore_2024_splits.json").read_text())
-        splits["canonical_parquet_sha256"] = _sha256(parquet)
-        splits["canonical_manifest_sha256"] = _sha256(
-            root / "data/manifest/singapore_2024_half_hour.json")
-        # M1.3d 要求路径声明等于调用者实际提供的 logical repo path；
-        # 临时根目录下的 logical 形式是 `<external>/<name>`
-        splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
-        splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
-        splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(
-            parquet)
-        (root / "data/manifest/singapore_2024_splits.json").write_text(
-            json.dumps(splits))
-    return root
-
-
-# --- 7. 失败关闭与不可覆盖 ----------------------------------------------------
-
-def test_source_hash_mismatch_fails_closed(tmp_path):
-    """篡改 parquet 而**不**同步更新 manifest hash → 必须 fail closed。"""
+def test_arrival_template_does_not_read_2024_truth(monkeypatch):
     module = drivers()
-    root = _mutated_chain(tmp_path, sync_hashes=False)
-    with pytest.raises((ValueError, FileNotFoundError)):
-        module.load_frozen_inputs(
-            canonical_parquet_path=root / "data/processed/singapore_2024/half_hour.parquet",
-            canonical_manifest_path=root / "data/manifest/singapore_2024_half_hour.json",
-            split_manifest_path=root / "data/manifest/singapore_2024_splits.json",
-        )
+    baseline = module.arrival_rate_template_from_cache()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("arrival template 不得读取 2024 truth")
+
+    monkeypatch.setattr(pd, "read_parquet", forbidden)
+    assert np.array_equal(baseline, module.arrival_rate_template_from_cache())
 
 
 def test_existing_different_output_is_not_overwritten(tmp_path):
@@ -379,15 +511,25 @@ def test_existing_different_output_is_not_overwritten(tmp_path):
     assert (_sha256(target), target.stat().st_mtime_ns) == before
 
 
-def test_rematerialization_is_idempotent(tmp_path, monkeypatch):
-    """重复物化必须复用 `frozen_at_utc` 且三个产物 bytes/mtime 全不变。"""
+def test_first_freeze_failure_leaves_no_partial_artifacts(tmp_path, monkeypatch):
     module = materializer()
     out_dir = tmp_path / "processed"
     out_dir.mkdir()
-    out_manifest = tmp_path / "exogenous.json"
-    src_manifest = REPO_ROOT / "data/manifest/m13f_materialization_sources.json"
+    monkeypatch.setattr(module, "_atomic_write_bytes",
+                        lambda path, body: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(OSError):
+        module.materialize_exogenous_drivers(out_parquet=out_dir / "x.parquet",
+                                             out_manifest=out_dir / "x.json")
+    assert sorted(p.name for p in out_dir.iterdir()) == []
+
+
+def test_rematerialization_is_idempotent(tmp_path, monkeypatch):
+    module = materializer()
+    out_dir = tmp_path / "processed"
+    out_dir.mkdir()
     monkeypatch.setattr(module, "SOURCE_MANIFEST", tmp_path / "sources.json")
-    out_parquet = out_dir / "exogenous_drivers.parquet"
+    out_parquet = out_dir / "exogenous_drivers_v2.parquet"
+    out_manifest = tmp_path / "exogenous_v2.json"
     first = module.materialize_exogenous_drivers(
         out_parquet=out_parquet, out_manifest=out_manifest)
     before = {
@@ -408,26 +550,9 @@ def test_rematerialization_is_idempotent(tmp_path, monkeypatch):
     assert before == after
     assert json.loads(out_manifest.read_text())["frozen_at_utc"] == frozen_at
     assert first["rows"] == TOTAL_ROWS
-    assert src_manifest.exists()
-
-
-def test_first_freeze_failure_leaves_no_partial_artifacts(tmp_path, monkeypatch):
-    module = materializer()
-    out_dir = tmp_path / "processed"
-    out_dir.mkdir()
-    monkeypatch.setattr(module, "_atomic_write_bytes",
-                        lambda path, body: (_ for _ in ()).throw(OSError("boom")))
-    with pytest.raises(OSError):
-        module.materialize_exogenous_drivers(out_parquet=out_dir / "x.parquet",
-                                             out_manifest=out_dir / "x.json")
-    assert sorted(p.name for p in out_dir.iterdir()) == []
 
 
 # --- 8. manifest 与 readiness -------------------------------------------------
-
-def _manifest() -> dict:
-    return json.loads(OUT_MANIFEST.read_text(encoding="utf-8"))
-
 
 def test_output_manifest_records_the_required_fields():
     payload = _manifest()
@@ -437,13 +562,13 @@ def test_output_manifest_records_the_required_fields():
                 "public_source_manifest_path", "public_source_manifest_sha256",
                 "materialization_sources_path", "materialization_sources_sha256",
                 "pyproject_sha256", "uv_lock_sha256",
-                "columns", "azure", "output", "readiness"):
+                "columns", "azure", "output", "supersedes", "readiness"):
         assert key in payload, key
 
 
 def test_output_manifest_hashes_match_reality():
     payload = _manifest()
-    assert _sha256(V1_MANIFEST) == payload["public_source_manifest_sha256"]
+    assert _sha256(PUBLIC_SOURCE_V1) == payload["public_source_manifest_sha256"]
     assert _sha256(SRC_MANIFEST) == payload["materialization_sources_sha256"]
     assert _sha256(REPO_ROOT / payload["output"]["path"]) == payload["output"]["sha256"]
     assert payload["output"]["rows"] == TOTAL_ROWS
@@ -453,7 +578,7 @@ def test_output_manifest_hashes_match_reality():
 def test_source_manifest_records_the_v1_reference_and_dependencies():
     payload = json.loads(SRC_MANIFEST.read_text(encoding="utf-8"))
     assert payload["schema"] != "m1.3f-public-sources-v1"
-    assert payload["public_source_manifest_sha256"] == V1_MANIFEST_SHA256
+    assert payload["public_source_manifest_sha256"] == PUBLIC_SOURCE_V1_SHA256
     assert payload["uv_lock_sha256"] == _sha256(REPO_ROOT / "uv.lock")
     assert payload["pyproject_sha256"] == _sha256(REPO_ROOT / "pyproject.toml")
     assert "pvlib" in json.dumps(payload).lower()
@@ -462,8 +587,7 @@ def test_source_manifest_records_the_v1_reference_and_dependencies():
 
 
 def test_readiness_is_honest():
-    payload = _manifest()
-    readiness = payload["readiness"]
+    readiness = _manifest()["readiness"]
     for key in ("local_pv_kw_ready", "wind_generation_kw_ready",
                 "carbon_intensity_ready", "arrival_ready",
                 "exogenous_drivers_ready"):
@@ -478,7 +602,7 @@ def test_no_reserved_split_names_are_created():
 
 
 def test_upstream_assets_are_untouched():
-    assert _sha256(V1_MANIFEST) == V1_MANIFEST_SHA256
+    assert _sha256(PUBLIC_SOURCE_V1) == PUBLIC_SOURCE_V1_SHA256
     assert _sha256(CANONICAL_MANIFEST) == (
         "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
     )
@@ -498,7 +622,6 @@ def test_formal_training_is_still_blocked():
 
 @pytest.mark.slow
 def test_real_inputs_rematerialize_identically():
-    """用真实上游资产重新计算四列，必须与已物化的 parquet **逐位一致**。"""
     module = drivers()
     inputs = module.load_frozen_inputs(
         canonical_parquet_path=CANONICAL_PARQUET,
@@ -508,6 +631,5 @@ def test_real_inputs_rematerialize_identically():
     rebuilt = module.build_drivers(inputs)
     frame = pd.read_parquet(OUT_PARQUET)
     for column in COLUMNS[1:]:
-        assert np.array_equal(
-            np.asarray(rebuilt[column]), frame[column].to_numpy()
-        ), column
+        assert np.array_equal(np.asarray(rebuilt[column]),
+                              frame[column].to_numpy()), column
