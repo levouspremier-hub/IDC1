@@ -7,10 +7,10 @@
 >
 > 当前 HEAD（整合分支）：M1.3b **已通过**、M1.3c 审计通过、
 > **M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3 三轮返修）、
-> **M1.3e 前两轮审核均不通过，已完成 R1 与 R2 返修并再次提交复审**。
-> ⚠️ **在 M1.3e-R2 通过人工复审之前，M1.3e 不得视为完成**；**M1.3f 未开始**；
+> **M1.3e 前三轮审核均不通过，已完成 R1/R2/R3 返修并再次提交复审**。
+> ⚠️ **在 M1.3e-R3 通过人工复审之前，M1.3e 不得视为完成**；**M1.3f 未开始**；
 > 正式 `ScenarioBundle`、训练与评估**仍然 blocked**。
-> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2）。
+> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2、§7K.10 R3）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -673,6 +673,78 @@ git revert 7b288d7 ae4b4eb c96b21c c6165b6 2091011 0d0d4de
 `FORECAST_SOURCE_PATHS` 现含 `contracts/` 三个文件——**改动契约语义后必须重新
 生成 policy manifest**，否则 provider 按设计拒绝旧 revision。
 
+### 7K.10 M1.3e-R3：第三轮审核返修（**执行完成，等待人工复审**）
+
+**M1.3e 第三轮人工审核不通过**；返修区间 `46898c0..0124b85`（**5 个**提交），
+详见 `docs/task_cards/M1.3e.md` §18–§19。
+
+**审核给出的阻塞项：外部输入在 coercion 之前未严格验型；逻辑路径未规范化。**
+改前**实测**复现：`origin="200"` → 静默变成 `200`；`200.0` → `200`；
+`True` → `1.0`；`"1.25"` → `1.25`；`ScenarioBundle.price_forecast=[NaN]`
+完全放行；`ArtifactDigest(logical_path="." / "a/../b" / "./file" / "a//b" /
+" lead")` 全被接受；而 `frozen=True` 不阻止 `model_copy` 直接写入 `__dict__`，
+所以「复验」也被同一套宽松 coercion 放行。
+
+**修复（三份公共 helper，各只有一处实现）**：
+
+1. `_require_plain_int` —— coercion 前的严格整数：接受 `int`；拒绝 bool
+   （**先于** `int` 判断，因为 bool 是 int 的子类）、float、字符串数字、`None`、
+   容器；应用于 `origin`/`global_origin`/`forecast_cutoff`/`period_steps`。
+2. `_require_finite_number` + `_normalise_forecast_series` —— 容器只接受
+   `list`/`tuple` 并规范化为 `tuple`；元素只接受 `int`/`float`（**bool 不算
+   数值**）；字符串、`None`、容器、`NaN`、`±Inf` 全拒绝；合法 int 规范化为 float。
+   `AvailableSeries` 与 `ScenarioBundle` **共用**这一份实现。
+3. `_require_canonical_logical_path` —— 非空、无任何空白、相对、无反斜杠、
+   无 `.`/`..`/空片段；保留 `<external>/name` 与仓库相对路径；
+   应用于 `ArtifactDigest.logical_path` 与 artifact 顶层四条 path。
+
+全部走 `mode="before"` 的**定向** validator；**未**对整个 `ContractBase` 打开
+全局 `strict=True`。**未**放松 R2 的深度不可变、四角色闭环、时间轴与 revision
+surface；**未**修改任何 forecast 数值规则。
+
+`validate_available_forecast()` 改为委托 `validate_available_forecast_artifact()`：
+用 `raw_model_payload()` 递归取**原始属性值**再 `model_validate`，
+**不经过序列化器**（序列化器可能把 `bool` 元素按 `float` 字段洗成 `1.0`）。
+
+**改前实测**（临时 detached worktree 中检出「先红」提交 `e052a18`）：
+`462 collected, 62 failed, 0 errors`，**全部**为 `Failed: DID NOT RAISE ValueError`。
+
+| 命令 | 结果 |
+|---|---|
+| `pytest tests/test_m13e_forecast_provenance.py -q -m "not slow"` | **462 passed** |
+| `pytest tests/test_m13e_forecast_provenance.py -q -m slow` | **1 passed** |
+| `pytest tests/test_m12*.py tests/test_m13*.py tests/test_contracts.py tests/test_contract_validators.py -q` | **872 passed** |
+| 全量 `pytest -m "not slow"` | **2048 passed** |
+| `make check` | **exit 0**，**2048 passed**, 45 deselected |
+| `make smoke` | **exit 0** |
+| `make train` | **exit 2**，**未**回退 synthetic、无 checkpoint |
+
+**最终 policy manifest**：`materializer_revision =
+055258a9d09ca8b724ea2c075014c0910de06bff`；SHA-256 =
+`0bf31f80ff0c9acd67dad5082e08eee7364397a2dbfa429e4a34c3d87a702923`；
+最终 docs HEAD 连续物化两次 `exit=0` 且 bytes/hash/`mtime_ns` 不变。
+
+**上游四项 hash 未变**：`d4e24d6f…` / `e6484d6b…` / `a096535f…` / `dec76ea2…`；
+`configs/frozen_refs/refs.json` 未动。**`scenario/splits.py` 未修改。**
+
+> **必须如实登记的范围外修改（2 个文件，均为「逻辑路径规范化」）**：
+> `scenario/scenario.py` 与 `planning/snapshot_adapter.py` 原先的 digest
+> `logical_path` 含 `//` 空片段（`scenario://…`、`…py://…`），按 R3 规则会被拒绝；
+> 已改为 `scenario/scenario.py` 与 `envs/idc_price_env.py` 两条真正的仓库逻辑路径，
+> role 名不变。改动为 2 个常量值 + 1 处传参，未触及数值规则或 oracle-debug 语义。
+
+**回滚（由新到旧，已只读验证零冲突）**：
+
+```bash
+git revert 0124b85 5d06ca9 055258a e052a18 2f489d3
+# 46898c0 的树 = 596f3ec7220f068a43830fb3542fdf2df775463c = revert 后 HEAD^{tree}
+```
+
+**M1.3e-R3 通过人工复审之前：M1.3e 不得视为完成；M1.3f 未开始；
+正式 ScenarioBundle、训练与评估仍然 blocked。**
+`ArtifactDigest.logical_path` 现已收紧为规范 POSIX 路径——含 `://`、空片段或
+`..` 片段的逻辑路径今后一律拒绝。
+
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
 > ⚠️ **本节的历史说法是历史错误，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
@@ -1272,6 +1344,12 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得在改动 `contracts/` 三个文件、`scenario/forecast.py` 或 policy 物化器之后
   沿用旧 policy manifest：`FORECAST_SOURCE_PATHS` 覆盖这五个文件，
   provider 会按设计拒绝旧 revision，**必须重新生成**。
+- 不得在 **M1.3e-R3 通过人工复审之前**把 M1.3e 说成「完成」或「通过」，
+  不得说 M1.3f 已开始，不得说正式训练/评估已解除 blocked。
+- 不得把「pydantic 接受了这个输入」当作「这个输入合法」：宽松模式会在类型校验前
+  静默转换（`"200"→200`、`200.0→200`、`True→1.0`）；本卡的严格性来自
+  `mode="before"` 的定向 validator。
+- 不得再引入含 `://`、空片段或 `..` 片段的 `ArtifactDigest.logical_path`。
 
 ## 11. 当前可安全执行的命令
 
