@@ -7,9 +7,10 @@
 >
 > 当前 HEAD（整合分支）：M1.3b **已通过**、M1.3c 审计通过、
 > **M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3 三轮返修）、
-> **M1.3e 第一轮审核不通过，已返修（M1.3e-R1）并再次提交复审**。
-> ⚠️ **在 M1.3e-R1 通过人工复审之前，M1.3e 不得视为通过**；**M1.3f 未开始**。
-> 详见下方 §7K（含 §7K.8 本轮返修）。
+> **M1.3e 前两轮审核均不通过，已完成 R1 与 R2 返修并再次提交复审**。
+> ⚠️ **在 M1.3e-R2 通过人工复审之前，M1.3e 不得视为完成**；**M1.3f 未开始**；
+> 正式 `ScenarioBundle`、训练与评估**仍然 blocked**。
+> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -582,6 +583,95 @@ git revert bee96f7 05ad552 89f915b f5d5656 d681608 ed5b877 18f598e
 `forecast_ready` 不得因「只存在 policy manifest」就提前声明**
 （policy 的 readiness 只有 `available_driver_forecasts_ready=true`，
 其余三项 false；split manifest 的 `forecast_ready` 仍为 false）。
+
+### 7K.9 M1.3e-R2：第二轮审核返修（**执行完成，等待人工复审**）
+
+**M1.3e 第二轮人工审核不通过**；返修区间 `5cb3f73..7b288d7`（**6 个**提交），
+详见 `docs/task_cards/M1.3e.md` §16–§17。
+
+**审核给出的五个阻塞项，全部修复：**
+
+1. **深度不可变不足** → `ForecastSeriesProvenance.sources` 改为
+   `tuple[ArtifactDigest, ...]`，`ScenarioBundle` 的七个 forecast 序列改为
+   `tuple[float, ...]`。`frozen=True` 只冻结字段赋值、**不**冻结容器内容：
+   R2 之前 `sources.append(...)`、`sources[0]=`、`series[i]=` 都能在构造后原地
+   修改并使 `content_hash()` 失真。JSON/list 输入仍被规范化为 tuple，
+   但模型对外不暴露可变容器。
+2. **artifact 内部证据未闭环** → 新增三条上游 logical path，四层 path/hash 现在
+   都能在 artifact 内部闭环；逐序列 `code_revision`/`method`/窗口与顶层**逐项恒等**；
+   `sources` 必须**精确、按序**等于四个角色（缺失/重复/额外/乱序全拒绝）；
+   每个 digest 的 path/hash 必须等于顶层对应字段；五条 provenance 必须携带
+   完全相同的四项 digest。
+3. **冻结 policy 规则未锁死** → `split`/`frequency`/`method`/`period_steps`/
+   `model_name`/`model_version`/`seed` 改为**精确取值**，
+   `frequency="1h"`、`period_steps=47`、`method="other"` 这类「合法但错误」
+   的取值同样拒绝。
+4. **时间轴未校验** → `target_timestamps[0] == generated_at`、长度 ==
+   `forecast_cutoff`、严格递增唯一、恰好 30 分钟网格；
+   `target_end_exclusive == 末项 + 30min`、
+   `lookback_start == generated_at − 48 × 30min`；重复/乱序/17 分钟偏移/缺口/
+   首项偏离/空全部拒绝，且不泄漏内建异常。
+5. **revision 覆盖面不足** → `FORECAST_SOURCE_PATHS` 扩展到
+   `contracts/__init__.py`、`contracts/models.py`、`contracts/validators.py`、
+   `scenario/forecast.py`、`scripts/materialize_singapore_forecast_policy.py`；
+   provider 与物化器共用该列表，`code_revision` 与 `materializer_revision` 仍恒等；
+   R1 的旧 revision 已被固定为「必须拒绝」。
+
+**`validate_available_forecast` 改为重新 `model_validate(model_dump())`**，
+防御性复验直接复用构造规则，不再维护一套更弱的重复规则。
+
+**改前实测**（临时 detached worktree 中检出「先红」提交 `2091011`）：
+`264 collected, 32 failed, 0 errors`，代表性原文包括
+`AssertionError: assert False`（sources 不是 tuple）、
+`AssertionError: price_forecast`、
+`AttributeError: 'AvailableExogenousForecast' object has no attribute 'canonical_parquet_path'`、
+`Failed: DID NOT RAISE ValueError`（ArtifactDigest 未自校验）、
+`AssertionError: assert {'contracts/_…'} <= {'scenario/fo…'}`（revision 未覆盖 contracts/）。
+
+| 命令 | 结果 |
+|---|---|
+| `pytest tests/test_m13e_forecast_provenance.py -q -m "not slow"` | **264 passed** |
+| `pytest tests/test_m13e_forecast_provenance.py -q -m slow` | **1 passed** |
+| `pytest tests/test_m12*.py tests/test_m13*.py tests/test_contracts.py tests/test_contract_validators.py -q` | **674 passed** |
+| `make check` | **exit 0**，**1850 passed**, 45 deselected |
+| `make smoke` | **exit 0** |
+| `make train` | **exit 2**，**未**回退 synthetic、无 checkpoint |
+| `train.json` / `validation.json` / `test.json` | **均未创建** |
+
+**最终 policy manifest**：`materializer_revision =
+c96b21c0399fc31c23b33a28007e87275cd0c65d`；SHA-256 =
+`06b6610b2c3bdd49c89e1954c5d301cb3e5ff2665b34147af62c40ce3f32b0de`；
+连续物化两次 `exit=0` 且 bytes/hash/`mtime_ns` 不变、无临时文件。
+
+**上游仍未变**：`d4e24d6f…` / `e6484d6b…` / `a096535f…` / `dec76ea2…`；
+`configs/frozen_refs/refs.json` 未动；split 边界未变。
+**`scenario/splits.py` 未修改。**
+
+> **必须如实登记的范围外修改（6 个文件，均为「类型对齐」）**：
+> `scenario/scenario.py`、`planning/snapshot_adapter.py`、
+> `tests/test_m43_milp.py`、`tests/test_m44_corrector.py`、`tests/test_m46_probe.py`、
+> `tests/test_m310b_wind_carbon_forecast.py` 需要按 tuple 声明传值。
+> **运行时行为完全不变**（pydantic 本就把 list 规范化为 tuple），
+> 这是 `make check` 的 mypy 门禁要求，无一处放宽断言；
+> `tests/test_m13a_canonical_bundle.py` 的枚举遗漏已在卡片 §16.2 事先登记。
+
+**一次既有的偶发 flake（如实登记）**：本轮首次全量
+`pytest -m "not slow"` 中
+`tests/test_m51c_train_buffer_integration.py::test_corrector_arm_differs_only_in_wall_clock_audit_fields`
+失败一次，该文件单独连跑 3 次全绿；与 M1.3d §11.13 登记的是同一个
+M5.1c corrector 跨进程确定性既有 flake，本轮未触碰求解路径，只登记、不修改。
+
+**回滚（由新到旧，已只读验证零冲突）**：
+
+```bash
+git revert 7b288d7 ae4b4eb c96b21c c6165b6 2091011 0d0d4de
+# 5cb3f73 的树 = 1f6935af7e94bf3bd436dcf30a3142861bf50a84 = revert 后 HEAD^{tree}
+```
+
+**M1.3e-R2 通过人工复审之前：M1.3e 不得视为完成；M1.3f 未开始；
+正式 ScenarioBundle、训练与评估仍然 blocked。**
+`FORECAST_SOURCE_PATHS` 现含 `contracts/` 三个文件——**改动契约语义后必须重新
+生成 policy manifest**，否则 provider 按设计拒绝旧 revision。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
@@ -1175,6 +1265,13 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得把 `prediction_hash()` 与 `content_hash()` 混为一谈：前者只覆盖预测数值、
   单位与顺序（用于证明未来真值变化不改变预测），后者覆盖含审计 provenance 的
   完整 artifact。
+- 不得在 **M1.3e-R2 通过人工复审之前**把 M1.3e 说成「完成」或「通过」；
+  不得说 M1.3f 已开始；不得说正式 `ScenarioBundle`、训练或评估已解除 blocked。
+- 不得因为 policy manifest 存在就认为 forecast 就绪：其 readiness 只有
+  `available_driver_forecasts_ready=true`。
+- 不得在改动 `contracts/` 三个文件、`scenario/forecast.py` 或 policy 物化器之后
+  沿用旧 policy manifest：`FORECAST_SOURCE_PATHS` 覆盖这五个文件，
+  provider 会按设计拒绝旧 revision，**必须重新生成**。
 
 ## 11. 当前可安全执行的命令
 
