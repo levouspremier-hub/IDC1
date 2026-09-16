@@ -1,16 +1,18 @@
 # 工程工作交接文档
 
-> 更新时间：2026-09-14（Asia/Shanghai）
+> 更新时间：2026-09-16（Asia/Shanghai）
 > M5.4h1 实现基线：`p4-safeppo-m51a-rollout-contract` @ `ca17d87`。
 > ⚠️ **当前工作分支**：`p4-safeppo-m51a-rollout-contract-m12-integration`
-> （M1.2e **已通过**；M1.3b 半小时 canonical reader 已在此分支完成，等待人工审查）。
 > 下文的 `p4-safeppo-m51a-rollout-contract` 指针**未被移动**，仍为 `04296db`。
 >
-> 当前 HEAD（整合分支）：`p4-safeppo-m51a-rollout-contract-m12-integration`；M1.3b **已通过**，M1.3c 审计通过（四项人工决定已下），M1.3d **truth split 已冻结**（等待人工审查）
+> 当前 HEAD（整合分支）：M1.3b **已通过**、M1.3c 审计通过、
+> **M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3 三轮返修）、
+> **M1.3e 执行完成**（contract-v8 + 因果 forecast provenance + 五类
+> seasonal-naive provider + forecast policy manifest），**等待人工审查**。
+> 详见下方 §7K。
 >
-> 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`
-> （其后仅有本卡的证据与交接 docs 提交）；`M5.4h2 已通过人工审查并被接受`，
-> **M5.4i 已连续三轮人工审核未通过**，已三轮返修，**仍等待再次人工审核**。
+> 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
+> `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
 > 受保护基线：`paper-baseline` @ `787a3c8`，**绝不直接修改或自行合并**。
 
 本文件供新的 VSCode/Claude Code 会话或人工审阅者继续工作。它记录的是当前可核查的
@@ -73,8 +75,8 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 部分 | 统一 `ScenarioBundle` 契约/泛化提供器已有早期实现。 | 真实 frozen manifest 读取与完整语义接线未验收；正式训练仍不可开始。 |
-| M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 `contract-v7`。 | 与真实 M1.2 场景的完整接线仍待 M1.3。 |
+| M1.3 | 推进中（b/c/d **已通过**；e 执行完成待审） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + train-only 描述统计 + origin 门禁；**M1.3e contract-v8 + 因果 seasonal-naive provider + policy manifest**。 | **M1.3f**（PV/风电/碳强度/arrival 口径）→ **M1.3g**（正式 ScenarioBundle + env/train 接线，含 refs 冻结）未完成；正式训练仍不可开始。 |
+| M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v8`**（M1.3e 起；v7 buffer/checkpoint 明确拒绝）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
 | M5.1–M5.3 | 已有实现，未作正式训练结论 | raw/exec buffer、三 value/GAE、Lagrangian 与状态校验。 | 无真实数据正式训练；训练性能或收敛均不得声称。 |
@@ -268,9 +270,227 @@ git revert e186ce4 1d63c64 7f8d169 50c19f4 caf0c9d 84e6e72 427528e \
 **M1.3e 尚未开始**：`forecast_ready=false`，正式 `ScenarioBundle` 与训练**仍 blocked**；
 四项缺口仍 unavailable。
 
+## 7K. M1.3e：contract-v8 与因果 forecast provenance（**执行完成，等待人工审查**）
+
+`docs/task_cards/M1.3e.md`。**M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3；
+最终 `materializer_revision = 1d63c64`、split manifest SHA-256 = `a096535f…`）。
+
+| 字段 | 值 |
+|---|---|
+| 分支 | `p4-safeppo-m51a-rollout-contract-m12-integration` |
+| 卡片登记的严格开始 SHA | `66ce93c` |
+| 本会话续做起点 | `d41ee07`（其上已有开卡 `ac5f245` 与先红测试 `d41ee07`） |
+| 最终 HEAD | `75e57ef` |
+
+**账本（稳定写法）**：截至父提交 `75e57ef`，`66ce93c..75e57ef` 共 **12 个**提交；
+包含本次文档提交后为 **13 个**。
+
+```text
+ac5f245 docs(card): start M1.3e contract-v8 and causal forecast provenance
+d41ee07 test: add failing M1.3e contract-v8 provenance and causal forecast regressions
+222f76f feat: raise the contract to contract-v8 with structured forecast provenance
+cf4f763 feat: add the causal seasonal-naive forecast provider and the oracle-debug helper
+abf4f24 feat: add the forecast policy materializer for Singapore-2024
+4e142e0 test: migrate the existing fixtures to contract-v8 provenance
+9481f5c fix: scope the provider's upstream-hash verification and content hash
+b3c9da2 test: correct the history-window mutation rows in the M1.3e leakage regression
+6401029 fix: let the forecast policy materializer run as a standalone script
+c45b38f feat: freeze the Singapore-2024 forecast policy manifest
+a124dd3 style: take the canonical frequency from the frozen split module
+75e57ef feat: regenerate the forecast policy manifest after the import fix
+```
+
+### 7K.1 contract-v8 的破坏性边界
+
+`contracts.CONTRACT_VERSION_ID` 是**全仓唯一**版本源，由 `contract-v7` 提升为
+**`contract-v8`**；`checkpointing`、`safe_rl_v2/buffer`、`safe_rl_v2/lagrangian`、
+`scenario/scenario.py` 仍从该常量导入，**未新增硬编码版本源**。
+
+破坏性后果（**预期代价**，与既有 v6→v7 的处理一致）：
+
+- 既有 **v7 rollout buffer / checkpoint 全部失效**（明确拒绝，**不**自动填充新字段、
+  **不**截断、**不**静默升级）；`runs/` 中既有 v7 历史证据**原样保留、未改写**；
+- `ScenarioBundle` 形状变化：`synthetic: bool` 与无 schema 的自由 dict
+  `source_hashes` **退役**，改为显式 `mode` + `generated_at` + 结构化
+  `forecast_provenance`；`content_hash()` 因此覆盖全部 provenance；
+- 所有合法测试 fixture 已**显式**迁移为 v8 provenance，**未**借迁移弱化任何断言。
+
+**迁移范围**（仅两类，均为卡内授权）：
+
+| 类别 | 文件 |
+|---|---|
+| 直接构造 `ScenarioBundle`、需补 v8 provenance | `test_contracts`、`test_contract_validators`、`test_m43_milp`、`test_m44_corrector`、`test_m46_probe`、`test_m310b_wind_carbon_forecast` |
+| 明确断言 `contract-v7`、迁移为 v8 | `test_m310c`、`test_m41a`、`test_m41b`、`test_m41c`、`test_m51a`、`test_m51_buffer`、`test_m53a`、`test_m53c`、`test_m53e`、`test_m54a` |
+
+> **如实登记**：`tests/test_m41a_snapshot_completeness.py` 属于第 2 类，
+> 卡片原文枚举遗漏，已一并迁移。
+
+**v7 拒绝证据**（`tests/test_m13e_forecast_provenance.py`）：
+`test_v7_artifacts_are_explicitly_rejected`（buffer payload 写 `contract-v7` → 拒绝）、
+`test_no_second_hardcoded_version_source`（四个文件不得含 `contract-v7` 字面量）、
+`test_m51a_rollout_contract` 的 v5 旧 payload **前向改成当前版本**后仍被拒绝。
+
+### 7K.2 provenance 模型与 purpose gate
+
+- **构造时 fail closed**：`ForecastSeriesProvenance` / `ScenarioBundle` 各自带
+  `model_validator(mode="after")`；校验实现放在 `contracts.models`
+  （`validators` 依赖 `models`，反向导入会成环），`contracts.validators` 以
+  `validate_series_provenance` / `validate_scenario_provenance` 委托同一实现。
+- **模型**：`ArtifactDigest(role, logical_path, sha256)`；
+  `ForecastSeriesProvenance`（series_name / source_kind / method / generated_at /
+  information_cutoff_exclusive / target_start / target_end_exclusive /
+  lookback_start / lookback_end_exclusive / model_name / model_version /
+  code_revision / seed / sources）；
+  `ScenarioForecastProvenance` **刻意不继承** `ContractBase`，使 `model_fields`
+  **精确**等于七个 forecast 字段（否则「一一对应」无法机器判定）。
+- **校验规则**：带时区的**规范** ISO-8601；`generated_at <= target_start`；
+  `information_cutoff_exclusive <= target_start`；
+  `lookback_end_exclusive <= information_cutoff_exclusive`；
+  `lookback_start <= lookback_end_exclusive`；`target_start < target_end_exclusive`；
+  `series_name` 等于所在字段名；`code_revision` 40 位小写 Git SHA；
+  `sources[*].sha256` 64 位小写十六进制且 `sources` 非空；**`seed` 显式拒绝 bool**
+  （pydantic 宽松模式会把 `True` 变成 `1`）；未知 mode / 未知 source_kind /
+  非 `ScenarioForecastProvenance` 一律拒绝，**不泄漏** `KeyError`/`TypeError`/`AttributeError`。
+- **mode ↔ 来源自洽**：`formal` 只接受 external/seasonal_naive/persistence/
+  modeled_scenario；`synthetic` 拒绝 external_forecast 与 oracle_debug；
+  `oracle_debug` 只接受 oracle_debug/synthetic。
+- **purpose gate**（`validate_forecast_purpose`）：`training`/`evaluation` **只**接受
+  `mode="formal"`，拒绝 synthetic / oracle_debug，也拒绝**不是** `ScenarioBundle`
+  的 forecast artifact；只有 `debug` 接受。**本卡只建立 gate**，正式训练接线属 **M1.3g**。
+
+### 7K.3 seasonal-naive 的精确历史窗口（含一处**人为裁定**）
+
+冻结口径：`FORECAST_PERIOD_STEPS = 48`、`method = trailing_seasonal_naive`、
+`frequency = 30min`；**只**为五个 canonical driver 生成 forecast
+（`price_sgd_per_kwh` / `system_load_mw` / `temperature_deg_c` /
+`wind_speed_10m_mps` / `ghi_w_per_m2`）。
+
+对全局 origin = `i`：
+
+- 历史模板**只**读 `[i-48, i)`；**绝不**读 `i` 或 `i` 之后的 truth；
+- `forecast[k] = template[k mod 48]`（模板按**时间正序**，等价于 `y(i+k-48)`）；
+- `generated_at = information_cutoff_exclusive = lookback_end_exclusive = origin`；
+- `target = [origin, origin+C)`，`C` 必经 M1.3d `validate_forecast_origin`
+  （越界拒绝，不截断、不换段）；
+- train 内 `i < 48` fail closed（不回填、不跨年环绕）；validation/test 起点可以
+  使用其**之前已发生**的 canonical 历史；
+- 无随机数（`seed` 明确为 `null`）；**未**引入任何拟合。
+
+> ⚠️ **必须记住的人为裁定**：先红测试 `test_history_window_changes_the_forecast`
+> 原先只改 `origin-1`（第 199 行）却要求 `cutoff=4` 下的 forecast 变化 —— 按上述
+> 规则，第 k 项消费行是 `origin-48+k`，`origin-1` 落在模板下标 **47**，
+> 只有 `C > 47` 才会被消费。**卡片文字与已提交测试互相矛盾**，已上报人工，
+> **裁定为取卡片字面规则**，并把该测试的触发位置改为**整个历史窗口**
+> `range(origin-PERIOD_STEPS, origin)`。**断言强度不变**（仍是「历史窗口的任何变化
+> 都必须体现在 forecast 上」），没有删除、没有反转、没有放宽。
+
+**另一处由 leakage 回归暴露的语义**：artifact 的 `content_hash()` 只覆盖
+**预测内容本身**（contract_version / split / origin / global_origin /
+forecast_cutoff / frequency / method / period_steps / generated_at /
+target_timestamps / series）；上游制品的 sha256 随上游字节变化而预测未必变化，
+把它们算进 content hash 会让「同一份预测」在上游重物化后得到不同身份。
+上游 digest 仍完整保留在 `to_dict()["provenance"][*]["sources"]` 供审计。
+provider 的上游校验只覆盖**它真正读到的字节**（split manifest 的
+`canonical_parquet_sha256`、canonical manifest 的 `output_parquet_sha256` 与 parquet
+实测 sha256 三者相等 + schema/行数/时区/频率 + 整条 canonical 时间轴）；
+`canonical_manifest_sha256` 由 M1.3d `load_truth_split` 读取链负责。
+
+**future-truth mutation leakage 证据**（全部 `@pytest.mark.leakage`，五个 driver 参数化）：
+
+| 测试 | 断言 |
+|---|---|
+| `test_origin_and_future_truth_do_not_change_the_forecast` | 改 `[origin, end)` 全部 truth + 同步更新两个 manifest 的 parquet hash → **forecast 值与 content hash 均不变** |
+| `test_history_window_changes_the_forecast` | 改整个 `[origin-48, origin)` → forecast **必变** |
+| `test_validation_future_mutation_does_not_change_the_current_forecast` | validation 内 origin 之后的 truth mutation → 当前 origin 的 content hash **不变** |
+
+### 7K.4 oracle helper 与 snapshot adapter
+
+- `build_scenario_from_true` → **`build_oracle_debug_scenario_from_truth`**，
+  `oracle_debug` 为**必填 keyword-only**：漏传 `TypeError`、传假值 `ValueError`；
+  产物 `mode` 恒为 `"oracle_debug"`，`purpose=training/evaluation` 时被 gate 拒绝。
+- M1.3a 的「可见 truth 改变 bundle」两条断言**改名保留为 oracle-debug 语义**
+  （未删除、未反转）：把 `[t, t+cutoff)` 真值当作预测**正是 oracle-debug 的定义**；
+  正式 causal provider 的 leakage 回归是**独立**的另一组测试。
+- `planning/snapshot_adapter.py` 顶部明确标注 **oracle_debug / dev-only，
+  不能标 formal**：其「可见预测」就是 env 真值窗口、`load_forecast` 仍为全零占位；
+  产出的 bundle 恒为 `mode="oracle_debug"` 并在训练 purpose 下被拒绝。
+  **本卡不在 adapter 中伪造正式预测**（M1.3g 再接正式 provider）。
+
+### 7K.5 policy manifest 与 readiness
+
+| 项 | 值 |
+|---|---|
+| 路径 | `data/manifest/singapore_2024_forecast_policy.json`（入库） |
+| schema | `m1.3e-singapore-2024-forecast-policy-v1` |
+| `materializer_revision` | **`a124dd3f7c50dfb92d077eb5f8c044bd849cff03`** |
+| SHA-256 | **`8fcb2af01ed79d2d74d28dc85281ea67757711037def1452b0bdc032aedf3115`** |
+| 含 `/Users/` 或绝对路径 | **否**（全部为仓库相对逻辑路径） |
+
+- 冻结 19 项键集合，**未知字段拒绝**（未来扩展必须 bump schema）；
+- **幂等**：最终 HEAD 上复跑 2 次均 `exit=0`，bytes / sha / `mtime_ns` 全不变；
+- **原子**：首次写入失败 → 目录为空，不留半份 manifest 或临时文件；
+- **已存在且不同 → 拒绝覆盖**（本卡实测触发过一次，故 manifest 有两版提交）；
+- **dirty generator 拒绝**：`scenario/forecast.py` 或物化器有未提交修改即拒绝；
+- **上游 hash 不符 fail closed**。
+
+```text
+readiness.available_driver_forecasts_ready   = true
+readiness.complete_scenario_forecasts_ready  = false
+readiness.formal_scenario_bundle_ready       = false
+readiness.formal_training_ready              = false
+```
+
+**四项仍 unavailable**（未生成 forecast、未进 `ScenarioBundle`、未零填）：
+`local_pv_kw`、`wind_generation_kw`、`carbon_intensity`、`arrival`。
+
+### 7K.6 上游未变与当前门禁
+
+`singapore_2024.json` `d4e24d6f…`、`singapore_2024_half_hour.json` `e6484d6b…`、
+`singapore_2024_splits.json` `a096535f…`、
+`half_hour.parquet` `dec76ea2…` —— **全部未变**；raw 未动；
+`configs/frozen_refs/refs.json` 未动；**split 边界与行数未变**（10224/2928/4416）。
+split manifest 的 `readiness.forecast_ready` **仍为 `false`**（有回归断言）。
+
+| 命令 | 结果 |
+|---|---|
+| `pytest tests/test_m13e_forecast_provenance.py -q -m "not slow"` | **105 passed** |
+| `pytest tests/test_m13e_forecast_provenance.py -q -m slow` | **1 passed** |
+| `pytest tests/test_m13*.py tests/test_contracts.py tests/test_contract_validators.py -q` | **493 passed** |
+| 第二组（checkpointing / m310c / m41a / m41c / m51* / m52* / m53*） | **464 passed** |
+| `make check` | **exit 0**，**1691 passed**, 45 deselected |
+| `make smoke` | **exit 0** |
+| `make train` | **exit 2**（缺 `data/manifest/train.json`），**未**回退 synthetic、无 checkpoint |
+| `train.json` / `validation.json` / `test.json` | **均未创建** |
+| `git diff --check` / `git status --short` | 空 / 空 |
+
+**正式训练仍 blocked**：`forecast_ready=false`、`formal_scenario_bundle_ready=false`、
+`formal_training_ready=false`。**下一步是 M1.3f**（PV / 风电发电量 / 碳强度 /
+arrival 的人工批准口径或数据接入），**不是 M6**；**不新增 M5.5**。
+
+**本卡范围外只读登记（未修改）**：`safe_rl_v2/train.py` 的文档字符串首行仍写
+「唯一数据来源是 contract-v7 `RolloutBuffer`」；其外层错误信息改为 M1.3 readiness
+属 **M1.3g**（`config["contract_version"]` 实测已是 `contract-v8`）。
+
+### 7K.7 精确回滚（**由新到旧**）与只读验证
+
+```bash
+git revert 75e57ef a124dd3 c45b38f 6401029 b3c9da2 9481f5c 4e142e0 \
+           abf4f24 cf4f763 222f76f d41ee07 ac5f245
+```
+
+```text
+66ce93c 的树                = a9129c3a2794bbc40137f7aa89f173255402f8e2
+revert 链后 HEAD^{tree}     = a9129c3a2794bbc40137f7aa89f173255402f8e2
+→ ✅ 逐树一致（零冲突；临时 detached worktree 已移除，主分支指针未移动）
+```
+
+`data/manifest/singapore_2024_forecast_policy.json` 为本卡新增，可随 revert 删除；
+**不**删除 raw、**不**改 canonical/source/split manifest、**不**移动任何分支指针。
+**回滚必须由新到旧**（M1.3d §13.12 实测得到的操作约束）。
+
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
-> ⚠️ **本节的历史说法已失效，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
+> ⚠️ **本节的历史说法是历史错误，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
 > 曾把 `3327346..caf0c9d` 记为 **14 个**提交、并把 R2 描述为「4 + 2」。
 > 实际为：`3327346..caf0c9d` 共 **15 个**提交；**R2 共 7 个**
 > （`3c851b1 0b18471 1ab6fca 4a64077 427528e 84e6e72 caf0c9d`）。
@@ -845,6 +1065,14 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得把 M5.4h/M5.4h1/M5.4h2 的 0.05 s blocked 结论套用到当前的 0.25 s 默认上。
 - 不得把 `mip_max_nodes` 的未绑定实验称为确定性的根因或生产方案。
 - 不得以任务卡提交数、测试数或绿灯替代真实集成验收。
+- 不得把 M1.3e 的五个 driver forecast 说成「完整场景预测」或
+  「forecast 已就绪」：`forecast_ready=false`、
+  `complete_scenario_forecasts_ready=false`、`formal_scenario_bundle_ready=false`、
+  `formal_training_ready=false`；四项缺口仍 unavailable。
+- 不得把 `planning/snapshot_adapter` 的 oracle-debug bundle（其「可见预测」就是 env
+  真值窗口、`load_forecast` 为全零占位）表述为正式 forecast 或用于训练/评估。
+- 不得把 M1.3a 的「可见 truth 改变 bundle」断言表述为正式 forecast 的泄漏门禁；
+  它是 **oracle-debug 语义**，正式 causal provider 的 leakage 回归是**另一组独立**测试。
 
 ## 11. 当前可安全执行的命令
 
