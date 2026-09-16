@@ -1,6 +1,112 @@
 {
   "contract_version": "contract-v8",
-  "frozen_at_utc": "2026-09-16T11:55:24+00:00",
+  "frozen_at_utc": "2026-09-16T00:00:00+00:00",
+  "human_approved_parameters": {
+    "carbon_intensity": {
+      "carbon_intensity_kg_per_kwh": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B1",
+        "status": "human_approved",
+        "unit": "kgCO2/kWh",
+        "value": 0.402
+      }
+    },
+    "local_pv_kw": {
+      "array_type": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "text",
+        "value": "fixed_open_rack"
+      },
+      "azimuth_deg": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "deg",
+        "value": 180.0
+      },
+      "dc_ac_ratio": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "dimensionless",
+        "value": 1.2
+      },
+      "eta_inv_nom": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "dimensionless",
+        "value": 0.96
+      },
+      "gamma_pdc_per_deg_c": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "1/degC",
+        "value": -0.004
+      },
+      "losses_pct": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "percent",
+        "value": 14.0
+      },
+      "pv_capacity_kw": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "kW",
+        "value": 500.0
+      },
+      "temperature_model": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "text",
+        "value": "open_rack_glass_polymer"
+      },
+      "tilt_deg": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "deg",
+        "value": 10.0
+      }
+    },
+    "wind_generation_kw": {
+      "hub_height_m": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "m",
+        "value": 60.0
+      },
+      "rated_capacity_kw": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "kW",
+        "value": 800.0
+      },
+      "shear_exponent": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "dimensionless",
+        "value": 0.14285714285714285
+      },
+      "turbine_model": {
+        "approved_on": "2026-09-16",
+        "decision_id": "B4",
+        "status": "human_approved",
+        "unit": "text",
+        "value": "E48/800"
+      }
+    }
+  },
   "max_source_bytes": 16777216,
   "max_source_bytes_anchor": "既有 M1.2 raw 资产最大 14.47 MiB（sasea_demand_2024.zip）向上取整",
   "readiness": {
@@ -101,54 +207,60 @@
       "url": "https://raw.githubusercontent.com/wind-python/windpowerlib/v0.2.2/windpowerlib/data/default_turbine_data/turbine_data.csv"
     },
     {
-      "blocked_reason": "ema.gov.sg 被 Incapsula 反爬拦截（返回挑战页，非真实内容）；data.gov.sg 的 EMA GEF 数据集 coverageEnd=2020-12-31，**不含 2024**。因此卡片要求的「机器核验 2024 GEF = 0.402 kg CO2/kWh」在本环境无法完成，且不得写死该数值。",
-      "bytes": 0,
-      "classification": "external_low_resolution",
+      "blocked_reason": "ema.gov.sg 被 Incapsula 反爬拦截（返回挑战页，非真实内容）；data.gov.sg 的 EMA GEF 数据集 coverageEnd=2020-12-31，**不含 2024**，因此**无法**从本环境可达的官方机读来源核验 2024 值。人工决定 **B1**（2026-09-16）已批准 2024 年内常数 0.402 kgCO2/kWh（见 human_approved_parameters.carbon_intensity），classification = human_approved_external_low_resolution、resolution = annual_constant；**不得**描述为半小时实测或 half_hourly truth，且本轮**不**改变任何 readiness。",
+      "classification": "human_approved_external_low_resolution",
       "data_year": null,
       "license": "Singapore Open Data Licence",
       "license_url": "https://data.gov.sg/open-data-licence",
-      "logical_path": null,
       "pinned_ref": null,
-      "resolution": "annual",
+      "resolution": "annual_constant",
       "role": "carbon_intensity_candidate",
       "route": "A",
-      "sha256": null,
       "source_id": "ema_grid_emission_factor_annual",
       "status": "blocked",
       "url": "https://api-production.data.gov.sg/v2/public/api/datasets/d_3de362b580b2dd2fd50cc1006d4edd4f/metadata"
     },
     {
-      "bytes": 0,
       "classification": "benchmark_trace",
       "data_year": 2019,
+      "decision_id": "B3",
+      "exception_cap_bytes": 167772160,
       "license": "CC-BY-4.0",
       "license_url": "https://github.com/Azure/AzurePublicDataset/blob/master/LICENSE",
-      "logical_path": null,
       "observed_content_length": 142968140,
       "pinned_ref": "dataset-functions-2019",
-      "refused_reason": "官方发布包 Content-Length = 142,968,140 B ≈ 136.3 MiB，远超 16 MiB 上限；容器列举返回 PublicAccessNotPermitted，逐文件 blob 路径返回 HTTP 409（不可公开寻址）。按大小上限政策**拒绝盲目下载**，只登记元数据并升级人工。",
+      "refused_reason": "官方发布包 Content-Length = 142,968,140 B ≈ 136.3 MiB，远超默认 16 MiB 上限；容器列举返回 PublicAccessNotPermitted，逐文件 blob 路径返回 HTTP 409（不可公开寻址）。按大小上限政策**拒绝盲目下载**，只登记元数据并升级人工。人工决定 **B3**（2026-09-16）已批准：**仅**该 pinned URL 适用 160 MiB 特例上限；通用 MAX_SOURCE_BYTES=16 MiB 保持不变；正式下载须**再次**核验 Content-Length、最终 URL、SHA-256、容器成员与许可。**本轮不下载该包**（status 仍为 refused_over_size_cap，未冻结）。",
       "resolution": "per_minute_invocations",
       "role": "arrival_candidate",
       "route": "D",
-      "sha256": null,
       "source_id": "azure_functions_2019_trace",
       "status": "refused_over_size_cap",
       "url": "https://github.com/Azure/AzurePublicDataset/releases/download/dataset-functions-2019/azurefunctions_dataset2019_azurefunctions-dataset2019.tar.xz"
     }
   ],
   "unapproved_parameters": {
-    "local_pv_kw": {
-      "array_type": "UNAPPROVED",
-      "azimuth_deg": "UNAPPROVED",
-      "losses_pct": "UNAPPROVED",
-      "pv_capacity_kw": "UNAPPROVED",
-      "tilt_deg": "UNAPPROVED"
-    },
-    "wind_generation_kw": {
-      "hub_height_m": "UNAPPROVED",
-      "rated_capacity_kw": "UNAPPROVED",
-      "shear_exponent": "UNAPPROVED",
-      "turbine_model": "UNAPPROVED"
+    "arrival": {
+      "parameters": {
+        "approved_on": null,
+        "decision_id": null,
+        "status": "UNAPPROVED",
+        "unit": "n/a",
+        "value": null
+      },
+      "process_family": {
+        "approved_on": null,
+        "decision_id": null,
+        "status": "UNAPPROVED",
+        "unit": "text",
+        "value": null
+      },
+      "seed_policy": {
+        "approved_on": null,
+        "decision_id": null,
+        "status": "UNAPPROVED",
+        "unit": "n/a",
+        "value": null
+      }
     }
   }
 }
