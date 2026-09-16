@@ -211,7 +211,7 @@
   "frozen_at_utc": "2026-09-16T14:29:40+00:00",
   "materialization_sources_path": "data/manifest/m13f_materialization_sources.json",
   "materialization_sources_sha256": "4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6",
-  "materializer_revision": "9aedf744a58eedfeec872a06d540b25875b59e8a",
+  "materializer_revision": "bd7be9dd04e47b9db77198c3fdc3e1da2ae0884a",
   "output": {
     "columns": [
       "timestamp",
