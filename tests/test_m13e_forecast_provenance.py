@@ -442,13 +442,23 @@ def test_origin_and_future_truth_do_not_change_the_forecast(tmp_path, driver):
 @pytest.mark.leakage
 @pytest.mark.parametrize("driver", DRIVERS)
 def test_history_window_changes_the_forecast(tmp_path, driver):
-    """改 `[origin-48, origin)` → 相应 forecast 必须变化。"""
+    """改 `[origin-48, origin)` → 相应 forecast 必须变化。
+
+    **M1.3e 勘误（人为批准）**：按冻结规则 `forecast[k] = template[k mod 48]`
+    （template 按时间正序 = `[origin-48, origin)`），第 k 项消费的行是
+    `origin-48+k`；`origin-1` 落在模板下标 **47**，只有 `C > 47` 才会被消费。
+    因此这里按本测试 docstring 的原意**改整个历史窗口**，而不是只改 `origin-1`：
+    断言强度不变（历史窗口的任何变化都必须体现在 forecast 上），
+    且不再依赖「C 恰好覆盖窗口末端」这一错误前提。
+    """
+    origin = 200
+    cutoff = 4
     upstream = write_upstream(tmp_path / "a")
-    baseline = forecast_artifact(upstream, origin=200, cutoff=4)
+    baseline = forecast_artifact(upstream, origin=origin, cutoff=cutoff)
 
     mutated = write_upstream(tmp_path / "b")
     frame = pd.read_parquet(mutated["parquet"])
-    frame.loc[frame.index == 199, driver] += 999.0
+    frame.loc[frame.index.isin(range(origin - PERIOD_STEPS, origin)), driver] += 999.0
     frame.to_parquet(mutated["parquet"], index=False)
     for name in ("canonical_manifest", "split_manifest"):
         path = mutated[name]
@@ -457,7 +467,7 @@ def test_history_window_changes_the_forecast(tmp_path, driver):
                else "canonical_parquet_sha256")
         payload[key] = hashlib.sha256(mutated["parquet"].read_bytes()).hexdigest()
         path.write_text(json.dumps(payload), encoding="utf-8")
-    after = forecast_artifact(mutated, origin=200, cutoff=4)
+    after = forecast_artifact(mutated, origin=origin, cutoff=cutoff)
 
     assert after.series[driver] != baseline.series[driver]
 
