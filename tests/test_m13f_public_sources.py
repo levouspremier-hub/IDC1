@@ -309,21 +309,27 @@ def test_annual_carbon_factor_cannot_masquerade_as_half_hourly_truth():
 
 
 def test_unapproved_parameters_cannot_generate_formal_pv_or_wind():
+    """**M1.3f-b-R2 迁移**：R2 起参数名集合必须精确等于该路线的冻结批准组，
+    因此「路径正确但状态为 UNAPPROVED」与「参数组不匹配」都要分别验证。"""
     module = mod()
-    params = {
-        "pv_capacity_kw": "UNAPPROVED",
-        "tilt_deg": "UNAPPROVED",
-        "azimuth_deg": "UNAPPROVED",
-        "array_type": "UNAPPROVED",
-        "losses_pct": "UNAPPROVED",
-        "hub_height_m": "UNAPPROVED",
-        "shear_exponent": "UNAPPROVED",
-        "turbine_model": "UNAPPROVED",
-        "rated_capacity_kw": "UNAPPROVED",
+
+    # (a) 完整的 B 组，但每项状态被改成 UNAPPROVED → 拒绝（消息含 UNAPPROVED）
+    unapproved = {
+        name: dict(entry, status="UNAPPROVED", decision_id=None, approved_on=None)
+        for name, entry in _group(B_GROUP).items()
     }
-    for route in ("B", "C"):
-        with pytest.raises(module.SourcePolicyError, match="UNAPPROVED"):
-            module.assert_parameters_approved(params, route=route)
+    with pytest.raises(module.SourcePolicyError, match="UNAPPROVED"):
+        module.assert_parameters_approved(unapproved, route="B")
+
+    # (b) 把 C 组参数喂给 route B（以及反向）→ 参数名集合不符，拒绝
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(_approved_params(C_GROUP), route="B")
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(_approved_params(B_GROUP), route="C")
+
+    # (c) 非结构化标量 → 拒绝
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved({"pv_capacity_kw": 500.0}, route="B")
 
 
 def test_legacy_pv_capacity_is_not_inherited():
@@ -685,8 +691,9 @@ def test_write_manifest_is_a_noop_for_identical_content(tmp_path):
 def test_repeated_fetch_reuses_the_existing_frozen_at_utc(tmp_path, monkeypatch):
     """§一.11：重复 --fetch 必须复用现存合法 frozen_at_utc，不得随墙钟漂移。"""
     module = mod()
-    dest = tmp_path / "raw"
-    manifest = tmp_path / "m.json"
+    dest = tmp_path / "root" / "data/raw/public_benchmarks"
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = tmp_path / "root" / "m.json"
 
     frozen_dir = REPO_ROOT / "data/raw/public_benchmarks"
     monkeypatch.setattr(
@@ -719,8 +726,10 @@ _APPROVED = {
 
 
 def test_structured_human_approval_is_accepted():
+    """**M1.3f-b-R2 迁移**：只有**完整**的冻结批准组才被接受（子集不再通过）。"""
     module = mod()
-    module.assert_parameters_approved({"pv_capacity_kw": dict(_APPROVED)}, route="B")
+    module.assert_parameters_approved(_approved_params(B_GROUP), route="B")
+    module.assert_parameters_approved(_approved_params(C_GROUP), route="C")
 
 
 @pytest.mark.parametrize("mutation", [
@@ -751,3 +760,268 @@ def test_the_real_approved_parameters_block_validates():
     for route, group in (("B", "local_pv_kw"), ("C", "wind_generation_kw")):
         module.assert_parameters_approved(
             payload["human_approved_parameters"][group], route=route)
+
+
+# --- 8. M1.3f-b-R2：路径绑定、reason 恒等、审批参数组、特例上限 ---------------
+
+REAL_LICENSE = "data/raw/public_benchmarks/pvlib_v0.15.2_LICENSE.txt"
+
+
+def _frozen_entry(payload, source_id="pvlib_pvwatts_license"):
+    return next(e for e in payload["sources"] if e["source_id"] == source_id)
+
+
+def _accepts(tmp_path, payload):
+    mod().validate_public_source_manifest(_put(tmp_path, payload), REPO_ROOT)
+
+
+# --- 8.1 logical_path 必须逐字绑定 spec.local_name ---------------------------
+
+def test_correct_logical_path_is_accepted(tmp_path):
+    _accepts(tmp_path, _load())
+
+
+@pytest.mark.parametrize("bad", [
+    str(REPO_ROOT / REAL_LICENSE),                      # 绝对路径
+    REAL_LICENSE.replace("pvlib_v0.15.2", "./pvlib_v0.15.2"),
+    REAL_LICENSE.replace("public_benchmarks", "public_benchmarks/.."),
+    REAL_LICENSE.replace("public_benchmarks", "public_benchmarks/./x/.."),
+    "data\\raw\\public_benchmarks\\pvlib_v0.15.2_LICENSE.txt",
+    "data//raw/public_benchmarks/pvlib_v0.15.2_LICENSE.txt",
+    "data/raw/../raw/public_benchmarks/pvlib_v0.15.2_LICENSE.txt",
+    "data/raw/public_benchmarks/windpowerlib_v0.2.2_LICENSE.txt",  # 另一份文件
+    "pvlib_v0.15.2_LICENSE.txt",                        # 缺前缀
+    "data/raw/public_benchmarks/",                      # 目录
+])
+def test_logical_path_must_be_bound_to_the_frozen_local_name(tmp_path, bad):
+    payload = _load()
+    _frozen_entry(payload)["logical_path"] = bad
+    _rejects(tmp_path, payload)
+
+
+def test_decoy_file_with_identical_content_is_still_rejected(tmp_path):
+    """把 frozen 文件复制成**另一个名字**（内容/hash 相同）仍必须拒绝。"""
+    root = tmp_path / "root"
+    target = root / REAL_LICENSE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes((REPO_ROOT / REAL_LICENSE).read_bytes())
+    decoy = target.parent / "decoy_copy.txt"
+    decoy.write_bytes(target.read_bytes())
+    assert _sha256(decoy.read_bytes()) == _sha256(target.read_bytes())
+
+    payload = _load()
+    _frozen_entry(payload)["logical_path"] = "data/raw/public_benchmarks/decoy_copy.txt"
+    path = _put(tmp_path, payload)
+    with pytest.raises(mod().SourcePolicyError):
+        mod().validate_public_source_manifest(path, root)
+
+
+# --- 8.2 reason 与所有 status-specific 字段逐字恒等 --------------------------
+
+def test_forged_blocked_reason_is_rejected(tmp_path):
+    payload = _load()
+    _frozen_entry(payload, "ema_grid_emission_factor_annual")["blocked_reason"] = "x"
+    _rejects(tmp_path, payload)
+
+
+def test_forged_refused_reason_is_rejected(tmp_path):
+    payload = _load()
+    _frozen_entry(payload, "azure_functions_2019_trace")["refused_reason"] = "x"
+    _rejects(tmp_path, payload)
+
+
+@pytest.mark.parametrize("field", SOURCE_COMMON_KEYS)
+def test_every_common_field_is_binding(tmp_path, field):
+    payload = _load()
+    entry = _frozen_entry(payload)
+    entry[field] = 12345 if field not in ("pinned_ref", "resolution") else 12345
+    _rejects(tmp_path, payload)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("observed_content_length", 1),
+    ("exception_cap_bytes", 1),
+    ("decision_id", "B999"),
+])
+def test_refused_status_fields_are_binding(tmp_path, field, value):
+    payload = _load()
+    _frozen_entry(payload, "azure_functions_2019_trace")[field] = value
+    _rejects(tmp_path, payload)
+
+
+# --- 8.3 审批参数组必须完整恒等 ----------------------------------------------
+
+B_GROUP = "local_pv_kw"
+C_GROUP = "wind_generation_kw"
+
+
+def _group(group):
+    return mod().HUMAN_APPROVED_PARAMETERS[group]
+
+
+def _approved_params(group):
+    return copy.deepcopy(_group(group))
+
+
+def test_the_complete_frozen_groups_are_accepted():
+    module = mod()
+    module.assert_parameters_approved(_approved_params(B_GROUP), route="B")
+    module.assert_parameters_approved(_approved_params(C_GROUP), route="C")
+
+
+def test_empty_parameter_group_is_rejected():
+    module = mod()
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved({}, route="B")
+
+
+def test_missing_extra_or_renamed_parameter_is_rejected():
+    module = mod()
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(
+            {k: v for k, v in _approved_params(B_GROUP).items() if k != "tilt_deg"},
+            route="B")
+    extra = _approved_params(B_GROUP)
+    extra["shadow_kw"] = mod()._approved(1.0, "kW", "B4")
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(extra, route="B")
+    renamed = {k: v for k, v in _approved_params(B_GROUP).items() if k != "tilt_deg"}
+    renamed["tilt"] = _approved_params(B_GROUP)["tilt_deg"]
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(renamed, route="B")
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(_approved_params(C_GROUP), route="B")
+
+
+@pytest.mark.parametrize("bad", [
+    True, False, float("nan"), float("inf"), float("-inf"),
+    [500.0], {"a": 1}, None, "500",
+])
+def test_non_finite_or_non_numeric_values_are_rejected(bad):
+    module = mod()
+    params = _approved_params(B_GROUP)
+    params["pv_capacity_kw"]["value"] = bad
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(params, route="B")
+
+
+@pytest.mark.parametrize("over", [
+    {"unit": None}, {"unit": ""}, {"decision_id": "WHATEVER"},
+    {"decision_id": ""}, {"approved_on": "2026-13-99"},
+    {"approved_on": "2026-09-17"}, {"value": 501.0}, {"value": 500},
+])
+def test_approval_record_must_match_the_frozen_decision(over):
+    module = mod()
+    params = _approved_params(B_GROUP)
+    params["pv_capacity_kw"].update(over)
+    if over.get("value") == 500:
+        # 500 与 500.0 数值相等，且必须仍然通过（int 是合法数值）
+        module.assert_parameters_approved(params, route="B")
+        return
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(params, route="B")
+
+
+def test_five_key_set_is_enforced(tmp_path):
+    module = mod()
+    params = _approved_params(B_GROUP)
+    params["pv_capacity_kw"]["extra"] = 1
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(params, route="B")
+    params = _approved_params(B_GROUP)
+    params["pv_capacity_kw"].pop("unit")
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_parameters_approved(params, route="B")
+
+
+# --- 8.4 特例上限只绑定精确的 Azure 来源 -------------------------------------
+
+def test_exception_cap_is_bound_to_the_exact_azure_source():
+    module = mod()
+    azure = next(s for s in module.SOURCE_SPECS
+                 if s["source_id"] == "azure_functions_2019_trace")
+    assert module.effective_cap(azure) == 160 * 1024 * 1024
+
+    for field, value in (("url", "https://evil.invalid/x.tar.xz"),
+                         ("pinned_ref", "other"),
+                         ("decision_id", "B999"),
+                         ("exception_cap_bytes", 200 * 1024 * 1024)):
+        forged = dict(azure)
+        forged[field] = value
+        assert module.effective_cap(forged) == module.MAX_SOURCE_BYTES, field
+
+    self_made = {"source_id": "not_azure", "url": azure["url"],
+                 "pinned_ref": azure["pinned_ref"], "decision_id": "B3",
+                 "exception_cap_bytes": 160 * 1024 * 1024}
+    assert module.effective_cap(self_made) == module.MAX_SOURCE_BYTES
+
+
+def test_self_made_spec_cannot_bypass_the_default_cap():
+    module = mod()
+    forged = {"source_id": "not_azure", "url": "https://evil.invalid/x",
+              "pinned_ref": "v1", "decision_id": "B3",
+              "exception_cap_bytes": 160 * 1024 * 1024,
+              "bytes": 100 * 1024 * 1024}
+    with pytest.raises(module.SourcePolicyError):
+        module.assert_within_size_cap(forged)
+
+
+# --- 8.5 run_fetch 的复核 root 必须与 dest_dir 一致 --------------------------
+
+def _tmp_root(tmp_path):
+    root = tmp_path / "root"
+    dest = root / "data/raw/public_benchmarks"
+    dest.mkdir(parents=True, exist_ok=True)
+    return root, dest
+
+
+def test_validation_root_follows_the_logical_prefix(tmp_path):
+    module = mod()
+    root, dest = _tmp_root(tmp_path)
+    assert module.validation_root_for(dest) == root
+    with pytest.raises(module.SourcePolicyError):
+        module.validation_root_for(tmp_path / "wrong/place")
+
+
+def test_run_fetch_validates_the_temporary_download(tmp_path, monkeypatch):
+    """§一.12：临时 dest_dir 的复核必须校验**刚下载的**文件，不得依赖仓库正式文件。"""
+    module = mod()
+    real = REPO_ROOT / "data/raw/public_benchmarks"
+    monkeypatch.setattr(
+        module, "fetch_bytes",
+        lambda url, **kw: (real / _local_for(url)).read_bytes(),
+    )
+    root, dest = _tmp_root(tmp_path)
+    manifest = root / "manifest.json"
+    module.run_fetch(dest_dir=dest, manifest_path=manifest)
+
+    victim = dest / "pvlib_v0.15.2_pvsystem.py"
+    assert victim.exists()
+    victim.unlink()
+    assert (real / "pvlib_v0.15.2_pvsystem.py").exists()  # 仓库正式文件仍在
+    with pytest.raises(module.SourcePolicyError):
+        module.validate_public_source_manifest(manifest, module.validation_root_for(dest))
+
+
+def test_run_fetch_fails_when_a_downloaded_file_is_broken(tmp_path, monkeypatch):
+    module = mod()
+    real = REPO_ROOT / "data/raw/public_benchmarks"
+    monkeypatch.setattr(
+        module, "fetch_bytes",
+        lambda url, **kw: (real / _local_for(url)).read_bytes(),
+    )
+    root, dest = _tmp_root(tmp_path)
+    manifest = root / "manifest.json"
+    module.run_fetch(dest_dir=dest, manifest_path=manifest)
+    (dest / "windpowerlib_v0.2.2_turbine_data.csv").write_bytes(b"tampered")
+    with pytest.raises(module.SourcePolicyError):
+        module.validate_public_source_manifest(manifest, module.validation_root_for(dest))
+
+
+# --- 8.6 分类声明必须只有一套 ------------------------------------------------
+
+def test_classifications_cover_every_declared_source():
+    module = mod()
+    declared = {spec["classification"] for spec in module.SOURCE_SPECS}
+    assert declared <= set(module.CLASSIFICATIONS), declared
+    assert "human_approved_external_low_resolution" in module.CLASSIFICATIONS
