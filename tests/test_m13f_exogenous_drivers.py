@@ -326,6 +326,12 @@ def test_no_date_mapping_tokens_anywhere():
             assert token not in text, f"{path.name} 含 {token!r}"
 
 
+def test_arrival_source_does_not_claim_a_weekday_dependency():
+    """§五.3：源码不得声称 arrival 依赖 weekday（星期）；只依赖 hour/minute。"""
+    source = (REPO_ROOT / "scenario/exogenous_drivers.py").read_text(encoding="utf-8")
+    assert "星期与时刻" not in source
+
+
 def test_arrival_template_is_48_slots_and_normalised():
     module = drivers()
     template = module.arrival_rate_template_from_cache()

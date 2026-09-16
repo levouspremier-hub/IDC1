@@ -22,9 +22,9 @@
 
 ## 无未来泄漏
 
-`arrival` 的生成只依赖**冻结 template**、`timestamp` 的星期与时刻、以及固定 seed；
-**不读取**任何 2024 truth。`local_pv_kw` / `wind_generation_kw` 只用**同 timestamp**
-的已冻结 GHI / 温度 / 风速。
+`arrival` 的生成只依赖**冻结 template**、`timestamp` 的时刻（hour/minute，**不读星期**）、
+以及固定 seed；**不读取**任何 2024 truth。`local_pv_kw` / `wind_generation_kw` 只用
+**同 timestamp** 的已冻结 GHI / 温度 / 风速。
 """
 
 from __future__ import annotations
