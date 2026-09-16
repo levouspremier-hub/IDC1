@@ -42,9 +42,10 @@ import hashlib
 import json
 import math
 import subprocess
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import pandas as pd
 
@@ -177,9 +178,9 @@ def seasonal_naive_forecast(
         raise ForecastError(
             f"历史模板长度必须是 {period_steps}，实际 {len(values)}"
         )
-    for value in values:
-        if not math.isfinite(value):
-            raise ForecastError(f"历史模板含非有限值：{value!r}")
+    for entry in values:
+        if not math.isfinite(entry):
+            raise ForecastError(f"历史模板含非有限值：{entry!r}")
     return tuple(values[k % period_steps] for k in range(forecast_cutoff))
 
 
