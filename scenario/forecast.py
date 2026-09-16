@@ -33,7 +33,7 @@ import pandas as pd
 from contracts import CONTRACT_VERSION_ID
 from scenario.splits import (
     CANONICAL_SCHEMA,
-    FREQUENCY as SPLIT_FREQUENCY,
+    FREQUENCY,
     STEP_MINUTES,
     TIMEZONE,
     TOTAL_ROWS,
@@ -51,7 +51,6 @@ PERIOD_STEPS = FORECAST_PERIOD_STEPS
 METHOD = "trailing_seasonal_naive"
 MODEL_NAME = "trailing_seasonal_naive"
 MODEL_VERSION = "v1"
-FREQUENCY = "30min"
 SOURCE_KIND = "seasonal_naive"
 
 AVAILABLE_DRIVERS: tuple[str, ...] = (
@@ -114,7 +113,7 @@ def _verify_canonical_parquet(
         )
     if canonical.get("row_count") != TOTAL_ROWS:
         raise ForecastError(f"canonical manifest row_count 必须是 {TOTAL_ROWS}")
-    if canonical.get("timezone") != TIMEZONE or canonical.get("frequency") != SPLIT_FREQUENCY:
+    if canonical.get("timezone") != TIMEZONE or canonical.get("frequency") != FREQUENCY:
         raise ForecastError("canonical manifest 的 timezone/frequency 不符")
 
     expected = _require_hex64(
