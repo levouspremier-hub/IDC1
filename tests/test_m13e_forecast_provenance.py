@@ -1733,3 +1733,215 @@ def test_scenario_split_names_match_the_frozen_split_module():
     from scenario.splits import SPLIT_NAMES
 
     assert SCENARIO_SPLIT_NAMES == SPLIT_NAMES
+
+
+# --- 18. M1.3e-R3：严格外部类型与规范逻辑路径 ---------------------------------
+
+# 每个整数字段配一个**语义上仍然合法**的错误类型值：拒绝必须来自**类型**，
+# 而不是来自后续的语义/长度/范围检查（否则证明不了 coercion 前的严格验型）。
+_ARTIFACT_INT_VALUES = {
+    "origin": 200,
+    "global_origin": 200,
+    "forecast_cutoff": 4,
+    "period_steps": 48,
+}
+_ARTIFACT_INT_CASES = [
+    (field, bad)
+    for field, good in _ARTIFACT_INT_VALUES.items()
+    for bad in (True, str(good), float(good), None, [good], {"v": good})
+]
+
+SERIES_BAD_ELEMENTS = (
+    "1.25", True, None, [1.0], {"v": 1.0},
+    float("nan"), float("inf"), float("-inf"),
+)
+BAD_LOGICAL_PATHS = (
+    ".", "..", "../escape", "a/../b", "./file", "a//b", "a/b/",
+    "/abs/path", "a\\b", " lead", "trail ", "in ner", "", "   ",
+)
+
+
+def _artifact_payload_for(chain, **over):
+    return {**forecast_artifact(chain, cutoff=4).model_dump(), **over}
+
+
+@pytest.mark.parametrize("field,bad", _ARTIFACT_INT_CASES)
+def test_artifact_integer_fields_are_strictly_typed_before_coercion(chain, field, bad):
+    """18.1：整数语义字段必须在 coercion 前验型（bool/float/字符串/None/容器）。"""
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    assert payload[field] == _ARTIFACT_INT_VALUES[field]
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, field: bad})
+
+
+def test_artifact_integer_fields_accept_only_plain_ints(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    for field, good in _ARTIFACT_INT_VALUES.items():
+        rebuilt = AvailableExogenousForecast(**{**payload, field: good})
+        assert getattr(rebuilt, field) == good
+        assert type(getattr(rebuilt, field)) is int
+
+
+@pytest.mark.parametrize("driver", DRIVERS)
+@pytest.mark.parametrize("bad", SERIES_BAD_ELEMENTS)
+def test_artifact_series_reject_bad_element_types(chain, driver, bad):
+    """18.2：元素只接受 int/float（bool 不算数值）；字符串/None/容器/NaN/±Inf 全拒绝。"""
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    series = {d: list(payload["series"][d]) for d in DRIVERS}
+    values = list(series[driver])
+    values[0] = bad
+    series[driver] = values
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, "series": series})
+
+
+@pytest.mark.parametrize("bad", (None, 1.0, "abc", {"a": 1}, {1.0, 2.0}))
+def test_artifact_series_container_must_be_list_or_tuple(chain, bad):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    series = {d: list(payload["series"][d]) for d in DRIVERS}
+    series["system_load_mw"] = bad
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, "series": series})
+
+
+def test_artifact_series_normalises_lists_to_tuples_and_ints_to_floats(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    series = {d: list(payload["series"][d]) for d in DRIVERS}
+    series["temperature_deg_c"] = [28, 29, 30, 31]  # int 元素可规范化为 float
+    rebuilt = AvailableExogenousForecast(**{**payload, "series": series})
+    for driver in DRIVERS:
+        assert isinstance(rebuilt.series[driver], tuple)
+    assert rebuilt.series["temperature_deg_c"] == (28.0, 29.0, 30.0, 31.0)
+    assert all(
+        type(v) is float for v in rebuilt.series["temperature_deg_c"]
+    )
+
+
+@pytest.mark.parametrize("field", BUNDLE_FORECAST_FIELDS)
+@pytest.mark.parametrize("bad", ("1.0", True, None, float("nan"), float("inf")))
+def test_bundle_forecasts_apply_the_same_element_rules(field, bad):
+    """18.3：ScenarioBundle 七个序列执行与 artifact **同一套**元素规则。"""
+    kwargs = make_bundle_kwargs()
+    values = list(kwargs[field])
+    values[0] = bad
+    kwargs[field] = values
+    with pytest.raises(ValueError):
+        build_bundle(**kwargs)
+
+
+@pytest.mark.parametrize("field", BUNDLE_FORECAST_FIELDS)
+def test_bundle_forecasts_normalise_lists_to_tuples(field):
+    bundle = build_bundle()
+    assert isinstance(getattr(bundle, field), tuple)
+    with pytest.raises(TypeError):
+        getattr(bundle, field)[0] = 1.0  # type: ignore[index]
+
+
+@pytest.mark.parametrize("bad", BAD_LOGICAL_PATHS)
+def test_digest_logical_path_must_be_a_canonical_posix_path(bad):
+    """18.4：ArtifactDigest.logical_path 必须是规范 POSIX 逻辑路径。"""
+    from contracts.models import ArtifactDigest
+
+    with pytest.raises(ValueError):
+        ArtifactDigest(role="r", logical_path=bad, sha256="a" * 64)
+
+
+@pytest.mark.parametrize("bad", BAD_LOGICAL_PATHS)
+@pytest.mark.parametrize("field", (
+    "canonical_parquet_path", "canonical_manifest_path",
+    "split_manifest_path", "policy_manifest_path",
+))
+def test_artifact_top_level_paths_must_be_canonical_posix(chain, field, bad):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = _artifact_payload_for(chain)
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, field: bad})
+
+
+@pytest.mark.parametrize("good", (
+    "<external>/half_hour.parquet",
+    "data/processed/singapore_2024/half_hour.parquet",
+    "a",
+    "a/b/c.json",
+))
+def test_canonical_logical_paths_are_accepted(good):
+    from contracts.models import ArtifactDigest
+
+    assert ArtifactDigest(role="r", logical_path=good, sha256="a" * 64).logical_path == good
+
+
+def test_provider_paths_are_canonical_and_closed(chain):
+    """provider 真实产出的四条 path 必须是规范路径，且与 digest 逐项恒等。"""
+    artifact = forecast_artifact(chain, cutoff=4)
+    for driver in DRIVERS:
+        paths = tuple(d.logical_path for d in artifact.provenance[driver].sources)
+        assert paths == (
+            artifact.canonical_parquet_path,
+            artifact.canonical_manifest_path,
+            artifact.split_manifest_path,
+            artifact.policy_manifest_path,
+        )
+        for path in paths:
+            assert path and not path.startswith("/") and "\\" not in path
+            assert not any(seg in (".", "..", "") for seg in path.split("/"))
+
+
+@pytest.mark.parametrize("update", [
+    {"origin": "200"},
+    {"global_origin": "200"},
+    {"forecast_cutoff": "4"},
+    {"period_steps": "48"},
+    {"canonical_parquet_path": "../escape"},
+    {"split_manifest_path": "a/../b"},
+    {"policy_manifest_path": "./file"},
+])
+def test_validate_available_forecast_rejects_coerced_copy_updates(chain, update):
+    """18.5：`model_copy(update=...)` 造出的对象必须被复验再次拒绝。"""
+    from contracts.validators import validate_available_forecast
+
+    artifact = forecast_artifact(chain, cutoff=4)
+    with pytest.raises(ValueError):
+        validate_available_forecast(artifact.model_copy(update=update))
+
+
+def test_validate_available_forecast_rejects_bool_series_copy(chain):
+    from contracts.validators import validate_available_forecast
+
+    artifact = forecast_artifact(chain, cutoff=4)
+    for bad_values in ((True, True, True, True), ("1.0", "2.0", "3.0", "4.0")):
+        bad_series = artifact.series.model_copy(
+            update={"price_sgd_per_kwh": bad_values})
+        with pytest.raises(ValueError):
+            validate_available_forecast(artifact.model_copy(update={"series": bad_series}))
+
+
+def test_validate_available_forecast_accepts_a_legitimate_artifact(chain):
+    from contracts.validators import validate_available_forecast
+
+    validate_available_forecast(forecast_artifact(chain, cutoff=4))
+
+
+def test_r3_type_strictness_does_not_change_normal_artifact(chain):
+    """数值与语义不变：正常 artifact 的 series / hash 与 R2 完全一致。"""
+    first = forecast_artifact(chain, cutoff=4)
+    second = forecast_artifact(chain, cutoff=4)
+    assert first.prediction_hash() == second.prediction_hash()
+    assert first.content_hash() == second.content_hash()
+    frame = pd.read_parquet(chain["parquet"])
+    module = importlib.import_module(FORECAST_MODULE)
+    for driver in DRIVERS:
+        expected = module.seasonal_naive_forecast(
+            frame[driver].to_numpy(), origin=200, forecast_cutoff=4)
+        assert tuple(first.series[driver]) == expected
+        assert all(type(v) is float for v in first.series[driver])
