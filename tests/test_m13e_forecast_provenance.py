@@ -1,10 +1,17 @@
-"""M1.3e 测试：contract-v8 与**因果** forecast provenance。
+"""M1.3e 测试：contract-v8 与**因果** forecast provenance（含 M1.3e-R1 信任链）。
 
-改前缺陷（本文件在实现前必须为红）：契约仍是 `contract-v7`；
-`ScenarioBundle` 用含糊的 `synthetic: bool` 与无 schema 的自由 dict `source_hashes`
-承载来源语义；没有任何结构化 provenance、没有 purpose gate；
-不存在只依赖 `[origin-48, origin)` 历史的因果 forecast provider，
-也不存在 forecast policy manifest。
+改前缺陷（本文件在实现前必须为红）：
+
+- 契约仍是 `contract-v7` 且 `ContractBase.schema_version` 可被显式覆盖；
+- `ScenarioBundle` 用含糊的 `synthetic: bool` 与无 schema 的自由 dict
+  `source_hashes` 承载来源语义，没有结构化 provenance、没有 purpose gate；
+- 不存在只依赖 `[origin-48, origin)` 历史的因果 forecast provider；
+- （M1.3e-R1）provider 不读 policy manifest、接受伪造的最小 split manifest、
+  接受任意 `code_revision`；artifact 只是包裹可变 raw dict 的普通类；
+  `mode`/`source_kind` 语义过宽。
+
+**M1.3e-R1 的信任链要求**：`build_available_exogenous_forecast()` 必须逐层校验
+policy → split → canonical manifest → canonical parquet，任一层不符即 fail closed。
 
 本卡**不**产生正式 `ScenarioBundle`、不开始训练或评估。
 """
@@ -12,7 +19,9 @@
 import hashlib
 import importlib
 import json
+import math
 import pathlib
+import shutil
 import subprocess
 
 import numpy as np
@@ -23,8 +32,10 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 TIMEZONE = "Asia/Singapore"
 TOTAL_ROWS = 17568
 TRAIN_ROWS = 10224
+VALIDATION_ROWS = 2928
 PERIOD_STEPS = 48
 CONTRACT_V8 = "contract-v8"
+CONTRACT_V7 = "contract-v7"
 
 DRIVERS = (
     "price_sgd_per_kwh",
@@ -40,10 +51,12 @@ BUNDLE_FORECAST_FIELDS = (
 UNAVAILABLE = ("local_pv_kw", "wind_generation_kw", "carbon_intensity", "arrival")
 FORECAST_MODULE = "scenario.forecast"
 POLICY_MATERIALIZER = "scripts.materialize_singapore_forecast_policy"
+SPLIT_MATERIALIZER = "scripts.materialize_singapore_splits"
 POLICY_SCHEMA = "m1.3e-singapore-2024-forecast-policy-v1"
+FROZEN_AT = "2026-09-16T00:00:00+00:00"
 
 
-# --- fixture ---------------------------------------------------------------
+# --- fixture: 完整、自洽的临时冻结资产链 --------------------------------------
 
 def canonical_frame(rows: int = TOTAL_ROWS) -> pd.DataFrame:
     start = pd.Timestamp("2024-01-01T00:00:00", tz=TIMEZONE)
@@ -62,11 +75,26 @@ def canonical_frame(rows: int = TOTAL_ROWS) -> pd.DataFrame:
     })
 
 
-def write_upstream(root: pathlib.Path) -> dict:
-    """canonical parquet + canonical manifest + split manifest（最小自洽集合）。"""
+def build_frozen_chain(root: pathlib.Path, frame: pd.DataFrame | None = None) -> dict:
+    """构造**完整且自洽**的临时冻结资产链（M1.3e-R1 的 E.2 要求）。
+
+    四层都用**真实的**物化器/纯构造器产出：
+
+    1. canonical parquet（17568 行、严格 30min 网格、`Asia/Singapore`）
+    2. canonical manifest（M1.3b schema）
+    3. split manifest —— 由 **M1.3d 的** `build_split_manifest()` 生成
+       （含精确键集合、冻结声明、readiness、unavailable、train-only 统计）
+    4. policy manifest —— 由 **M1.3e 的** `build_forecast_policy_manifest()` 生成
+
+    第 4 步刻意直接调用**纯构造器 + 原子写入**而不是 `materialize_forecast_policy()`：
+    后者带 dirty-generator 门禁（「未提交的实现不得被背书」），是**生成时**的部署
+    策略，不应让内容层测试在开发树上无法运行。真实入口的门禁/防覆盖/原子性/幂等
+    由本文件下半部分的 `test_policy_*` 直接覆盖。
+    """
     root.mkdir(parents=True, exist_ok=True)
     parquet = root / "half_hour.parquet"
-    canonical_frame().to_parquet(parquet, index=False)
+    (canonical_frame() if frame is None else frame).to_parquet(parquet, index=False)
+
     canonical_manifest = root / "singapore_2024_half_hour.json"
     canonical_manifest.write_text(json.dumps({
         "schema": "m1.3b-singapore-2024-half-hour-v1",
@@ -75,23 +103,84 @@ def write_upstream(root: pathlib.Path) -> dict:
         "output_parquet_sha256": hashlib.sha256(parquet.read_bytes()).hexdigest(),
         "materializer_revision": "0" * 39 + "1",
     }), encoding="utf-8")
-    split_manifest = root / "singapore_2024_splits.json"
-    split_manifest.write_text(json.dumps({
-        "schema": "m1.3d-singapore-2024-splits-v1",
-        "year": 2024, "timezone": TIMEZONE, "frequency": "30min",
-        "total_rows": TOTAL_ROWS,
-        "canonical_parquet_sha256": hashlib.sha256(parquet.read_bytes()).hexdigest(),
-        "canonical_manifest_sha256": hashlib.sha256(
-            canonical_manifest.read_bytes()).hexdigest(),
-    }), encoding="utf-8")
-    return {"parquet": parquet, "canonical_manifest": canonical_manifest,
-            "split_manifest": split_manifest}
 
+    split_module = importlib.import_module(SPLIT_MATERIALIZER)
+    split_payload = split_module.build_split_manifest(
+        canonical_parquet_path=parquet,
+        canonical_manifest_path=canonical_manifest,
+        frozen_at_utc=FROZEN_AT,
+    )
+    split_manifest = root / "singapore_2024_splits.json"
+    split_manifest.write_text(
+        json.dumps(split_payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    policy_module = _policy_module()
+    policy_payload = policy_module.build_forecast_policy_manifest(
+        canonical_parquet_path=parquet,
+        canonical_manifest_path=canonical_manifest,
+        split_manifest_path=split_manifest,
+        frozen_at_utc=FROZEN_AT,
+    )
+    policy_manifest = root / "singapore_2024_forecast_policy.json"
+    policy_module._atomic_write_text(
+        policy_manifest, policy_module._canonical_json(policy_payload)
+    )
+
+    return {
+        "root": root,
+        "parquet": parquet,
+        "canonical_manifest": canonical_manifest,
+        "split_manifest": split_manifest,
+        "policy_manifest": policy_manifest,
+    }
+
+
+@pytest.fixture(scope="session")
+def base_chain(tmp_path_factory) -> pathlib.Path:
+    """会话级基链：**只构建一次**（构建含 train-only 统计重算，不便宜）。"""
+    root = tmp_path_factory.mktemp("m13e_base_chain")
+    build_frozen_chain(root)
+    return root
+
+
+@pytest.fixture
+def chain(tmp_path, base_chain) -> dict:
+    """把基链复制进本用例的临时目录，允许用例随意篡改。"""
+    root = tmp_path / "chain"
+    shutil.copytree(base_chain, root)
+    return {
+        "root": root,
+        "parquet": root / "half_hour.parquet",
+        "canonical_manifest": root / "singapore_2024_half_hour.json",
+        "split_manifest": root / "singapore_2024_splits.json",
+        "policy_manifest": root / "singapore_2024_forecast_policy.json",
+    }
+
+
+def _rewrite_json(path: pathlib.Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _resync_policy_split_hash(chain: dict) -> None:
+    """把 policy manifest 的 split hash 重新对齐到**已被篡改的** split manifest。
+
+    这样 policy 层仍然自洽，破坏只能由 **split manifest 的严格校验**发现——
+    否则用例会在 policy hash 层就被拦住，无法证明 split 校验真的在起作用。
+    """
+    payload = _policy_json(chain["policy_manifest"])
+    payload["split_manifest_sha256"] = hashlib.sha256(
+        chain["split_manifest"].read_bytes()).hexdigest()
+    _rewrite_json(chain["policy_manifest"], payload)
+
+
+# --- provenance / bundle 夹具（contract-v8） --------------------------------
 
 def make_series_provenance(**over) -> dict:
     base = {
         "series_name": "price_forecast",
-        "source_kind": "persistence",
+        "source_kind": "synthetic",
         "method": "trailing_seasonal_naive",
         "generated_at": "2024-01-03T00:00:00+08:00",
         "information_cutoff_exclusive": "2024-01-03T00:00:00+08:00",
@@ -110,18 +199,25 @@ def make_series_provenance(**over) -> dict:
     return base
 
 
-def make_provenance(*, mode: str = "formal", cutoff: int = 4) -> dict:
-    """七项 provenance，`series_name` 与字段名一一对应。"""
-    provenance = {}
-    for field in BUNDLE_FORECAST_FIELDS:
-        kind = "unavailable" if field in ("pv_forecast", "wind_forecast",
-                                          "carbon_forecast", "arrival_forecast") \
-            else "persistence"
-        provenance[field] = make_series_provenance(series_name=field, source_kind=kind)
-    return provenance
+# 每个 mode 只接受**唯一**的来源类别（M1.3e-R1 收紧）
+MODE_KINDS = {
+    "synthetic": "synthetic",
+    "oracle_debug": "oracle_debug",
+    "formal": "persistence",
+}
 
 
-def make_bundle_kwargs(*, mode: str = "synthetic", cutoff: int = 4) -> dict:
+def make_provenance(*, mode: str = "synthetic") -> dict:
+    """七项 provenance，`series_name` 与字段名一一对应，来源与该 mode 一致。"""
+    kind = MODE_KINDS[mode]
+    return {
+        field: make_series_provenance(series_name=field, source_kind=kind)
+        for field in BUNDLE_FORECAST_FIELDS
+    }
+
+
+def make_bundle_kwargs(*, mode: str = "synthetic", cutoff: int = 4,
+                       generated_at: str = "2024-01-03T00:00:00+08:00") -> dict:
     return {
         "split": "train", "start": "2024-01-03T00:00:00+08:00", "horizon": 24,
         "forecast_cutoff": cutoff,
@@ -130,32 +226,61 @@ def make_bundle_kwargs(*, mode: str = "synthetic", cutoff: int = 4) -> dict:
         "temperature_forecast": [28.0] * cutoff, "carbon_forecast": [0.0] * cutoff,
         "arrival_forecast": [0.0] * cutoff,
         "mode": mode,
-        "generated_at": "2024-01-03T00:00:00+08:00",
-        "forecast_provenance": make_provenance(mode=mode, cutoff=cutoff),
+        "generated_at": generated_at,
+        "forecast_provenance": make_provenance(mode=mode),
     }
 
 
-def build_bundle(**over):
+def build_bundle(*, mode: str = "synthetic", **over):
     from contracts.models import ScenarioBundle
 
-    kwargs = make_bundle_kwargs()
+    kwargs = make_bundle_kwargs(mode=mode)
     kwargs.update(over)
     return ScenarioBundle(**kwargs)
 
 
-def forecast_artifact(upstream, *, split="train", origin=200, cutoff=4, **over):
+# --- provider / policy 入口 --------------------------------------------------
+
+def forecast_artifact(chain, *, split="train", origin=200, cutoff=4, **over):
     module = importlib.import_module(FORECAST_MODULE)
     kwargs = dict(
         split=split, origin=origin, forecast_cutoff=cutoff,
-        canonical_parquet_path=upstream["parquet"],
-        canonical_manifest_path=upstream["canonical_manifest"],
-        split_manifest_path=upstream["split_manifest"],
+        canonical_parquet_path=chain["parquet"],
+        canonical_manifest_path=chain["canonical_manifest"],
+        split_manifest_path=chain["split_manifest"],
+        policy_manifest_path=chain["policy_manifest"],
     )
     kwargs.update(over)
     return module.build_available_exogenous_forecast(**kwargs)
 
 
-# --- 1. 契约版本 ------------------------------------------------------------
+def _policy_module():
+    return importlib.import_module(POLICY_MATERIALIZER)
+
+
+def materialize_policy(chain, out, **over):
+    module = _policy_module()
+    kwargs = dict(
+        canonical_parquet_path=chain["parquet"],
+        canonical_manifest_path=chain["canonical_manifest"],
+        split_manifest_path=chain["split_manifest"],
+        manifest_path=out / "singapore_2024_forecast_policy.json",
+        frozen_at_utc=FROZEN_AT,
+    )
+    kwargs.update(over)
+    return module.materialize_forecast_policy(**kwargs)
+
+
+def _policy_json(path):
+    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+
+
+def _allow_clean_generator(monkeypatch) -> None:
+    """内容层测试放行生成时门禁（其拒绝行为由专门用例覆盖）。"""
+    monkeypatch.setattr(_policy_module(), "_generator_is_dirty", lambda: False)
+
+
+# --- 1. 契约版本（A） ---------------------------------------------------------
 
 def test_contract_version_is_v8():
     from contracts import CONTRACT_VERSION_ID
@@ -166,12 +291,12 @@ def test_contract_version_is_v8():
 def test_v7_artifacts_are_explicitly_rejected():
     from contracts import CONTRACT_VERSION_ID
 
-    assert CONTRACT_VERSION_ID != "contract-v7"
+    assert CONTRACT_VERSION_ID != CONTRACT_V7
     from safe_rl_v2.buffer import RolloutBuffer
 
     buffer = RolloutBuffer()
     payload = buffer.to_dict()
-    payload["contract_version"] = "contract-v7"
+    payload["contract_version"] = CONTRACT_V7
     payload["transitions"] = []
     with pytest.raises((ValueError, KeyError, TypeError)):
         RolloutBuffer.from_dict(payload)
@@ -186,10 +311,55 @@ def test_no_second_hardcoded_version_source():
         text = (REPO_ROOT / rel).read_text(encoding="utf-8")
         assert "CONTRACT_VERSION" in text or "contracts" in text, rel
         assert f'= "{CONTRACT_VERSION_ID}"' not in text, f"{rel} 硬编码了版本"
-        assert "'contract-v7'" not in text and '"contract-v7"' not in text, rel
+        assert f"'{CONTRACT_V7}'" not in text and f'"{CONTRACT_V7}"' not in text, rel
 
 
-# --- 2. provenance 模型 -----------------------------------------------------
+@pytest.mark.parametrize("bad", (
+    CONTRACT_V7, "contract-v6", "", "contract-v8 ", "CONTRACT-V8",
+    True, 8, 8.0, ["contract-v8"], {"schema_version": CONTRACT_V8}, None,
+))
+def test_contract_base_locks_schema_version(bad):
+    """A.2：`schema_version` 在基底类统一锁定，任何显式覆盖都被拒绝。"""
+    from contracts.models import ArtifactDigest
+
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        ArtifactDigest(role="r", logical_path="p", sha256="a" * 64,
+                       schema_version=bad)
+
+
+def test_contract_base_default_is_the_single_version_source():
+    from contracts import CONTRACT_VERSION_ID
+    from contracts.models import ArtifactDigest, ScenarioBundle
+
+    digest = ArtifactDigest(role="r", logical_path="p", sha256="a" * 64)
+    assert digest.schema_version == CONTRACT_VERSION_ID
+    assert build_bundle().schema_version == CONTRACT_VERSION_ID
+    assert ScenarioBundle.model_fields["schema_version"].default == CONTRACT_VERSION_ID
+
+
+@pytest.mark.parametrize("bad", (CONTRACT_V7, "", "contract-v6", True, 8, None))
+def test_artifact_schema_version_is_locked(chain, bad):
+    """A.1：新增 forecast artifact 同样锁定版本。"""
+    artifact = forecast_artifact(chain)
+    payload = artifact.model_dump()
+    payload["schema_version"] = bad
+    from contracts.models import AvailableExogenousForecast
+
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**payload)
+
+
+def test_version_rejections_do_not_leak_builtin_errors():
+    """A.3：错误必须是干净的 ValidationError/ValueError，不泄漏内建异常。"""
+    from contracts.models import ArtifactDigest
+
+    for bad in (CONTRACT_V7, "", True, 8, ["x"], {"a": 1}, object()):
+        with pytest.raises(ValueError):
+            ArtifactDigest(role="r", logical_path="p", sha256="a" * 64,
+                           schema_version=bad)
+
+
+# --- 2. provenance 模型 -------------------------------------------------------
 
 def test_provenance_models_exist_and_forbid_extra_fields():
     from contracts.models import (
@@ -205,9 +375,7 @@ def test_provenance_models_exist_and_forbid_extra_fields():
 
 
 def test_bundle_no_longer_accepts_the_free_form_source_hashes():
-    from contracts.models import ScenarioBundle
-
-    assert "source_hashes" not in ScenarioBundle.model_fields
+    assert "source_hashes" not in _bundle_model_fields()
     with pytest.raises((ValueError, TypeError, KeyError)):
         build_bundle(source_hashes={"anything": "goes"})
 
@@ -223,10 +391,15 @@ def test_bundle_requires_structured_provenance():
 
 
 def test_mode_replaces_the_ambiguous_synthetic_bool():
+    fields = _bundle_model_fields()
+    assert "mode" in fields
+    assert "synthetic" not in fields
+
+
+def _bundle_model_fields() -> set:
     from contracts.models import ScenarioBundle
 
-    assert "mode" in ScenarioBundle.model_fields
-    assert "synthetic" not in ScenarioBundle.model_fields
+    return set(ScenarioBundle.model_fields)
 
 
 @pytest.mark.parametrize("bad_mode", ("formal ", "FORMAL", "", "oracle", None, 1))
@@ -235,7 +408,7 @@ def test_unknown_modes_are_rejected(bad_mode):
         build_bundle(mode=bad_mode)
 
 
-# --- 3. provenance 校验规则 -------------------------------------------------
+# --- 3. provenance 校验规则 ---------------------------------------------------
 
 def test_content_hash_covers_provenance():
     first = build_bundle()
@@ -318,60 +491,94 @@ def test_seed_cannot_be_a_bool_or_other_type(bad):
         build_bundle(forecast_provenance=provenance)
 
 
+# --- 4. mode / source_kind 精确语义（B） --------------------------------------
+
+@pytest.mark.parametrize("mode", ("synthetic", "oracle_debug", "formal"))
+def test_each_mode_accepts_only_its_own_kind(mode):
+    bundle = build_bundle(mode=mode)
+    assert bundle.mode == mode
+
+
+@pytest.mark.parametrize("mode,other", (
+    ("synthetic", "persistence"),
+    ("synthetic", "unavailable"),
+    ("synthetic", "external_forecast"),
+    ("oracle_debug", "synthetic"),
+    ("oracle_debug", "persistence"),
+    ("formal", "synthetic"),
+    ("formal", "oracle_debug"),
+    ("formal", "unavailable"),
+))
+def test_mode_rejects_foreign_source_kinds(mode, other):
+    """B.1–B.4：非 formal 要求七条**逐项**为唯一来源；formal 拒绝三类。"""
+    provenance = make_provenance(mode=mode)
+    provenance["carbon_forecast"] = make_series_provenance(
+        series_name="carbon_forecast", source_kind=other)
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        build_bundle(mode=mode, forecast_provenance=provenance)
+
+
 def test_formal_mode_rejects_unavailable_sources():
+    provenance = make_provenance(mode="formal")
+    provenance["load_forecast"] = make_series_provenance(
+        series_name="load_forecast", source_kind="unavailable")
     with pytest.raises((ValueError, TypeError, KeyError)):
-        build_bundle(mode="formal")
+        build_bundle(mode="formal", forecast_provenance=provenance)
 
 
-def test_formal_mode_rejects_synthetic_and_oracle_sources():
-    for kind in ("synthetic", "oracle_debug"):
-        provenance = make_provenance()
-        for field in BUNDLE_FORECAST_FIELDS:
-            provenance[field] = make_series_provenance(series_name=field,
-                                                       source_kind=kind)
-        with pytest.raises((ValueError, TypeError, KeyError)):
-            build_bundle(mode="formal", forecast_provenance=provenance)
+@pytest.mark.parametrize("mode", ("synthetic", "oracle_debug", "formal"))
+def test_no_bundle_mode_accepts_unavailable_placeholder(mode):
+    """B.5：完整 ScenarioBundle 的任何 mode 都不得以 unavailable 占位。"""
+    provenance = make_provenance(mode=mode)
+    provenance["arrival_forecast"] = make_series_provenance(
+        series_name="arrival_forecast", source_kind="unavailable")
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        build_bundle(mode=mode, forecast_provenance=provenance)
 
 
-def test_synthetic_mode_requires_synthetic_provenance():
+def test_bundle_generated_at_must_match_every_series(chain):
+    """B.6：`ScenarioBundle.generated_at` 与七项 provenance 逐项恒等。"""
     provenance = make_provenance()
-    provenance["price_forecast"] = make_series_provenance(
-        series_name="price_forecast", source_kind="external_forecast")
+    provenance["wind_forecast"] = make_series_provenance(
+        series_name="wind_forecast",
+        generated_at="2024-01-03T01:00:00+08:00",
+        information_cutoff_exclusive="2024-01-03T01:00:00+08:00",
+        target_start="2024-01-03T01:00:00+08:00",
+        lookback_end_exclusive="2024-01-03T01:00:00+08:00",
+    )
     with pytest.raises((ValueError, TypeError, KeyError)):
-        build_bundle(mode="synthetic", forecast_provenance=provenance)
+        build_bundle(forecast_provenance=provenance)
 
 
-# --- 4. purpose gate --------------------------------------------------------
+@pytest.mark.parametrize("mode,kind", (
+    ("synthetic", "synthetic"),
+    ("oracle_debug", "oracle_debug"),
+))
+def test_synthetic_and_oracle_modes_are_exact(mode, kind):
+    bundle = build_bundle(mode=mode)
+    assert bundle.mode == mode
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert getattr(bundle.forecast_provenance, field).source_kind == kind
+
+
+# --- 5. purpose gate ----------------------------------------------------------
 
 def _purpose_gate():
     module = importlib.import_module("contracts.validators")
     return module.validate_forecast_purpose
 
 
-@pytest.mark.parametrize("mode,kind", [
-    ("synthetic", "synthetic"),
-    ("oracle_debug", "oracle_debug"),
-])
+@pytest.mark.parametrize("mode", ("synthetic", "oracle_debug"))
 @pytest.mark.parametrize("purpose", ("training", "evaluation"))
-def test_training_and_evaluation_reject_synthetic_and_oracle(mode, kind, purpose):
-    provenance = make_provenance()
-    for field in BUNDLE_FORECAST_FIELDS:
-        provenance[field] = make_series_provenance(series_name=field, source_kind=kind)
-    bundle = build_bundle(mode=mode, forecast_provenance=provenance)
+def test_training_and_evaluation_reject_synthetic_and_oracle(mode, purpose):
+    bundle = build_bundle(mode=mode)
     with pytest.raises((ValueError, TypeError, KeyError)):
         _purpose_gate()(bundle, purpose=purpose)
 
 
-@pytest.mark.parametrize("mode,kind", [
-    ("synthetic", "synthetic"),
-    ("oracle_debug", "oracle_debug"),
-])
-def test_debug_purpose_accepts_synthetic_and_oracle(mode, kind):
-    provenance = make_provenance()
-    for field in BUNDLE_FORECAST_FIELDS:
-        provenance[field] = make_series_provenance(series_name=field, source_kind=kind)
-    bundle = build_bundle(mode=mode, forecast_provenance=provenance)
-    _purpose_gate()(bundle, purpose="debug")
+@pytest.mark.parametrize("mode", ("synthetic", "oracle_debug"))
+def test_debug_purpose_accepts_synthetic_and_oracle(mode):
+    _purpose_gate()(build_bundle(mode=mode), purpose="debug")
 
 
 def test_unknown_purpose_is_rejected():
@@ -380,7 +587,85 @@ def test_unknown_purpose_is_rejected():
         _purpose_gate()(bundle, purpose="production")
 
 
-# --- 5. 因果 forecast provider ---------------------------------------------
+def test_formal_bundle_is_accepted_for_training_and_evaluation():
+    bundle = build_bundle(mode="formal")
+    _purpose_gate()(bundle, purpose="training")
+    _purpose_gate()(bundle, purpose="evaluation")
+
+
+# --- 6. 因果 forecast：**纯函数**层的泄漏回归（E） --------------------------
+
+def _series_values(rows: int = 400) -> np.ndarray:
+    index = np.arange(rows, dtype=float)
+    return 0.12 + 0.001 * (index % 480)
+
+
+@pytest.mark.leakage
+def test_pure_forecast_ignores_truth_at_or_after_origin():
+    """E.3：`[origin, end)` 的任何变化都不得改变预测。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    series = _series_values()
+    baseline = module.seasonal_naive_forecast(series, origin=200, forecast_cutoff=8)
+
+    mutated = series.copy()
+    mutated[200:] += 12345.0
+    after = module.seasonal_naive_forecast(mutated, origin=200, forecast_cutoff=8)
+
+    assert after == baseline
+    assert all(math.isfinite(v) for v in after)
+
+
+@pytest.mark.leakage
+def test_pure_forecast_changes_when_the_used_history_rows_change():
+    """E.4：整个历史窗口 `[origin-48, origin)` 的变化必须改变预测。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    series = _series_values()
+    baseline = module.seasonal_naive_forecast(series, origin=200, forecast_cutoff=8)
+
+    mutated = series.copy()
+    mutated[200 - PERIOD_STEPS:200] += 999.0
+    after = module.seasonal_naive_forecast(mutated, origin=200, forecast_cutoff=8)
+
+    assert after != baseline
+
+
+def test_pure_forecast_is_the_frozen_card_rule():
+    """E.5：卡片字面规则 `forecast[k] = y(origin + k - 48)`（模板按时间正序）。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    index = np.arange(200, dtype=float)
+    series = index * 1.0
+    forecast = module.seasonal_naive_forecast(series, origin=100, forecast_cutoff=60)
+    assert list(forecast[:5]) == [52.0, 53.0, 54.0, 55.0, 56.0]  # y(100+k-48)
+    assert list(forecast[48:52]) == [52.0, 53.0, 54.0, 55.0]  # k mod 48 环绕
+    assert forecast[0] == series[100 - PERIOD_STEPS]
+
+
+@pytest.mark.parametrize("bad", (True, 0, -1, 1.5, "4", None))
+def test_pure_forecast_rejects_bad_cutoffs(bad):
+    module = importlib.import_module(FORECAST_MODULE)
+    with pytest.raises((ValueError, TypeError)):
+        module.seasonal_naive_forecast(_series_values(), origin=200, forecast_cutoff=bad)
+
+
+def test_pure_forecast_fails_closed_without_a_full_history_window():
+    """train 内 origin<48 必须 fail closed —— 不回填、不跨年环绕。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    with pytest.raises(ValueError):
+        module.seasonal_naive_forecast(_series_values(), origin=47, forecast_cutoff=4)
+
+
+def test_pure_forecast_is_the_implementation_the_provider_uses(chain):
+    """provider 的数值必须与纯函数逐项一致（不得有第二条计算路径）。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    artifact = forecast_artifact(chain, origin=200, cutoff=6)
+    frame = pd.read_parquet(chain["parquet"])
+    for driver in DRIVERS:
+        expected = module.seasonal_naive_forecast(
+            frame[driver].to_numpy(), origin=200, forecast_cutoff=6)
+        assert tuple(artifact.series[driver]) == expected
+
+
+# --- 7. provider：完整信任链（C） --------------------------------------------
 
 def test_provider_module_and_frozen_policy_constants():
     module = importlib.import_module(FORECAST_MODULE)
@@ -389,167 +674,489 @@ def test_provider_module_and_frozen_policy_constants():
 
 
 @pytest.mark.parametrize("driver", DRIVERS)
-def test_provider_returns_finite_values_of_length_cutoff(tmp_path, driver):
-    upstream = write_upstream(tmp_path)
-    artifact = forecast_artifact(upstream, cutoff=6)
+def test_provider_returns_finite_values_of_length_cutoff(chain, driver):
+    artifact = forecast_artifact(chain, cutoff=6)
     values = artifact.series[driver]
     assert len(values) == 6
     assert all(np.isfinite(v) for v in values)
 
 
-def test_provider_records_the_window_and_cutoff(tmp_path):
-    upstream = write_upstream(tmp_path)
-    artifact = forecast_artifact(upstream, origin=200, cutoff=4)
+def test_provider_records_the_window_and_cutoff(chain):
+    artifact = forecast_artifact(chain, origin=200, cutoff=4)
     assert artifact.forecast_cutoff == 4
-    assert artifact.generated_at == "2024-01-05T04:00:00+08:00"  # origin=200 → i*30min
+    assert artifact.origin == 200
+    assert artifact.global_origin == 200
+    assert artifact.generated_at == "2024-01-05T04:00:00+08:00"  # origin=200 → +100h
+    assert artifact.target_timestamps[0] == artifact.generated_at
     for driver in DRIVERS:
-        provenance = artifact.provenance[driver]
-        assert provenance["method"] == "trailing_seasonal_naive"
-        assert provenance["generated_at"] == artifact.generated_at
-        assert provenance["information_cutoff_exclusive"] == artifact.generated_at
-        assert provenance["lookback_end_exclusive"] == artifact.generated_at
-        assert provenance["target_start"] == artifact.generated_at
-        assert provenance["lookback_start"] == "2024-01-04T04:00:00+08:00"
+        entry = artifact.provenance[driver]
+        assert entry.method == "trailing_seasonal_naive"
+        assert entry.source_kind == "seasonal_naive"
+        assert entry.series_name == driver
+        assert entry.generated_at == artifact.generated_at
+        assert entry.information_cutoff_exclusive == artifact.generated_at
+        assert entry.lookback_end_exclusive == artifact.generated_at
+        assert entry.target_start == artifact.generated_at
+        assert entry.lookback_start == "2024-01-04T04:00:00+08:00"
+        assert entry.seed is None
 
 
-@pytest.mark.leakage
-@pytest.mark.parametrize("driver", DRIVERS)
-def test_origin_and_future_truth_do_not_change_the_forecast(tmp_path, driver):
-    """改 origin 及其之后的全部 truth → forecast 值与 content hash 必须不变。"""
-    upstream = write_upstream(tmp_path / "a")
-    baseline = forecast_artifact(upstream, origin=200, cutoff=4)
-
-    mutated = write_upstream(tmp_path / "b")
-    frame = pd.read_parquet(mutated["parquet"])
-    frame.loc[frame.index >= 200, driver] += 12345.0
-    frame.to_parquet(mutated["parquet"], index=False)
-    for name in ("canonical_manifest", "split_manifest"):
-        path = mutated[name]
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if "output_parquet_sha256" in payload:
-            payload["output_parquet_sha256"] = hashlib.sha256(
-                mutated["parquet"].read_bytes()).hexdigest()
-        else:
-            payload["canonical_parquet_sha256"] = hashlib.sha256(
-                mutated["parquet"].read_bytes()).hexdigest()
-        path.write_text(json.dumps(payload), encoding="utf-8")
-    after = forecast_artifact(mutated, origin=200, cutoff=4)
-
-    assert after.series[driver] == baseline.series[driver]
-    assert after.content_hash() == baseline.content_hash()
+def test_provider_requires_a_policy_manifest(chain):
+    """C.1：`policy_manifest_path` 是必填 kwarg。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    with pytest.raises(TypeError):
+        module.build_available_exogenous_forecast(  # type: ignore[call-arg]
+            "train", origin=200, forecast_cutoff=4,
+            canonical_parquet_path=chain["parquet"],
+            canonical_manifest_path=chain["canonical_manifest"],
+            split_manifest_path=chain["split_manifest"],
+        )
 
 
-@pytest.mark.leakage
-@pytest.mark.parametrize("driver", DRIVERS)
-def test_history_window_changes_the_forecast(tmp_path, driver):
-    """改 `[origin-48, origin)` → 相应 forecast 必须变化。
-
-    **M1.3e 勘误（人为批准）**：按冻结规则 `forecast[k] = template[k mod 48]`
-    （template 按时间正序 = `[origin-48, origin)`），第 k 项消费的行是
-    `origin-48+k`；`origin-1` 落在模板下标 **47**，只有 `C > 47` 才会被消费。
-    因此这里按本测试 docstring 的原意**改整个历史窗口**，而不是只改 `origin-1`：
-    断言强度不变（历史窗口的任何变化都必须体现在 forecast 上），
-    且不再依赖「C 恰好覆盖窗口末端」这一错误前提。
-    """
-    origin = 200
-    cutoff = 4
-    upstream = write_upstream(tmp_path / "a")
-    baseline = forecast_artifact(upstream, origin=origin, cutoff=cutoff)
-
-    mutated = write_upstream(tmp_path / "b")
-    frame = pd.read_parquet(mutated["parquet"])
-    frame.loc[frame.index.isin(range(origin - PERIOD_STEPS, origin)), driver] += 999.0
-    frame.to_parquet(mutated["parquet"], index=False)
-    for name in ("canonical_manifest", "split_manifest"):
-        path = mutated[name]
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        key = ("output_parquet_sha256" if "output_parquet_sha256" in payload
-               else "canonical_parquet_sha256")
-        payload[key] = hashlib.sha256(mutated["parquet"].read_bytes()).hexdigest()
-        path.write_text(json.dumps(payload), encoding="utf-8")
-    after = forecast_artifact(mutated, origin=origin, cutoff=cutoff)
-
-    assert after.series[driver] != baseline.series[driver]
-
-
-@pytest.mark.leakage
-def test_validation_future_mutation_does_not_change_the_current_forecast(tmp_path):
-    """validation 的未来 truth mutation 不影响当前 origin 的 forecast。"""
-    upstream = write_upstream(tmp_path / "a")
-    origin = TRAIN_ROWS + 100  # validation 内
-    baseline = forecast_artifact(upstream, split="validation",
-                                 origin=origin - TRAIN_ROWS, cutoff=4)
-
-    mutated = write_upstream(tmp_path / "b")
-    frame = pd.read_parquet(mutated["parquet"])
-    frame.loc[frame.index >= origin, "price_sgd_per_kwh"] += 777.0
-    frame.to_parquet(mutated["parquet"], index=False)
-    for name in ("canonical_manifest", "split_manifest"):
-        path = mutated[name]
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        key = ("output_parquet_sha256" if "output_parquet_sha256" in payload
-               else "canonical_parquet_sha256")
-        payload[key] = hashlib.sha256(mutated["parquet"].read_bytes()).hexdigest()
-        path.write_text(json.dumps(payload), encoding="utf-8")
-    after = forecast_artifact(mutated, split="validation",
-                              origin=origin - TRAIN_ROWS, cutoff=4)
-
-    assert after.content_hash() == baseline.content_hash()
-
-
-def test_provider_rejects_origins_without_a_full_history_window(tmp_path):
-    """train 内 origin<48 必须 fail closed —— 不回填、不跨年环绕。"""
-    upstream = write_upstream(tmp_path)
+def test_provider_rejects_a_missing_policy_manifest(chain):
+    chain["policy_manifest"].unlink()
     with pytest.raises(ValueError):
-        forecast_artifact(upstream, split="train", origin=47, cutoff=4)
+        forecast_artifact(chain)
 
 
-def test_provider_rejects_out_of_split_targets(tmp_path):
-    upstream = write_upstream(tmp_path)
+def test_provider_rejects_a_malformed_policy_manifest(chain):
+    chain["policy_manifest"].write_text("{not json", encoding="utf-8")
     with pytest.raises(ValueError):
-        forecast_artifact(upstream, split="train", origin=TRAIN_ROWS - 2, cutoff=4)
+        forecast_artifact(chain)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("schema", "m1.3e-other-schema"),
+    ("contract_version", CONTRACT_V7),
+    ("contract_version", "contract-v9"),
+    ("method", "persistence"),
+    ("period_steps", 24),
+    ("frequency", "60min"),
+    ("information_policy", "closed_open_[origin-24, origin)"),
+    ("target_policy", "half_open_[origin-1, origin+C)"),
+    ("seed_policy", 0),
+    ("available_drivers", list(DRIVERS)[:4]),
+    ("available_drivers", list(DRIVERS) + ["extra"]),
+    ("unavailable_not_materialized", list(UNAVAILABLE)[:3]),
+    ("materializer_revision", "0" * 40),
+    ("frozen_at_utc", "2026-09-16T00:00:00"),
+    ("canonical_parquet_sha256", "0" * 64),
+    ("canonical_manifest_sha256", "0" * 64),
+    ("split_manifest_sha256", "0" * 64),
+    ("canonical_parquet_path", "data/processed/other.parquet"),
+    ("canonical_manifest_path", "data/manifest/other.json"),
+    ("split_manifest_path", "data/manifest/other_splits.json"),
+])
+def test_provider_rejects_a_tampered_policy_manifest(chain, field, value):
+    """C.2/C.3/C.4/C.5/C.9：policy 的任何一项被改动都必须拒绝。"""
+    payload = _policy_json(chain["policy_manifest"])
+    payload[field] = value
+    _rewrite_json(chain["policy_manifest"], payload)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_rejects_readiness_flips(chain):
+    """C.3：readiness 必须严格等于冻结值（不得提前声明就绪）。"""
+    for field, value in (("formal_training_ready", True),
+                         ("complete_scenario_forecasts_ready", True),
+                         ("formal_scenario_bundle_ready", True),
+                         ("available_driver_forecasts_ready", False)):
+        payload = _policy_json(chain["policy_manifest"])
+        payload["readiness"][field] = value
+        _rewrite_json(chain["policy_manifest"], payload)
+        with pytest.raises(ValueError):
+            forecast_artifact(chain)
+
+
+def test_provider_rejects_an_unknown_policy_field(chain):
+    payload = _policy_json(chain["policy_manifest"])
+    payload["future_extension"] = 1
+    _rewrite_json(chain["policy_manifest"], payload)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_rejects_a_minimal_forged_split_manifest(chain):
+    """C.6：只含正确 parquet hash 的最小伪造 split manifest 必须拒绝。"""
+    parquet_sha = hashlib.sha256(chain["parquet"].read_bytes()).hexdigest()
+    chain["split_manifest"].write_text(json.dumps({
+        "schema": "m1.3d-singapore-2024-splits-v1",
+        "year": 2024, "timezone": TIMEZONE, "frequency": "30min",
+        "total_rows": TOTAL_ROWS,
+        "canonical_parquet_sha256": parquet_sha,
+        "canonical_manifest_sha256": hashlib.sha256(
+            chain["canonical_manifest"].read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+    _resync_policy_split_hash(chain)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+@pytest.mark.parametrize("mutation", [
+    "extra_top_level_key",
+    "drop_readiness_key",
+    "flip_forecast_ready",
+    "forge_year",
+    "forge_step_minutes",
+    "forge_path",
+    "forge_origin_rule",
+    "drop_split",
+    "extra_split",
+    "extra_split_entry_key",
+    "forge_train_statistic",
+    "empty_unavailable",
+    "unavailable_as_container",
+])
+def test_provider_rejects_a_tampered_split_manifest(chain, mutation):
+    """C.6/C.7：split manifest 必须走 M1.3d 的完整严格校验。"""
+    payload = _policy_json(chain["split_manifest"])
+    if mutation == "extra_top_level_key":
+        payload["future_extension"] = 1
+    elif mutation == "drop_readiness_key":
+        payload["readiness"].pop("truth_splits_ready")
+    elif mutation == "flip_forecast_ready":
+        payload["readiness"]["forecast_ready"] = True
+    elif mutation == "forge_year":
+        payload["year"] = 1999
+    elif mutation == "forge_step_minutes":
+        payload["step_minutes"] = 60
+    elif mutation == "forge_path":
+        payload["canonical_parquet_path"] = "data/processed/other.parquet"
+    elif mutation == "forge_origin_rule":
+        payload["forecast_origin_rule"] = "anything"
+    elif mutation == "drop_split":
+        payload["splits"].pop("test")
+    elif mutation == "extra_split":
+        payload["splits"]["shadow_test"] = payload["splits"]["test"]
+    elif mutation == "extra_split_entry_key":
+        payload["splits"]["train"]["randomized_indices"] = []
+    elif mutation == "forge_train_statistic":
+        payload["train_only_statistics"]["price_sgd_per_kwh"]["mean"] = 9999.0
+    elif mutation == "empty_unavailable":
+        payload["unavailable_not_materialized"] = {}
+    elif mutation == "unavailable_as_container":
+        payload["unavailable_not_materialized"]["arrival"] = ["unavailable"]
+    _rewrite_json(chain["split_manifest"], payload)
+    _resync_policy_split_hash(chain)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_rejects_a_canonical_manifest_byte_change(chain):
+    """C.8：canonical manifest 自身字节变化（parquet 不变）也必须拒绝。"""
+    payload = _policy_json(chain["canonical_manifest"])
+    payload["extra_note"] = "tampered"
+    _rewrite_json(chain["canonical_manifest"], payload)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_rejects_a_tampered_parquet(chain):
+    chain["parquet"].write_bytes(b"tampered")
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_rejects_a_policy_revision_that_is_not_the_provider_revision(chain):
+    """C.10：artifact 的 revision 必须与 policy revision 恒等。"""
+    payload = _policy_json(chain["policy_manifest"])
+    payload["materializer_revision"] = "f" * 40
+    _rewrite_json(chain["policy_manifest"], payload)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_has_no_public_code_revision_parameter(chain):
+    """C.10：`code_revision` 不得是公开参数（只能由内部 Git resolver 得到）。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    import inspect
+
+    parameters = inspect.signature(module.build_available_exogenous_forecast).parameters
+    assert "code_revision" not in parameters
+    artifact = forecast_artifact(chain)
+    assert artifact.code_revision == module.provider_code_revision()
+    assert artifact.provenance["price_sgd_per_kwh"].code_revision == (
+        artifact.code_revision
+    )
+
+
+def test_provider_artifact_code_revision_is_a_git_resolved_sha(chain):
+    module = importlib.import_module(FORECAST_MODULE)
+    revision = module.provider_code_revision()
+    expected = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", *module.FORECAST_SOURCE_PATHS],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    assert revision == expected
+    assert len(revision) == 40
+
+
+def test_provider_rejects_out_of_split_targets(chain):
+    with pytest.raises(ValueError):
+        forecast_artifact(chain, split="train", origin=TRAIN_ROWS - 2, cutoff=4)
+
+
+def test_provider_rejects_origins_without_a_full_history_window(chain):
+    with pytest.raises(ValueError):
+        forecast_artifact(chain, split="train", origin=47, cutoff=4)
 
 
 @pytest.mark.parametrize("bad", (True, 0, -1, 1.5, "4", None))
-def test_provider_rejects_bad_cutoffs(tmp_path, bad):
-    upstream = write_upstream(tmp_path)
+def test_provider_rejects_bad_cutoffs(chain, bad):
     with pytest.raises((ValueError, TypeError)):
-        forecast_artifact(upstream, origin=200, cutoff=bad)
+        forecast_artifact(chain, origin=200, cutoff=bad)
 
 
-def test_provider_hash_is_stable_for_the_same_inputs(tmp_path):
-    upstream = write_upstream(tmp_path)
-    first = forecast_artifact(upstream, origin=200, cutoff=4)
-    second = forecast_artifact(upstream, origin=200, cutoff=4)
-    assert first.content_hash() == second.content_hash()
+def test_provider_uses_preceding_canonical_history_for_validation(chain):
+    """validation 的起点可以使用它**之前已经发生**的 canonical 历史。"""
+    artifact = forecast_artifact(chain, split="validation", origin=100, cutoff=4)
+    assert artifact.split == "validation"
+    assert artifact.origin == 100
+    assert artifact.global_origin == TRAIN_ROWS + 100
+    assert artifact.provenance["price_sgd_per_kwh"].lookback_start is not None
 
 
-def test_provider_artifact_carries_the_frozen_contract_version(tmp_path):
-    upstream = write_upstream(tmp_path)
-    artifact = forecast_artifact(upstream)
-    payload = artifact.to_dict()
-    assert payload["contract_version"] == CONTRACT_V8
-    assert payload["split"] == "train"
-    assert payload["origin"] == 200
-    assert set(payload["series"]) == set(DRIVERS)
+# --- 8. 严格冻结的 artifact 契约（D） ----------------------------------------
+
+def test_artifact_is_a_frozen_contract(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    artifact = forecast_artifact(chain)
+    assert isinstance(artifact, AvailableExogenousForecast)
+    assert artifact.schema_version == CONTRACT_V8
+    with pytest.raises((ValueError, TypeError)):
+        artifact.origin = 1  # type: ignore[misc]
 
 
-def test_provider_artifact_is_not_a_scenario_bundle(tmp_path):
-    """artifact 不得伪装成完整 ScenarioBundle。"""
-    upstream = write_upstream(tmp_path)
-    artifact = forecast_artifact(upstream)
+def test_artifact_nested_containers_are_immutable(chain):
+    """D.4：`series` / `provenance` 不得暴露可变内部 dict/list。"""
+    artifact = forecast_artifact(chain)
+    values = artifact.series["price_sgd_per_kwh"]
+    assert isinstance(values, tuple)
+    with pytest.raises(TypeError):
+        values[0] = 1.0  # type: ignore[index]
+    entry = artifact.provenance["price_sgd_per_kwh"]
+    with pytest.raises((ValueError, TypeError)):
+        entry.method = "other"  # type: ignore[misc]
+    with pytest.raises(KeyError):
+        artifact.series["not_a_driver"]  # type: ignore[index]
+    with pytest.raises(KeyError):
+        artifact.provenance["not_a_driver"]  # type: ignore[index]
+
+
+def test_artifact_rejects_extra_and_missing_drivers(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = forecast_artifact(chain).model_dump()
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "future_driver": 1})
+
+    trimmed = dict(payload["series"])
+    trimmed.pop("ghi_w_per_m2")
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "series": trimmed})
+
+    trimmed_provenance = dict(payload["provenance"])
+    trimmed_provenance.pop("system_load_mw")
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "provenance": trimmed_provenance})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("forecast_cutoff", True),
+    ("forecast_cutoff", 0),
+    ("forecast_cutoff", -1),
+    ("origin", -1),
+    ("origin", True),
+    ("period_steps", 0),
+    ("period_steps", True),
+    ("code_revision", "not-a-git-sha"),
+    ("code_revision", "A" * 40),
+    ("policy_manifest_sha256", "abc"),
+    ("canonical_parquet_sha256", "A" * 64),
+    ("frequency", ""),
+    ("method", ""),
+    ("split", ""),
+    ("generated_at", "2024-01-05T04:00:00"),
+    ("policy_manifest_path", ""),
+])
+def test_artifact_rejects_illegal_fields(chain, field, value):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = forecast_artifact(chain).model_dump()
+    payload[field] = value
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**payload)
+
+
+def test_artifact_rejects_wrong_series_length_and_non_finite(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = forecast_artifact(chain, cutoff=4).model_dump()
+    short = dict(payload["series"])
+    short["price_sgd_per_kwh"] = [0.1, 0.2]
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "series": short})
+
+    bad = dict(payload["series"])
+    bad["price_sgd_per_kwh"] = [float("nan")] * 4
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "series": bad})
+
+
+def test_artifact_rejects_wrong_source_kind_and_generated_at(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    payload = forecast_artifact(chain).model_dump()
+    provenance = {driver: dict(payload["provenance"][driver]) for driver in DRIVERS}
+    provenance["wind_speed_10m_mps"]["source_kind"] = "persistence"
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "provenance": provenance})
+
+    provenance = {driver: dict(payload["provenance"][driver]) for driver in DRIVERS}
+    provenance["wind_speed_10m_mps"]["generated_at"] = "2024-01-05T05:00:00+08:00"
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**{**payload, "provenance": provenance})
+
+
+def test_artifact_has_two_distinct_summaries(chain):
+    """D.6：`prediction_hash` 只覆盖预测；`content_hash` 覆盖完整 artifact。"""
+    artifact = forecast_artifact(chain)
+    assert artifact.prediction_hash() != artifact.content_hash()
+    assert len(artifact.prediction_hash()) == 64
+    assert len(artifact.content_hash()) == 64
+
+
+def test_artifact_prediction_hash_covers_values_units_and_order(chain):
+    from contracts.models import AvailableExogenousForecast
+
+    artifact = forecast_artifact(chain, cutoff=4)
+    payload = artifact.model_dump()
+
+    reordered = {driver: list(payload["series"][driver]) for driver in DRIVERS}
+    reordered["price_sgd_per_kwh"] = list(reversed(reordered["price_sgd_per_kwh"]))
+    other = AvailableExogenousForecast(**{**payload, "series": reordered})
+    assert other.prediction_hash() != artifact.prediction_hash()
+
+    bumped = {driver: list(payload["series"][driver]) for driver in DRIVERS}
+    bumped["system_load_mw"] = [v + 1.0 for v in bumped["system_load_mw"]]
+    other = AvailableExogenousForecast(**{**payload, "series": bumped})
+    assert other.prediction_hash() != artifact.prediction_hash()
+
+
+def test_artifact_content_hash_covers_the_audit_provenance(chain):
+    """D.7：不得为通过 leakage 测试而让 content_hash 忽略审计 provenance。"""
+    from contracts.models import AvailableExogenousForecast
+
+    artifact = forecast_artifact(chain, cutoff=4)
+    payload = artifact.model_dump()
+    tampered = {**payload, "canonical_parquet_sha256": "c" * 64}
+    other = AvailableExogenousForecast(**tampered)
+    assert other.content_hash() != artifact.content_hash()
+    # 预测本身没变
+    assert other.prediction_hash() == artifact.prediction_hash()
+
+
+def test_artifact_is_not_a_scenario_bundle(chain):
+    artifact = forecast_artifact(chain)
     with pytest.raises((ValueError, TypeError, KeyError)):
         _purpose_gate()(artifact, purpose="training")
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        _purpose_gate()(artifact, purpose="evaluation")
+    _purpose_gate()(artifact, purpose="debug")
 
 
-def test_provider_does_not_invent_the_unavailable_series(tmp_path):
-    upstream = write_upstream(tmp_path)
-    artifact = forecast_artifact(upstream)
+def test_artifact_does_not_invent_the_unavailable_series(chain):
+    artifact = forecast_artifact(chain)
     for column in UNAVAILABLE:
-        assert column not in artifact.series
+        assert column not in artifact.series.as_dict()
+    assert set(artifact.series.as_dict()) == set(DRIVERS)
 
 
-# --- 6. oracle helper 与 snapshot adapter -----------------------------------
+def test_artifact_validator_entry_point(chain):
+    from contracts.validators import validate_available_forecast
+
+    validate_available_forecast(forecast_artifact(chain))
+
+
+# --- 9. artifact 层的因果性 / 泄漏回归（E.3/E.4） ---------------------------
+
+@pytest.mark.leakage
+def test_future_truth_mutation_leaves_series_and_prediction_hash_unchanged(tmp_path):
+    """E.3：改 origin 之后的未来 truth → series 与 prediction_hash 不变。
+
+    两条链各自**完整自洽**（各自重算 hash 与 train-only 统计），因此这不是
+    「同步改几个 hash 绕过校验」，而是比较两个都合法的冻结资产链。
+    """
+    baseline_chain = build_frozen_chain(tmp_path / "baseline")
+
+    frame = canonical_frame()
+    frame.loc[frame.index >= 200, "price_sgd_per_kwh"] += 12345.0
+    mutated_chain = build_frozen_chain(tmp_path / "mutated", frame=frame)
+
+    baseline = forecast_artifact(baseline_chain, origin=200, cutoff=4)
+    after = forecast_artifact(mutated_chain, origin=200, cutoff=4)
+
+    for driver in DRIVERS:
+        assert tuple(after.series[driver]) == tuple(baseline.series[driver])
+    assert after.prediction_hash() == baseline.prediction_hash()
+    # 审计 provenance 不同（上游字节确实变了）——两个摘要语义因此可区分
+    assert after.content_hash() != baseline.content_hash()
+    assert after.canonical_parquet_sha256 != baseline.canonical_parquet_sha256
+
+
+@pytest.mark.leakage
+def test_history_window_mutation_changes_series_and_prediction_hash(tmp_path):
+    """E.4：改**实际使用的历史行** `[origin-48, origin)` → series 与 hash 必须变化。"""
+    baseline_chain = build_frozen_chain(tmp_path / "baseline")
+
+    frame = canonical_frame()
+    frame.loc[frame.index.isin(range(200 - PERIOD_STEPS, 200)), "price_sgd_per_kwh"] += 999.0
+    mutated_chain = build_frozen_chain(tmp_path / "mutated", frame=frame)
+
+    baseline = forecast_artifact(baseline_chain, origin=200, cutoff=4)
+    after = forecast_artifact(mutated_chain, origin=200, cutoff=4)
+
+    assert tuple(after.series["price_sgd_per_kwh"]) != tuple(
+        baseline.series["price_sgd_per_kwh"])
+    assert after.prediction_hash() != baseline.prediction_hash()
+
+
+@pytest.mark.leakage
+def test_mutating_only_the_unused_tail_of_the_history_window_does_not_change_it(tmp_path):
+    """只有模板下标 `>= C`（即 `origin-48+C` 之后）的行不参与计算，改动无效。"""
+    baseline_chain = build_frozen_chain(tmp_path / "baseline")
+
+    frame = canonical_frame()
+    frame.loc[frame.index == 199, "price_sgd_per_kwh"] += 999.0
+    mutated_chain = build_frozen_chain(tmp_path / "mutated", frame=frame)
+
+    baseline = forecast_artifact(baseline_chain, origin=200, cutoff=4)
+    after = forecast_artifact(mutated_chain, origin=200, cutoff=4)
+    assert after.prediction_hash() == baseline.prediction_hash()
+
+    # 同一行在 C=48 时**确实**参与计算 → 必须改变预测
+    wide = forecast_artifact(mutated_chain, origin=200, cutoff=48)
+    wide_baseline = forecast_artifact(baseline_chain, origin=200, cutoff=48)
+    assert wide.prediction_hash() != wide_baseline.prediction_hash()
+
+
+@pytest.mark.leakage
+def test_provider_fails_closed_when_frozen_sources_are_rewritten(chain):
+    """E.3：正式冻结 artifact 的来源文件被改写 → provider 必须拒绝。"""
+    chain["parquet"].write_bytes(b"rewritten")
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_provider_hash_is_stable_for_the_same_inputs(chain):
+    first = forecast_artifact(chain, origin=200, cutoff=4)
+    second = forecast_artifact(chain, origin=200, cutoff=4)
+    assert first.content_hash() == second.content_hash()
+    assert first.prediction_hash() == second.prediction_hash()
+
+
+# --- 10. oracle helper 与 snapshot adapter -----------------------------------
 
 def test_oracle_helper_must_be_explicitly_oracle_debug():
     module = importlib.import_module("scenario.scenario")
@@ -562,6 +1169,10 @@ def test_oracle_helper_must_be_explicitly_oracle_debug():
     bundle = module.build_oracle_debug_scenario_from_truth(
         "train", "2024-01-01T00:00:00+08:00", 24, 4, true, oracle_debug=True)
     assert bundle.mode == "oracle_debug"
+    for field in BUNDLE_FORECAST_FIELDS:
+        entry = getattr(bundle.forecast_provenance, field)
+        assert entry.source_kind == "oracle_debug"
+        assert entry.generated_at == bundle.generated_at
 
 
 def test_oracle_debug_bundle_is_rejected_for_training():
@@ -572,6 +1183,16 @@ def test_oracle_debug_bundle_is_rejected_for_training():
         "train", "2024-01-01T00:00:00+08:00", 24, 4, true, oracle_debug=True)
     with pytest.raises((ValueError, TypeError, KeyError)):
         _purpose_gate()(bundle, purpose="training")
+
+
+def test_synthetic_bundle_is_all_synthetic():
+    module = importlib.import_module("scenario.scenario")
+    bundle = module.build_scenario("train", "s", 24, 4, synthetic=True, seed=5)
+    assert bundle.mode == "synthetic"
+    for field in BUNDLE_FORECAST_FIELDS:
+        entry = getattr(bundle.forecast_provenance, field)
+        assert entry.source_kind == "synthetic"
+        assert entry.generated_at == bundle.generated_at
 
 
 def test_snapshot_adapter_declares_oracle_debug_not_formal():
@@ -592,32 +1213,11 @@ def test_snapshot_adapter_snapshot_is_rejected_for_training():
         _purpose_gate()(snapshot.forecast, purpose="training")
 
 
-# --- 7. policy manifest -----------------------------------------------------
+# --- 11. policy manifest（真实入口） ----------------------------------------
 
-def _policy_module():
-    return importlib.import_module(POLICY_MATERIALIZER)
-
-
-def materialize_policy(upstream, out, **over):
-    module = _policy_module()
-    kwargs = dict(
-        canonical_parquet_path=upstream["parquet"],
-        canonical_manifest_path=upstream["canonical_manifest"],
-        split_manifest_path=upstream["split_manifest"],
-        manifest_path=out / "singapore_2024_forecast_policy.json",
-        frozen_at_utc="2026-09-16T00:00:00+00:00",
-    )
-    kwargs.update(over)
-    return module.materialize_forecast_policy(**kwargs)
-
-
-def _policy_json(path):
-    return json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-
-
-def test_policy_manifest_records_the_frozen_policy(tmp_path):
-    upstream = write_upstream(tmp_path)
-    result = materialize_policy(upstream, tmp_path / "out")
+def test_policy_manifest_records_the_frozen_policy(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
+    result = materialize_policy(chain, chain["root"])
     manifest = _policy_json(result["manifest_path"])
 
     assert manifest["schema"] == POLICY_SCHEMA
@@ -636,72 +1236,80 @@ def test_policy_manifest_records_the_frozen_policy(tmp_path):
         "formal_scenario_bundle_ready": False,
         "formal_training_ready": False,
     }
-    assert manifest["frozen_at_utc"] == "2026-09-16T00:00:00+00:00"
+    assert manifest["frozen_at_utc"] == FROZEN_AT
+    assert manifest["materializer_revision"] == importlib.import_module(
+        FORECAST_MODULE).provider_code_revision()
 
 
-def test_policy_manifest_paths_are_repo_relative(tmp_path):
-    upstream = write_upstream(tmp_path)
-    result = materialize_policy(upstream, tmp_path / "out")
-    text = pathlib.Path(result["manifest_path"]).read_text(encoding="utf-8")
+def test_policy_manifest_paths_are_repo_relative(chain):
+    text = chain["policy_manifest"].read_text(encoding="utf-8")
     assert "/Users/" not in text
     assert str(REPO_ROOT) not in text
 
 
-def test_policy_manifest_is_idempotent(tmp_path):
-    upstream = write_upstream(tmp_path)
-    out = tmp_path / "out"
-    result = materialize_policy(upstream, out)
+def test_policy_manifest_is_idempotent(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
+    out = chain["root"]
+    result = materialize_policy(chain, out)
     path = pathlib.Path(result["manifest_path"])
     st = path.stat()
     before = (st.st_size, hashlib.sha256(path.read_bytes()).hexdigest(), st.st_mtime_ns)
-    materialize_policy(upstream, out)
+    materialize_policy(chain, out)
     st = path.stat()
     assert (st.st_size, hashlib.sha256(path.read_bytes()).hexdigest(),
             st.st_mtime_ns) == before
 
 
-def test_policy_manifest_rejects_tampering(tmp_path):
-    upstream = write_upstream(tmp_path)
-    out = tmp_path / "out"
-    result = materialize_policy(upstream, out)
-    path = pathlib.Path(result["manifest_path"])
-    tampered = json.loads(path.read_text(encoding="utf-8"))
+def test_policy_manifest_rejects_tampering(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
+    out = chain["root"]
+    tampered = _policy_json(chain["policy_manifest"])
     tampered["period_steps"] = 24
-    path.write_text(json.dumps(tampered), encoding="utf-8")
+    _rewrite_json(chain["policy_manifest"], tampered)
     with pytest.raises(ValueError):
-        materialize_policy(upstream, out)
+        materialize_policy(chain, out)
 
 
-def test_policy_manifest_fails_closed_on_upstream_hash_mismatch(tmp_path):
-    upstream = write_upstream(tmp_path)
-    upstream["parquet"].write_bytes(b"tampered")
+def test_policy_manifest_fails_closed_on_upstream_hash_mismatch(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
+    chain["parquet"].write_bytes(b"tampered")
     with pytest.raises(ValueError):
-        materialize_policy(upstream, tmp_path / "out")
+        materialize_policy(chain, chain["root"])
 
 
-def test_policy_manifest_rejects_an_unknown_field(tmp_path):
-    upstream = write_upstream(tmp_path)
-    out = tmp_path / "out"
-    result = materialize_policy(upstream, out)
-    path = pathlib.Path(result["manifest_path"])
-    tampered = json.loads(path.read_text(encoding="utf-8"))
+def test_policy_manifest_rejects_a_forged_minimal_split_manifest(chain, monkeypatch):
+    """物化器同样要求 split manifest 通过 M1.3d 的完整严格校验。"""
+    _allow_clean_generator(monkeypatch)
+    chain["split_manifest"].write_text(json.dumps({
+        "schema": "m1.3d-singapore-2024-splits-v1",
+        "canonical_parquet_sha256": hashlib.sha256(
+            chain["parquet"].read_bytes()).hexdigest(),
+    }), encoding="utf-8")
+    with pytest.raises(ValueError):
+        materialize_policy(chain, chain["root"])
+
+
+def test_policy_manifest_rejects_an_unknown_field(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
+    out = chain["root"]
+    tampered = _policy_json(chain["policy_manifest"])
     tampered["future_extension"] = 1
-    path.write_text(json.dumps(tampered), encoding="utf-8")
+    _rewrite_json(chain["policy_manifest"], tampered)
     with pytest.raises(ValueError):
-        materialize_policy(upstream, out)
+        materialize_policy(chain, out)
 
 
-def test_policy_manifest_first_write_failure_leaves_no_half_state(tmp_path, monkeypatch):
+def test_policy_manifest_first_write_failure_leaves_no_half_state(chain, monkeypatch):
+    _allow_clean_generator(monkeypatch)
     module = _policy_module()
-    upstream = write_upstream(tmp_path)
-    out = tmp_path / "out"
+    out = chain["root"] / "fresh_out"
 
     def boom(path, text):
         raise OSError("injected policy manifest install failure")
 
     monkeypatch.setattr(module, "_atomic_write_text", boom)
     with pytest.raises(OSError):
-        materialize_policy(upstream, out)
+        materialize_policy(chain, out)
     assert [p.name for p in out.iterdir()] == []
 
 
@@ -715,15 +1323,23 @@ def test_policy_materializer_revision_is_git_verified():
     assert revision == expected
 
 
-def test_policy_dirty_generator_is_rejected(tmp_path, monkeypatch):
+def test_policy_dirty_generator_is_rejected(chain, monkeypatch):
     module = _policy_module()
-    upstream = write_upstream(tmp_path)
     monkeypatch.setattr(module, "_generator_is_dirty", lambda: True)
     with pytest.raises(ValueError, match="未提交"):
-        materialize_policy(upstream, tmp_path / "out")
+        materialize_policy(chain, chain["root"] / "out")
 
 
-# --- 8. 上游不变与正式路径仍 blocked -----------------------------------------
+def test_policy_dirty_generator_check_matches_git():
+    """`_generator_is_dirty()` 必须真的以 `git status` 为准，而不是常量。"""
+    module = _policy_module()
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *module.FORECAST_SOURCE_PATHS],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
+    assert module._generator_is_dirty() is bool(status.strip())
+
+
+# --- 12. 上游不变与正式路径仍 blocked -----------------------------------------
 
 def test_upstream_manifests_are_untouched_by_this_card():
     status = subprocess.run(
@@ -756,21 +1372,24 @@ def test_formal_build_scenario_still_fails_closed():
         build_scenario("train", start="2024-01-01", horizon=24, forecast_cutoff=4)
 
 
-# --- 9. 真实资产的 slow 验收 ------------------------------------------------
+# --- 13. 真实资产的 slow 验收 ------------------------------------------------
 
 @pytest.mark.slow
 def test_real_upstream_policy_materialization(tmp_path):
     canonical_parquet = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
     canonical_manifest = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
     split_manifest = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
-    if not all(p.exists() for p in (canonical_parquet, canonical_manifest, split_manifest)):
+    policy_manifest = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy.json"
+    if not all(p.exists() for p in (canonical_parquet, canonical_manifest,
+                                    split_manifest, policy_manifest)):
         pytest.skip("真实上游资产不在本机")
-    upstream = {"parquet": canonical_parquet,
-                "canonical_manifest": canonical_manifest,
-                "split_manifest": split_manifest}
-    artifact = forecast_artifact(upstream, origin=200, cutoff=4)
-    assert set(artifact.series) == set(DRIVERS)
-    result = materialize_policy(upstream, tmp_path / "out")
-    manifest = _policy_json(result["manifest_path"])
+    chain = {"parquet": canonical_parquet, "canonical_manifest": canonical_manifest,
+             "split_manifest": split_manifest, "policy_manifest": policy_manifest}
+    artifact = forecast_artifact(chain, origin=200, cutoff=4)
+    assert set(artifact.series.as_dict()) == set(DRIVERS)
+    assert artifact.code_revision == importlib.import_module(
+        FORECAST_MODULE).provider_code_revision()
+    manifest = _policy_json(policy_manifest)
     assert manifest["readiness"]["available_driver_forecasts_ready"] is True
     assert manifest["readiness"]["formal_training_ready"] is False
+    assert manifest["materializer_revision"] == artifact.code_revision
