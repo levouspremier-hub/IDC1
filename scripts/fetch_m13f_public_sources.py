@@ -19,15 +19,33 @@
 
 已冻结的 M1.2 raw 资产实际为 0.27 / 0.34 / 0.85 / **14.47** MiB，
 据此把单源上限固定为 **16 MiB**（既有最大 raw 资产向上取整）。
-**任何超过上限的来源一律拒绝下载**，只登记元数据并升级人工。
+超过上限的来源默认**拒绝下载**，只登记元数据并升级人工；
+**唯一例外**是经人工逐条批准、且带 `exception_cap_bytes` 的 pinned URL
+（`effective_cap()` 只对这类来源放宽，通用上限不变）。
+
+## 不可变性
+
+- 正式 manifest **已存在且语义不同 → fail closed**，禁止覆盖；
+- 完全相同 → 直接返回，**不改变 `mtime_ns`**；
+- 重复 `--fetch` **复用**现存合法 `frozen_at_utc`，不得随墙钟漂移；
+- 首次生成用临时文件 + 原子安装，任一步失败不破坏已有产物。
 
 ## 四条红线（固化为可测试守卫）
 
 1. `assert_year_matches()`：2026 光伏 profile **不得**冒充 2024 真值；
 2. `assert_resolution_matches()`：年度碳因子**不得**冒充半小时碳强度真值；
-3. `assert_parameters_approved()`：未批准参数**不得**生成正式 PV / 风电
-   （`pv_capacity_kw=500` 是旧仿真假设，**不得继承**）；
+3. `assert_parameters_approved()`：只有**结构化人工批准**（带 `decision_id`
+   与批准日期）的参数才可用；标为 `legacy_inherited` 的旧仿真假设
+   **不得继承**为正式口径；
 4. `assert_no_silent_replay()`：Azure 2019 trace **不得**被静默重放成 2024 arrival。
+
+## 严格校验的单一入口
+
+`validate_public_source_manifest()` 是**唯一**入口：顶层/entry/参数对象键集合精确、
+`source_id` 集合与**顺序**精确、固定声明与 `SOURCE_SPECS` 逐字段恒等、
+`blocked`/`refused` 来源**同样校验（不得跳过）**、`readiness`/红线/参数块完整恒等；
+任何畸形输入**只抛** `SourcePolicyError`。`verify_local`、`--verify` 与 `--fetch`
+完成后的复核**共用**它，不维护较弱的第二套规则。
 
 ## 用法
 
@@ -49,9 +67,10 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -65,6 +84,89 @@ CONTRACT_VERSION = "contract-v8"
 
 # 先验锚点：既有最大 raw 资产 14.47 MiB 向上取整。
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
+MAX_SOURCE_BYTES_ANCHOR = (
+    "既有 M1.2 raw 资产最大 14.47 MiB（sasea_demand_2024.zip）向上取整"
+)
+
+# --- 冻结的 manifest schema（**精确**键集合） --------------------------------
+
+TOP_KEYS: tuple[str, ...] = (
+    "schema", "contract_version", "max_source_bytes", "max_source_bytes_anchor",
+    "frozen_at_utc", "sources", "human_approved_parameters",
+    "unapproved_parameters", "red_lines", "readiness",
+)
+SOURCE_COMMON_KEYS: tuple[str, ...] = (
+    "source_id", "route", "role", "classification", "status", "url", "license",
+    "license_url", "pinned_ref", "data_year", "resolution",
+)
+STATUS_EXTRA_KEYS: dict[str, tuple[str, ...]] = {
+    "frozen": ("logical_path", "bytes", "sha256"),
+    "blocked": ("blocked_reason",),
+    "refused_over_size_cap": (
+        "refused_reason", "observed_content_length", "exception_cap_bytes",
+        "decision_id",
+    ),
+}
+PARAM_KEYS: tuple[str, ...] = ("value", "unit", "status", "decision_id", "approved_on")
+PARAM_STATUSES: tuple[str, ...] = ("human_approved", "UNAPPROVED", "legacy_inherited")
+
+RED_LINES: tuple[str, ...] = (
+    "2026 Solar Generation Profile 不得冒充 2024 真值",
+    "年度碳因子不得冒充半小时碳强度真值",
+    "未批准参数不得生成正式 PV / 风电；pv_capacity_kw=500 不得继承",
+    "Azure 2019 trace 不得被静默重放成 2024 arrival",
+)
+
+# 人工决定（**只登记，不实施**；§D.4 的 B1/B4）：
+# 本轮把批准值写进 manifest，但**不**把任何 readiness 改为 true，
+# 也**不**生成任何正式序列。
+APPROVED_ON = "2026-09-16"
+
+
+def _approved(value: Any, unit: str, decision_id: str) -> dict[str, Any]:
+    return {
+        "value": value, "unit": unit, "status": "human_approved",
+        "decision_id": decision_id, "approved_on": APPROVED_ON,
+    }
+
+
+def _unapproved(unit: str) -> dict[str, Any]:
+    return {
+        "value": None, "unit": unit, "status": "UNAPPROVED",
+        "decision_id": None, "approved_on": None,
+    }
+
+
+HUMAN_APPROVED_PARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
+    "local_pv_kw": {
+        "pv_capacity_kw": _approved(500.0, "kW", "B4"),
+        "tilt_deg": _approved(10.0, "deg", "B4"),
+        "azimuth_deg": _approved(180.0, "deg", "B4"),
+        "array_type": _approved("fixed_open_rack", "text", "B4"),
+        "losses_pct": _approved(14.0, "percent", "B4"),
+        "gamma_pdc_per_deg_c": _approved(-0.004, "1/degC", "B4"),
+        "dc_ac_ratio": _approved(1.2, "dimensionless", "B4"),
+        "eta_inv_nom": _approved(0.96, "dimensionless", "B4"),
+        "temperature_model": _approved("open_rack_glass_polymer", "text", "B4"),
+    },
+    "wind_generation_kw": {
+        "turbine_model": _approved("E48/800", "text", "B4"),
+        "hub_height_m": _approved(60.0, "m", "B4"),
+        "shear_exponent": _approved(1.0 / 7.0, "dimensionless", "B4"),
+        "rated_capacity_kw": _approved(800.0, "kW", "B4"),
+    },
+    "carbon_intensity": {
+        "carbon_intensity_kg_per_kwh": _approved(0.402, "kgCO2/kWh", "B1"),
+    },
+}
+# 仍然**未**获批的部分：arrival 的过程族/参数/seed 策略（B3 只批准下载 trace 包）。
+UNAPPROVED_PARAMETERS: dict[str, dict[str, dict[str, Any]]] = {
+    "arrival": {
+        "process_family": _unapproved("text"),
+        "parameters": _unapproved("n/a"),
+        "seed_policy": _unapproved("n/a"),
+    },
+}
 
 # 分类口径（卡面 §B.3）
 CLASSIFICATIONS = (
@@ -203,7 +305,7 @@ SOURCE_SPECS: tuple[dict[str, Any], ...] = (
         "source_id": "ema_grid_emission_factor_annual",
         "route": "A",
         "role": "carbon_intensity_candidate",
-        "classification": "external_low_resolution",
+        "classification": "human_approved_external_low_resolution",
         "url": (
             "https://api-production.data.gov.sg/v2/public/api/datasets/"
             "d_3de362b580b2dd2fd50cc1006d4edd4f/metadata"
@@ -215,15 +317,19 @@ SOURCE_SPECS: tuple[dict[str, Any], ...] = (
         "bytes": 0,
         "sha256": None,
         "data_year": None,
-        "resolution": "annual",
+        "resolution": "annual_constant",
         "required_columns": (),
         "license_marker": None,
         "status": "blocked",
         "blocked_reason": (
             "ema.gov.sg 被 Incapsula 反爬拦截（返回挑战页，非真实内容）；"
-            "data.gov.sg 的 EMA GEF 数据集 coverageEnd=2020-12-31，"
-            "**不含 2024**。因此卡片要求的「机器核验 2024 GEF = 0.402 kg CO2/kWh」"
-            "在本环境无法完成，且不得写死该数值。"
+            "data.gov.sg 的 EMA GEF 数据集 coverageEnd=2020-12-31，**不含 2024**，"
+            "因此**无法**从本环境可达的官方机读来源核验 2024 值。"
+            "人工决定 **B1**（2026-09-16）已批准 2024 年内常数 "
+            "0.402 kgCO2/kWh（见 human_approved_parameters.carbon_intensity），"
+            "classification = human_approved_external_low_resolution、"
+            "resolution = annual_constant；**不得**描述为半小时实测或 "
+            "half_hourly truth，且本轮**不**改变任何 readiness。"
         ),
         "coverage_start": "2005-01-01",
         "coverage_end": "2020-12-31",
@@ -253,10 +359,17 @@ SOURCE_SPECS: tuple[dict[str, Any], ...] = (
         "observed_content_length": 142968140,
         "refused_reason": (
             "官方发布包 Content-Length = 142,968,140 B ≈ 136.3 MiB，"
-            "远超 16 MiB 上限；容器列举返回 PublicAccessNotPermitted，"
+            "远超默认 16 MiB 上限；容器列举返回 PublicAccessNotPermitted，"
             "逐文件 blob 路径返回 HTTP 409（不可公开寻址）。"
             "按大小上限政策**拒绝盲目下载**，只登记元数据并升级人工。"
+            "人工决定 **B3**（2026-09-16）已批准：**仅**该 pinned URL 适用 "
+            "160 MiB 特例上限；通用 MAX_SOURCE_BYTES=16 MiB 保持不变；"
+            "正式下载须**再次**核验 Content-Length、最终 URL、SHA-256、"
+            "容器成员与许可。**本轮不下载该包**（status 仍为 "
+            "refused_over_size_cap，未冻结）。"
         ),
+        "exception_cap_bytes": 160 * 1024 * 1024,
+        "decision_id": "B3",
         "published_revision": "revision 2, 20200618",
     },
 )
@@ -264,15 +377,86 @@ SOURCE_SPECS: tuple[dict[str, Any], ...] = (
 FROZEN_SPECS = tuple(s for s in SOURCE_SPECS if s["status"] == "frozen")
 
 
+# --- 严格类型工具（任何畸形输入只抛 SourcePolicyError） ----------------------
+
+def _require_exact_keys(mapping: Any, *, field: str,
+                        expected: Sequence[str]) -> dict:
+    if not isinstance(mapping, dict):
+        raise SourcePolicyError(f"{field} 必须是 object，实际 {type(mapping).__name__}")
+    actual = set(mapping)
+    wanted = set(expected)
+    if actual != wanted:
+        raise SourcePolicyError(
+            f"{field} 键集合必须精确等于冻结 schema；"
+            f"多出={sorted(actual - wanted)} 缺少={sorted(wanted - actual)}"
+        )
+    return mapping
+
+
+def _require_plain_int(value: Any, *, field: str) -> int:
+    """严格整数：拒绝 bool（`bool` 是 `int` 的子类）、浮点、字符串、None、容器。"""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SourcePolicyError(f"{field} 必须是整数（bool 不算），实际 {value!r}")
+    return value
+
+
+def _require_str(value: Any, *, field: str, allow_none: bool = False) -> str | None:
+    if value is None and allow_none:
+        return None
+    if not isinstance(value, str) or not value:
+        raise SourcePolicyError(f"{field} 必须是非空字符串，实际 {value!r}")
+    return value
+
+
+def _require_canonical_utc(value: Any, *, field: str) -> str:
+    from datetime import datetime
+
+    if not isinstance(value, str) or not value:
+        raise SourcePolicyError(f"{field} 必须是非空字符串，实际 {value!r}")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise SourcePolicyError(f"{field} 不是合法 ISO-8601：{value!r}") from error
+    if parsed.tzinfo is None:
+        raise SourcePolicyError(f"{field} 必须带显式时区偏移：{value!r}")
+    if parsed.isoformat() != value or not value.endswith("+00:00"):
+        raise SourcePolicyError(f"{field} 必须是规范 UTC ISO-8601：{value!r}")
+    return value
+
+
+def _require_plain_date(value: Any, *, field: str) -> str:
+    from datetime import date
+
+    if not isinstance(value, str) or not value:
+        raise SourcePolicyError(f"{field} 必须是 YYYY-MM-DD 字符串，实际 {value!r}")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise SourcePolicyError(f"{field} 不是合法日期：{value!r}") from error
+    if parsed.isoformat() != value:
+        raise SourcePolicyError(f"{field} 必须规范化为 YYYY-MM-DD：{value!r}")
+    return value
+
+
 # --- 校验守卫 ----------------------------------------------------------------
+
+def effective_cap(spec: dict) -> int:
+    """该来源适用的上限：默认 16 MiB；**仅**经人工特例批准的 pinned URL 可放宽。"""
+    exception = spec.get("exception_cap_bytes")
+    if exception is None:
+        return MAX_SOURCE_BYTES
+    return max(MAX_SOURCE_BYTES, _require_plain_int(
+        exception, field=f"{spec.get('source_id')}.exception_cap_bytes"))
+
 
 def assert_within_size_cap(spec: dict) -> None:
     """单源大小上限（发任何请求**之前**判定）。"""
+    cap = effective_cap(spec)
     observed = spec.get("observed_content_length") or spec.get("bytes") or 0
-    if observed > MAX_SOURCE_BYTES:
+    if observed > cap:
         raise SourcePolicyError(
-            f"{spec['source_id']} 大小 {observed} B 超过上限 {MAX_SOURCE_BYTES} B"
-            "（16 MiB；锚点为既有最大 raw 资产 14.47 MiB）"
+            f"{spec['source_id']} 大小 {observed} B 超过上限 {cap} B"
+            "（默认 16 MiB；锚点为既有最大 raw 资产 14.47 MiB）"
         )
 
 
@@ -297,20 +481,47 @@ def assert_resolution_matches(spec: dict, *, required: str) -> None:
 
 
 def assert_parameters_approved(params: dict, *, route: str) -> None:
-    """参数守卫：未获人工批准的物理参数不得生成正式 PV / 风电。"""
+    """参数守卫：只有**结构化人工批准**的参数才可用于正式 PV / 风电。
+
+    `pv_capacity_kw` **可以**是 500 —— 只要它是一次**新的人工批准**
+    （带 `decision_id` 与批准日期），而不是从旧仿真假设「legacy 继承」来的。
+    这条区分是本轮修复的重点：原先「只要出现 `pv_capacity_kw` 就一律拒绝」
+    的逻辑不可延续（合法的批准路径也被堵死）。
+    """
     if route not in ("B", "C"):
         raise SourcePolicyError(f"route 必须是 'B' 或 'C'，实际 {route!r}")
-    for name, value in params.items():
-        if value == UNAPPROVED:
+    if not isinstance(params, dict):
+        raise SourcePolicyError(f"参数块必须是 object，实际 {type(params).__name__}")
+    for name, entry in params.items():
+        if not isinstance(entry, dict):
             raise SourcePolicyError(
-                f"{route} 路线参数 {name} 的状态是 {UNAPPROVED}："
+                f"{route} 路线参数 {name} 必须是结构化的批准记录（含 value/unit/"
+                f"status/decision_id/approved_on），"
+                f"实际 {type(entry).__name__}（{entry!r}）"
+            )
+        if set(entry) != set(PARAM_KEYS):
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 键集合必须精确等于 {list(PARAM_KEYS)}，"
+                f"实际 {sorted(entry)}"
+            )
+        status = entry["status"]
+        if status == "legacy_inherited":
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 标记为 legacy_inherited："
+                "不得从旧仿真假设继承为正式口径"
+            )
+        if status != "human_approved":
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 的状态是 {status!r}："
                 "未经人工批准的参数不得生成正式输出"
             )
-    if route == "B" and "pv_capacity_kw" in params:
-        raise SourcePolicyError(
-            "pv_capacity_kw 不得从旧仿真假设（500）继承为正式口径；"
-            "必须由人工显式批准并提供来源"
-        )
+        decision_id = entry["decision_id"]
+        if not isinstance(decision_id, str) or not decision_id:
+            raise SourcePolicyError(
+                f"{route} 路线参数 {name} 缺少 decision_id："
+                "人工批准必须可追溯到具体决定"
+            )
+        _require_plain_date(entry["approved_on"], field=f"{name}.approved_on")
 
 
 def assert_no_silent_replay(*, trace_year: int, target_year: int) -> None:
@@ -350,6 +561,11 @@ def fetch_bytes(url: str, *, opener: Callable[[str], Any] | None = None) -> byte
 
 def _read_url(url: str) -> Any:
     return urllib.request.urlopen(url, timeout=60)  # noqa: S310
+
+
+def _now_utc() -> str:
+    """当前规范 UTC 时间戳（独立函数，便于测试注入）。"""
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 # --- 文件校验与原子安装 ------------------------------------------------------
@@ -419,10 +635,11 @@ def install_frozen(spec: dict, body: bytes, dest_dir: Path) -> Path:
     return target
 
 
-def download_to_temp(spec: dict, dest_dir: Path) -> Path:
+def download_to_temp(spec: dict, dest_dir: Path, *,
+                     opener: Callable[[str], Any] | None = None) -> Path:
     """获取 → 校验 → 原子安装。任一步失败都不留下半文件。"""
     assert_within_size_cap(spec)
-    body = fetch_bytes(spec["url"])
+    body = fetch_bytes(spec["url"], opener=opener)
     if len(body) != spec["bytes"]:
         raise SourcePolicyError(
             f"{spec['source_id']} 远端字节数 {len(body)} != 登记值 {spec['bytes']}"
@@ -434,14 +651,170 @@ def download_to_temp(spec: dict, dest_dir: Path) -> Path:
 
 # --- manifest ----------------------------------------------------------------
 
+def _require_spec_field(spec: dict, entry: dict, field: str) -> Any:
+    expected = spec.get(field)
+    actual = entry.get(field)
+    if actual != expected:
+        raise SourcePolicyError(
+            f"{spec['source_id']}.{field} 必须与代码内 SOURCE_SPECS 恒等："
+            f"期望 {expected!r}，实际 {actual!r}"
+        )
+    return actual
+
+
+def validate_public_source_manifest(
+    manifest_path: Path = MANIFEST_PATH, root: Path = REPO_ROOT
+) -> dict:
+    """**单一严格入口**：校验冻结 manifest 的每一层。
+
+    `verify_local`、`--verify` 与 `--fetch` 完成后的复核都必须调用它，
+    不得另维护一套更弱的规则。任何畸形输入只抛 `SourcePolicyError`。
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.is_file():
+        raise SourcePolicyError(f"缺少冻结 manifest {manifest_path}：先运行 --fetch")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise SourcePolicyError(f"{manifest_path} 不是合法 JSON：{error}") from error
+
+    payload = _require_exact_keys(payload, field="manifest", expected=TOP_KEYS)
+    if payload["schema"] != MANIFEST_SCHEMA:
+        raise SourcePolicyError(
+            f"schema 必须是 {MANIFEST_SCHEMA!r}，实际 {payload['schema']!r}"
+        )
+    if payload["contract_version"] != CONTRACT_VERSION:
+        raise SourcePolicyError(
+            f"contract_version 必须是 {CONTRACT_VERSION!r}，"
+            f"实际 {payload['contract_version']!r}"
+        )
+    if _require_plain_int(payload["max_source_bytes"],
+                          field="max_source_bytes") != MAX_SOURCE_BYTES:
+        raise SourcePolicyError(f"max_source_bytes 必须是 {MAX_SOURCE_BYTES}")
+    if payload["max_source_bytes_anchor"] != MAX_SOURCE_BYTES_ANCHOR:
+        raise SourcePolicyError("max_source_bytes_anchor 必须等于冻结的锚点说明")
+    _require_canonical_utc(payload["frozen_at_utc"], field="frozen_at_utc")
+
+    sources = payload["sources"]
+    if not isinstance(sources, list):
+        raise SourcePolicyError(f"sources 必须是 list，实际 {type(sources).__name__}")
+    expected_ids = [spec["source_id"] for spec in SOURCE_SPECS]
+    actual_ids = []
+    for entry in sources:
+        if not isinstance(entry, dict) or not isinstance(entry.get("source_id"), str):
+            raise SourcePolicyError("sources[*] 必须是含字符串 source_id 的 object")
+        actual_ids.append(entry["source_id"])
+    if actual_ids != expected_ids:
+        raise SourcePolicyError(
+            "sources 的 source_id 集合与**顺序**必须精确等于 SOURCE_SPECS："
+            f"期望 {expected_ids}，实际 {actual_ids}"
+        )
+
+    for spec, entry in zip(SOURCE_SPECS, sources, strict=True):
+        status = entry.get("status")
+        if status not in STATUS_EXTRA_KEYS:
+            raise SourcePolicyError(
+                f"{spec['source_id']}.status 未知：{status!r}"
+            )
+        _require_exact_keys(
+            entry, field=f"sources[{spec['source_id']}]",
+            expected=SOURCE_COMMON_KEYS + STATUS_EXTRA_KEYS[status],
+        )
+        # 固定声明必须与代码内 SOURCE_SPECS **逐字段恒等**
+        for field in ("route", "role", "classification", "status", "url", "license",
+                      "license_url", "pinned_ref", "data_year", "resolution"):
+            _require_spec_field(spec, entry, field)
+        _require_str(entry["url"], field=f"{spec['source_id']}.url")
+        _require_str(entry["license"], field=f"{spec['source_id']}.license")
+
+        if status == "frozen":
+            _require_str(entry["logical_path"],
+                         field=f"{spec['source_id']}.logical_path")
+            if _require_plain_int(entry["bytes"],
+                                  field=f"{spec['source_id']}.bytes") != spec["bytes"]:
+                raise SourcePolicyError(f"{spec['source_id']}.bytes 与冻结值不符")
+            if entry["sha256"] != spec["sha256"]:
+                raise SourcePolicyError(f"{spec['source_id']}.sha256 与冻结值不符")
+            target = Path(root) / entry["logical_path"]
+            if not target.is_file():
+                raise SourcePolicyError(
+                    f"{spec['source_id']} 缺少本地冻结文件 {entry['logical_path']}"
+                )
+            validate_frozen_file(spec, target)
+        else:
+            # blocked / refused 来源**同样校验**，不得被跳过
+            reason_field = ("blocked_reason" if status == "blocked"
+                            else "refused_reason")
+            _require_str(entry[reason_field],
+                         field=f"{spec['source_id']}.{reason_field}")
+            if status == "refused_over_size_cap":
+                if _require_plain_int(
+                    entry["observed_content_length"],
+                    field=f"{spec['source_id']}.observed_content_length",
+                ) != spec["observed_content_length"]:
+                    raise SourcePolicyError(
+                        f"{spec['source_id']}.observed_content_length 与实测值不符"
+                    )
+                if _require_plain_int(
+                    entry["exception_cap_bytes"],
+                    field=f"{spec['source_id']}.exception_cap_bytes",
+                ) != spec["exception_cap_bytes"]:
+                    raise SourcePolicyError(
+                        f"{spec['source_id']}.exception_cap_bytes 与批准的例外上限不符"
+                    )
+                if entry["decision_id"] != spec["decision_id"]:
+                    raise SourcePolicyError(
+                        f"{spec['source_id']}.decision_id 与人工决定不符"
+                    )
+
+    # 参数块：已批准与未批准都必须**完整恒等**
+    for key, expected in (("human_approved_parameters", HUMAN_APPROVED_PARAMETERS),
+                          ("unapproved_parameters", UNAPPROVED_PARAMETERS)):
+        block = payload[key]
+        if not isinstance(block, dict) or set(block) != set(expected):
+            raise SourcePolicyError(f"{key} 的顶层键必须精确等于冻结集合")
+        for group, entries in expected.items():
+            if not isinstance(block[group], dict) or set(block[group]) != set(entries):
+                raise SourcePolicyError(f"{key}.{group} 的参数键必须精确等于冻结集合")
+            for name, want in entries.items():
+                got = block[group][name]
+                _require_exact_keys(got, field=f"{key}.{group}.{name}",
+                                    expected=PARAM_KEYS)
+                if got != want:
+                    raise SourcePolicyError(
+                        f"{key}.{group}.{name} 与冻结的批准记录不符"
+                    )
+
+    if not isinstance(payload["red_lines"], list) or tuple(payload["red_lines"]) != RED_LINES:
+        raise SourcePolicyError("red_lines 必须与冻结的四条红线逐项恒等")
+
+    readiness = _require_exact_keys(payload["readiness"], field="readiness",
+                                    expected=tuple(READINESS))
+    for key, expected in READINESS.items():
+        if readiness[key] is not expected:
+            raise SourcePolicyError(
+                f"readiness.{key} 必须严格为 {expected}，实际 {readiness[key]!r}"
+            )
+
+    return {"ok": True, "sources": len(sources),
+            "frozen": sum(1 for e in sources if e["status"] == "frozen"),
+            "not_frozen": sum(1 for e in sources if e["status"] != "frozen")}
+
+
+def validated_source_ids(manifest_path: Path = MANIFEST_PATH,
+                         root: Path = REPO_ROOT) -> tuple[str, ...]:
+    """返回**全部**被校验过的 source_id（含 `blocked` / `refused`）。"""
+    validate_public_source_manifest(manifest_path, root)
+    payload = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    return tuple(entry["source_id"] for entry in payload["sources"])
+
+
 def build_manifest(*, frozen_at_utc: str) -> dict:
     payload = {
         "schema": MANIFEST_SCHEMA,
         "contract_version": CONTRACT_VERSION,
         "max_source_bytes": MAX_SOURCE_BYTES,
-        "max_source_bytes_anchor": (
-            "既有 M1.2 raw 资产最大 14.47 MiB（sasea_demand_2024.zip）向上取整"
-        ),
+        "max_source_bytes_anchor": MAX_SOURCE_BYTES_ANCHOR,
         "frozen_at_utc": frozen_at_utc,
         "sources": [
             {
@@ -454,47 +827,39 @@ def build_manifest(*, frozen_at_utc: str) -> dict:
                 "license": spec["license"],
                 "license_url": spec["license_url"],
                 "pinned_ref": spec["pinned_ref"],
-                "logical_path": (
-                    f"{_LOGICAL_PREFIX}/{spec['local_name']}"
-                    if spec["status"] == "frozen" else None
-                ),
-                "bytes": spec["bytes"],
-                "sha256": spec["sha256"],
                 "data_year": spec["data_year"],
                 "resolution": spec["resolution"],
-                **({"blocked_reason": spec["blocked_reason"]}
-                   if "blocked_reason" in spec else {}),
-                **({"refused_reason": spec["refused_reason"],
-                    "observed_content_length": spec["observed_content_length"]}
-                   if "refused_reason" in spec else {}),
+                **(
+                    {
+                        "logical_path": f"{_LOGICAL_PREFIX}/{spec['local_name']}",
+                        "bytes": spec["bytes"],
+                        "sha256": spec["sha256"],
+                    }
+                    if spec["status"] == "frozen"
+                    else {"blocked_reason": spec["blocked_reason"]}
+                    if spec["status"] == "blocked"
+                    else {
+                        "refused_reason": spec["refused_reason"],
+                        "observed_content_length": spec["observed_content_length"],
+                        "exception_cap_bytes": spec["exception_cap_bytes"],
+                        "decision_id": spec["decision_id"],
+                    }
+                ),
             }
             for spec in SOURCE_SPECS
         ],
-        "unapproved_parameters": {
-            "local_pv_kw": {
-                "pv_capacity_kw": UNAPPROVED,
-                "tilt_deg": UNAPPROVED,
-                "azimuth_deg": UNAPPROVED,
-                "array_type": UNAPPROVED,
-                "losses_pct": UNAPPROVED,
-            },
-            "wind_generation_kw": {
-                "hub_height_m": UNAPPROVED,
-                "shear_exponent": UNAPPROVED,
-                "turbine_model": UNAPPROVED,
-                "rated_capacity_kw": UNAPPROVED,
-            },
-        },
-        "red_lines": [
-            "2026 Solar Generation Profile 不得冒充 2024 真值",
-            "年度碳因子不得冒充半小时碳强度真值",
-            "未批准参数不得生成正式 PV / 风电；pv_capacity_kw=500 不得继承",
-            "Azure 2019 trace 不得被静默重放成 2024 arrival",
-        ],
+        "human_approved_parameters": _copy_block(HUMAN_APPROVED_PARAMETERS),
+        "unapproved_parameters": _copy_block(UNAPPROVED_PARAMETERS),
+        "red_lines": list(RED_LINES),
         "readiness": dict(READINESS),
     }
     _assert_portable(payload)
     return payload
+
+
+def _copy_block(block: dict) -> dict:
+    return {group: {name: dict(entry) for name, entry in entries.items()}
+            for group, entries in block.items()}
 
 
 def _assert_portable(payload: dict) -> None:
@@ -504,11 +869,25 @@ def _assert_portable(payload: dict) -> None:
 
 
 def write_manifest_atomic(payload: dict, path: Path = MANIFEST_PATH) -> None:
+    """写正式 manifest：**已存在且语义不同 → fail closed，禁止覆盖**。
+
+    完全相同 → 直接返回（**不改变 `mtime_ns`**）；首次生成 → 临时文件 + 原子安装。
+    """
+    path = Path(path)
     text = json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if path.exists():
-        existing = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            raise SourcePolicyError(
+                f"已存在的 manifest {path} 不是合法 JSON：{error}"
+            ) from error
         if existing == payload:
             return
+        raise SourcePolicyError(
+            f"已存在的 manifest {path} 与候选**语义不同**：拒绝覆盖冻结产物"
+            "（如需变更请先人工确认并显式删除旧产物）"
+        )
     _atomic_install(path, text.encode("utf-8"))
 
 
@@ -520,43 +899,48 @@ def verify_local(manifest_path: Path = MANIFEST_PATH,
         raise SourcePolicyError(
             f"缺少冻结 manifest {manifest_path}：先运行 --fetch 生成"
         )
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise SourcePolicyError(f"{manifest_path} 不是合法 JSON：{error}") from error
-    failures: list[str] = []
-    for entry in payload["sources"]:
-        if entry["status"] != "frozen":
-            continue
-        spec = next(s for s in SOURCE_SPECS if s["source_id"] == entry["source_id"])
-        target = Path(root) / entry["logical_path"]
-        if not target.exists():
-            failures.append(f"{entry['source_id']}: 缺少 {entry['logical_path']}")
-            continue
-        try:
-            validate_frozen_file(spec, target)
-        except SourcePolicyError as error:
-            failures.append(str(error))
-    return {"ok": not failures, "failures": failures,
-            "checked": sum(1 for e in payload["sources"] if e["status"] == "frozen")}
+    result = validate_public_source_manifest(manifest_path, root)
+    return {"ok": True, "failures": [],
+            "checked": result["sources"]}
 
 
-def run_fetch(dest_dir: Path = RAW_DIR) -> dict:
+def run_fetch(dest_dir: Path = RAW_DIR, *, manifest_path: Path = MANIFEST_PATH,
+              opener: Callable[[str], Any] | None = None) -> dict:
     """显式联网：逐个获取 frozen 来源并写 manifest（原子）。
 
     **只**对 `status == "frozen"` 的来源做前置大小判定与下载；
     `blocked` / `refused_over_size_cap` 的来源**本就不下载**，
     它们的元数据与理由已登记在 manifest 里（超限来源不得阻断其余来源）。
+
+    **不可变性**：若目标 manifest 已存在且**合法**，则**复用**它的
+    `frozen_at_utc`，不得因当前墙钟而改变正式 manifest；
+    已存在但**语义不同**时由 `write_manifest_atomic` fail closed。
     """
     for spec in FROZEN_SPECS:
         assert_within_size_cap(spec)
     for spec in FROZEN_SPECS:
-        download_to_temp(spec, dest_dir)
-    frozen_at = datetime.now(UTC).replace(microsecond=0).isoformat()
-    write_manifest_atomic(build_manifest(frozen_at_utc=frozen_at))
+        download_to_temp(spec, dest_dir, opener=opener)
+    frozen_at = existing_frozen_at_utc(manifest_path) or _now_utc()
+    write_manifest_atomic(build_manifest(frozen_at_utc=frozen_at), manifest_path)
+    validate_public_source_manifest(manifest_path, REPO_ROOT)
     return {"fetched": [s["source_id"] for s in FROZEN_SPECS],
             "refused": [s["source_id"] for s in SOURCE_SPECS
-                        if s["status"] != "frozen"]}
+                        if s["status"] != "frozen"],
+            "frozen_at_utc": frozen_at}
+
+
+def existing_frozen_at_utc(manifest_path: Path = MANIFEST_PATH) -> str | None:
+    """已存在且**合法**的 manifest 的 `frozen_at_utc`；否则 None。"""
+    manifest_path = Path(manifest_path)
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        value = payload["frozen_at_utc"]
+        _require_canonical_utc(value, field="frozen_at_utc")
+    except (json.JSONDecodeError, KeyError, TypeError, SourcePolicyError):
+        return None
+    return value
 
 
 def _report() -> int:
@@ -590,7 +974,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for failure in result["failures"]:
             print(f"verify failed: {failure}", file=sys.stderr)
         return 1
-    print(f"verify ok ({result['checked']} frozen sources)")
+    print(f"verify ok（已校验 {result['checked']} 个来源，含 blocked/refused）")
     _report()
     return 0
 
