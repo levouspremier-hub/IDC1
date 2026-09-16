@@ -14,7 +14,7 @@
   "frequency": "30min",
   "frozen_at_utc": "2026-09-16T00:00:00+00:00",
   "information_policy": "closed_open_[origin-48, origin)",
-  "materializer_revision": "640102943ff805646f1d9c58e5d0571d585b0ada",
+  "materializer_revision": "a124dd3f7c50dfb92d077eb5f8c044bd849cff03",
   "method": "trailing_seasonal_naive",
   "period_steps": 48,
   "readiness": {
