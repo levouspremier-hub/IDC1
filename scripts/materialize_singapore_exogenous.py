@@ -583,15 +583,20 @@ def materialize_exogenous_drivers(
                         "bytes": archive_path.stat().st_size,
                         "final_url_verified": True,
                         "allowed_final_hosts": list(_ALLOWED_ASSET_HOSTS)}
+        # **先**写 v2 来源 manifest：输出 manifest 会引用它的 SHA-256
+        if not SOURCE_MANIFEST.exists():
+            created.append(SOURCE_MANIFEST)
+        if not out_manifest.exists():
+            created.append(out_manifest)
+        source_payload = build_source_manifest(
+            archive=archive_info, members=members, frozen_at_utc=frozen_at_utc)
+        write_json_atomic(source_payload, SOURCE_MANIFEST)
         payload = build_manifest(
             inputs=inputs, frame=frame, output_path=out_parquet, template=template,
             archive=archive_info, members=members,
             materializer_revision=resolve_materializer_revision(),
             frozen_at_utc=frozen_at_utc,
         )
-        source_payload = build_source_manifest(
-            archive=archive_info, members=members, frozen_at_utc=frozen_at_utc)
-        write_json_atomic(source_payload, SOURCE_MANIFEST)
         write_json_atomic(payload, out_manifest)
     except BaseException:
         for path in created:
