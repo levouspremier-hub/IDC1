@@ -7,10 +7,13 @@
 >
 > 当前 HEAD（整合分支）：M1.3b **已通过**、M1.3c 审计通过、
 > **M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3 三轮返修）、
-> **M1.3e 前三轮审核均不通过，已完成 R1/R2/R3 返修并再次提交复审**。
-> ⚠️ **在 M1.3e-R3 通过人工复审之前，M1.3e 不得视为完成**；**M1.3f 未开始**；
-> 正式 `ScenarioBundle`、训练与评估**仍然 blocked**。
-> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2、§7K.10 R3）。
+> **M1.3e 已通过人工复审**（2026-09-16，含 R1/R2/R3 三轮返修），契约版本
+> **`contract-v8`**，forecast policy manifest 已冻结。
+> ⚠️ **M1.3e 通过不解除正式链的门禁**：`forecast_ready=false`、
+> `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
+> **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
+> **M1.3f-b 未开始**；当前进入 **M1.3f-a**（四项缺失驱动口径决策审计，只读）。
+> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2、§7K.10 R3、§7K.11 通过登记）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -744,6 +747,32 @@ git revert 0124b85 5d06ca9 055258a e052a18 2f489d3
 正式 ScenarioBundle、训练与评估仍然 blocked。**
 `ArtifactDigest.logical_path` 现已收紧为规范 POSIX 路径——含 `://`、空片段或
 `..` 片段的逻辑路径今后一律拒绝。
+
+### 7K.11 M1.3e **已通过人工复审**（2026-09-16）——本卡正式完成
+
+三轮返修（R1/R2/R3）全部通过。最终有效状态（详见卡片 §20）：
+
+| 项 | 值 |
+|---|---|
+| 最终有效 HEAD（登记提交的父提交） | `122ba5466b09f7393f2b1b5ed3c505c43e3a80d7` |
+| 全仓唯一契约版本 | **`contract-v8`** |
+| policy manifest `materializer_revision` | `055258a9d09ca8b724ea2c075014c0910de06bff` |
+| policy manifest SHA-256 | `0bf31f80ff0c9acd67dad5082e08eee7364397a2dbfa429e4a34c3d87a702923` |
+
+**交付**：contract-v8 结构化 forecast provenance；policy → split → canonical
+manifest → parquet 完整信任链；因果 trailing seasonal-naive provider
+（`forecast[k] = y(origin + k − 48)`，历史窗口严格 `[origin-48, origin)`）；
+深度不可变契约与 artifact 内部证据闭环；coercion 前的严格外部类型与规范
+POSIX 逻辑路径校验；forecast policy manifest 及其幂等/原子/防覆盖/dirty 门禁。
+
+**M1.3e 通过不解除任何正式链门禁**：`forecast_ready=false`、
+`formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
+四项缺口仍 **unavailable**；`configs/frozen_refs/refs.json` 仍为声明的物理尺度，
+最迟 **M1.3g 前**由 train 切分冻结；`train.json`/`validation.json`/`test.json`
+**未创建**；checkpoint **0**。
+
+**下一张卡是 M1.3f-a**（四项缺失驱动的正式口径与数据源决策审计，**只读**，
+只产出决策矩阵），**不是 M6**；**不新增 M5.5**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
