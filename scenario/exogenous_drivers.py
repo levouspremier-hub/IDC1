@@ -295,14 +295,16 @@ def load_wind_power_curve(
     row = match[0]
     speeds: list[float] = []
     power: list[float] = []
-    for column, value in zip(header[1:], row[1:], strict=False):
+    for index, column in enumerate(header[1:], start=1):
+        # 冻结 CSV 的某些行可能比表头短/长；按表头逐列取，越界视为未定义
+        value = row[index] if index < len(row) else ""
         if value in ("", None):
             continue
         speeds.append(float(column))
         power.append(float(value) * WIND_CURVE_W_TO_KW)
     if len(speeds) < 2:
         raise ExogenousDriverError(f"{turbine_type} 的定义点不足")
-    if any(b <= a for a, b in zip(speeds, speeds[1:], strict=True)):
+    if any(b <= a for a, b in zip(speeds, speeds[1:], strict=False)):
         raise ExogenousDriverError("功率曲线的风速定义点必须严格递增")
     return WindPowerCurve(
         turbine_type=turbine_type, speeds_mps=tuple(speeds),
