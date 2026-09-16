@@ -550,15 +550,26 @@ manifest 未变）；实际变更文件仅 `contracts/{__init__,models,validator
 **账本勘误（审核指出）**：上一轮结束报告把已逐条列出的 **14** 个提交
 （`66ce93c..1d9a91d`）写成了「共 13 个」——列表正确、计数错误。
 
+**本轮（`1d9a91d` 之后）全部提交，按时间顺序：**
+
 ```text
-1d9a91d..bee96f7  = 7 个   （实现/产物/测试；18f598e … bee96f7）
-1d9a91d..048dc32  = 8 个   （+ docs(card) 返修证据）
-1d9a91d..de2f88b  = 9 个   （+ docs(handoff) 本交接）
-66ce93c..de2f88b  = 23 个  （初始链 14 + 本轮 9）
+18f598e docs(card): record M1.3e first review rejection and the trust-chain requirements
+ed5b877 test: add failing M1.3e-R1 trust-chain and strict contract-v8 regressions
+d681608 feat: lock the contract version and tighten mode/source_kind semantics
+f5d5656 feat: put the forecast artifact behind the full frozen-asset trust chain
+89f915b feat: regenerate the forecast policy manifest under the trust chain
+05ad552 style: align the forecast provider imports and typing with the gate
+bee96f7 feat: regenerate the forecast policy manifest after the typing fix
+048dc32 docs(card): record M1.3e-R1 repair evidence
+de2f88b docs(handoff): record M1.3e-R1 review rejection and repair
+2ba2593 docs(ledger): state the M1.3e-R1 commit ledger in the exact, re-countable form
+f52348b docs(ledger): use the parent-relative ledger form so no commit claims a future HEAD
 ```
 
-**截至父提交 `de2f88b`，`1d9a91d..de2f88b` 共 9 个；包含本行所在/后续文档提交后更多
-（最终 HEAD 的完整 SHA 见结束报告，不在提交内声称未知 SHA）。**
+可逐条复算的区间计数：`1d9a91d..bee96f7` = 7（实现/产物/测试），
+`1d9a91d..de2f88b` = 9，`66ce93c..de2f88b` = 23。
+本行之后若再有文档提交，上表不随之变化；**最终 HEAD 的完整 SHA 只在结束报告中给出**，
+不在提交内声称未知 SHA。
 
 **回滚（由新到旧，已只读验证零冲突）**：
 
