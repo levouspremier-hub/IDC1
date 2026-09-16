@@ -12,8 +12,8 @@
 > ⚠️ **M1.3e 通过不解除正式链的门禁**：`forecast_ready=false`、
 > `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
 > **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
-> **M1.3f-b 未开始**；当前进入 **M1.3f-a**（四项缺失驱动口径决策审计，只读）。
-> 详见下方 §7K（含 §7K.8 R1、§7K.9 R2、§7K.10 R3、§7K.11 通过登记）。
+> **M1.3f-a 只读决策审计已完成**（结论：四项全部 `BLOCKED`，等待人工选择）；
+> **M1.3f-b 未开始**。详见下方 §7K（M1.3e 三轮返修与通过）与 §7L（M1.3f-a）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -773,6 +773,46 @@ POSIX 逻辑路径校验；forecast policy manifest 及其幂等/原子/防覆�
 
 **下一张卡是 M1.3f-a**（四项缺失驱动的正式口径与数据源决策审计，**只读**，
 只产出决策矩阵），**不是 M6**；**不新增 M5.5**。
+
+### 7L. M1.3f-a：四项缺失驱动的正式口径与数据源决策审计（**只读，执行完成，等待人工选择**）
+
+`docs/task_cards/M1.3f.md`。**纯只读决策卡**：只新增/修改三份 markdown，
+未触碰任何代码、测试、配置、raw、processed、manifest 或 `runs/`。
+
+**核心事实（只读实测）**：raw 四文件只有
+`time, temperature_2m (°C), wind_speed_10m (m/s), shortwave_radiation (W/m²)`
+（ERA5，小时分辨率、**10 m** 风速、**水平面** GHI、前一小时平均）、
+EMC 的 USEP/IGS 月表、SASEA 的 demand —— **四项缺口在 raw 中没有任何来源**。
+仓库内的替代品全部违规或参数不足：
+
+| 位置 | 内容 | 为什么不能用 |
+|---|---|---|
+| `data_io/data_loader.py:54-67` / `:167-173` | `default_zero=True` → 全零 | 红线：全零不得静默进入正式链 |
+| `data_io/data_loader.py:71-83` | `_build_default_pv_curve` 钟形默认 PV 曲线 | 红线：正式模式无默认曲线回退 |
+| `configs/config_ultimate.py:88-89` | `pv_capacity_kw: 500.0` + `use_default_pv_curve: True` | **旧仿真假设，不得默认继承** |
+| `envs/idc_price_env.py:414-439` | 硬编码碳曲线 0.45/0.60/0.70/0.80 kgCO2/kWh | 红线：无来源的默认日曲线 |
+| `configs/frozen_refs/refs.json` | `carbon_factor_ref: 1.0`、`pv_ref_kw: 1.0`、`wind_ref_kw: 1.0`，`training_range=null` | 仍是**声明尺度**；最迟 M1.3g 前由 train 冻结 |
+| `grid_model/emission_model.py:9` | `DEFAULT_EMISSION_FACTOR_KG_PER_MWH = 600.0` | IEEE-14 离线验证用，**不代表新加坡真实电网** |
+| `idc_model/task_forecast.py:41-67` | `perfect`(`truth.copy()`) / `none`(全零) / `noisy`（自述 oracle-corruption，非学习型预测器） | 读取整段未来 truth → 只能保留 synthetic/oracle-debug |
+
+**modeled 方案所需参数在仓库内一个都不存在**：GHI→PV 缺容量/倾角/方位/PR/温度
+修正/限发/受光面积；ERA5 风速→发电量缺轮毂高度/10 m→轮毂高度的切变指数/
+切入-额定-切出/额定容量/空气密度/功率曲线本身（且 ERA5 只有 10 m 风速）。
+碳强度缺半小时燃料结构与排放因子版本；arrival 缺过程族与参数。
+
+**结论：四项全部 `BLOCKED`**。卡片给出机器可核对的决策矩阵（17 列 × 10 行，
+未知值一律写 `UNKNOWN`/`BLOCKED`）、**六项需人工决定清单**，以及后续最小卡序列
+**M1.3f-b**（获批数据冻结或 modeled policy manifest）→ **M1.3f-c**（四类 causal
+provider + 泄漏测试 + provenance）→ **M1.3g**（formal `ScenarioBundle` +
+normalization refs + env/train 接线 + 三个正式 split manifest）。
+
+**M1.3 正式链保持 blocked**：`forecast_ready=false`、
+`formal_scenario_bundle_ready=false`、`formal_training_ready=false`。
+**若人工选择「保持 unavailable」，上述三张卡均不得开始，且不得伪造实现绕过。**
+
+**只读验收**：`make check` exit 0（**2048 passed**）、`make smoke` exit 0、
+`make train` exit 2（不回退 synthetic）、checkpoint **0**、三个保留名不存在；
+raw 四项与上游五项资产 SHA-256 **逐字节未变**；`git diff --check` 为空。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
