@@ -12,8 +12,12 @@
 > ⚠️ **M1.3e 通过不解除正式链的门禁**：`forecast_ready=false`、
 > `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
 > **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
-> **M1.3f-a 只读决策审计已完成**（结论：四项全部 `BLOCKED`，等待人工选择）；
-> **M1.3f-b 未开始**。详见下方 §7K（M1.3e 三轮返修与通过）与 §7L（M1.3f-a）。
+> **M1.3f-a 已通过人工审核**（结论：四项 `BLOCKED`）；
+> **M1.3f-b 已完成**（公开源获取/校验框架 + 冻结 B/C 模型来源 + 登记 A/D 拒绝）。
+> ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 仍全为
+> `false`，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
+> **M1.3f-c 未开始**（需先由人工决定 §B.5 的 B1–B4）。
+> 详见 §7K（M1.3e）、§7L（M1.3f-a）、§7M（M1.3f-b）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -815,6 +819,85 @@ normalization refs + env/train 接线 + 三个正式 split manifest）。
 raw 四项与上游五项资产 SHA-256 **逐字节未变**；`git diff --check` 为空。
 
 **M1.3f-a 已通过人工审核**（2026-09-16）。
+
+### 7M. M1.3f-b：公开数据源获取、许可冻结与可复现实物化（**执行完成，等待人工选择**）
+
+`docs/task_cards/M1.3f.md` §B–§C。建立 `scripts/fetch_m13f_public_sources.py`
+（`--verify` 默认不联网 / `--fetch` 显式联网 / `--report`），冻结**可达且许可明确**的
+模型来源，并对**不可达或超限**的来源 fail closed 并如实登记。
+
+**已冻结五个文件（route B/C，均为 `modeled_scenario` 的模型/方法来源）**：
+
+| 来源 | 官方 URL（不可变 tag） | 许可 | 字节数 | SHA-256 |
+|---|---|---|---|---|
+| pvlib LICENSE | `raw.githubusercontent.com/pvlib/pvlib-python/v0.15.2/LICENSE` | BSD-3-Clause | 1,622 | `a02e12dd…` |
+| pvlib `pvsystem.py` | `…/v0.15.2/pvlib/pvsystem.py`（含 `pvwatts_dc`/`pvwatts_ac`） | BSD-3-Clause | 117,911 | `668afd27…` |
+| windpowerlib LICENSE | `raw.githubusercontent.com/wind-python/windpowerlib/v0.2.2/LICENSE` | MIT | 1,083 | `140f742e…` |
+| windpowerlib 功率曲线 | `…/v0.2.2/windpowerlib/data/default_turbine_data/power_curves.csv` | MIT | 26,042 | `7d91ddde…` |
+| windpowerlib 机组数据 | `…/v0.2.2/windpowerlib/data/default_turbine_data/turbine_data.csv` | MIT | 22,922 | `d379379b…` |
+
+**未冻结两项（原因逐项实测，均未产生任何伪造数据）**：
+
+- **A `carbon_intensity` → `blocked`**：`ema.gov.sg` 返回 **Incapsula 反爬挑战页**
+  （`_Incapsula_Resource`，212–848 B，非真实内容）；`data.gov.sg` 的 EMA 数据集
+  （`managedBy: Energy Market Authority`）**`coverageEnd = 2020-12-31`**，**不含 2024**。
+  → 卡片要求的「机器核验 **2024 GEF = 0.402 kg CO2/kWh**」在本环境**无法完成**，
+  **未写死该数值**，**未**用 2020 及以前外推、**未**用第三方页面代替。
+- **D `arrival` → `refused_over_size_cap`**：官方发布包
+  `Content-Length = 142,968,140 B`（≈136.3 MiB）**远超 16 MiB 上限**；
+  容器列举 `PublicAccessNotPermitted`、逐文件 blob 返回 **HTTP 409**
+  → 官方**无单文件端点**，按上限政策**拒绝盲目下载**，只登记元数据。
+
+**大小上限政策（先验锚点，不是事后挑选）**：既有 M1.2 raw 资产为
+0.27 / 0.34 / 0.85 / **14.47** MiB，据此把单源上限固定为 **16 MiB**
+（既有最大值向上取整）；**在发请求之前**判定；超限来源不下载、
+**不阻断**其余来源。
+
+**四条红线已固化为可测试守卫**：`assert_year_matches`（2026 Solar Generation
+Profile 不得冒充 2024 真值）、`assert_resolution_matches`（年度碳因子不得冒充
+半小时真值）、`assert_parameters_approved`（未批准参数不得生成正式 PV/风电；
+**`pv_capacity_kw=500` 是旧仿真假设，不得继承**）、`assert_no_silent_replay`
+（Azure 2019 trace 不得静默重放成 2024 arrival）。
+
+**仍然 `UNAPPROVED` 的九项参数**：B 路线 `pv_capacity_kw` / `tilt_deg` /
+`azimuth_deg` / `array_type` / `losses_pct`；C 路线 `hub_height_m` /
+`shear_exponent` / `turbine_model` / `rated_capacity_kw`。
+
+```text
+public_source_frozen              = true
+local_pv_kw_ready                 = false
+wind_generation_kw_ready          = false
+carbon_intensity_ready            = false
+arrival_ready                     = false
+formal_scenario_bundle_ready      = false
+formal_training_ready             = false
+```
+
+**验收**：focused 25 passed（不联网）+ 1 slow passed（真实网络复核）；`--verify`
+连续两次 exit 0 且 bytes/sha/mtime 不变、无临时文件；`make check` exit 0
+（**2073 passed**）；`make smoke` exit 0；`make train` exit 2 且不回退 synthetic；
+checkpoint 0；三个保留名未创建。**上游十项资产 hash 全部未变**（M1.2 raw 四项、
+M1.3b/M1.3d/M1.3e manifest、parquet、`refs.json`）。
+
+**`.gitignore` 改动（已单独提交并说明）**：README 位于 `data/raw/` 的**两层**
+目录下，既有规则 `!data/raw/*.md` 只解开直接子级，故新增两行**只**放行
+`data/raw/public_benchmarks/*.md`；冻结的原始文件**仍被忽略**（已实测）。
+
+**本轮变更文件**：`.gitignore`、`scripts/fetch_m13f_public_sources.py`（新增）、
+`tests/test_m13f_public_sources.py`（新增）、
+`data/manifest/m13f_public_sources.json`（新增，入库）、
+`data/raw/public_benchmarks/README.md`（新增，入库）、
+`data/raw/public_benchmarks/<5 个冻结文件>`（**不入库**）、两份 docs。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert 593d291 8daea1c 38fe7df 0b5b04d ba15596 75792f1 f148a21 ae144c8
+```
+
+**下一张卡 M1.3f-c 未开始**：需先由人工决定 §B.5 的 B1–B4
+（2024 GEF 官方机读来源 / NREL PVWatts 手册不可达的替代 / Azure trace 上限 /
+九项物理参数）。**M1.3 正式链仍 blocked，不新增 M5.5，不进入 M6。**
 
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
