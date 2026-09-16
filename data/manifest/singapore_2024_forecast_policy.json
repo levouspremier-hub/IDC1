@@ -1,0 +1,37 @@
+{
+  "available_drivers": [
+    "price_sgd_per_kwh",
+    "system_load_mw",
+    "temperature_deg_c",
+    "wind_speed_10m_mps",
+    "ghi_w_per_m2"
+  ],
+  "canonical_manifest_path": "data/manifest/singapore_2024_half_hour.json",
+  "canonical_manifest_sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667",
+  "canonical_parquet_path": "data/processed/singapore_2024/half_hour.parquet",
+  "canonical_parquet_sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+  "contract_version": "contract-v8",
+  "frequency": "30min",
+  "frozen_at_utc": "2026-09-16T00:00:00+00:00",
+  "information_policy": "closed_open_[origin-48, origin)",
+  "materializer_revision": "640102943ff805646f1d9c58e5d0571d585b0ada",
+  "method": "trailing_seasonal_naive",
+  "period_steps": 48,
+  "readiness": {
+    "available_driver_forecasts_ready": true,
+    "complete_scenario_forecasts_ready": false,
+    "formal_scenario_bundle_ready": false,
+    "formal_training_ready": false
+  },
+  "schema": "m1.3e-singapore-2024-forecast-policy-v1",
+  "seed_policy": null,
+  "split_manifest_path": "data/manifest/singapore_2024_splits.json",
+  "split_manifest_sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27",
+  "target_policy": "half_open_[origin, origin+C)",
+  "unavailable_not_materialized": [
+    "local_pv_kw",
+    "wind_generation_kw",
+    "carbon_intensity",
+    "arrival"
+  ]
+}
