@@ -13,7 +13,9 @@
 ## 大小上限
 
 单源上限 **16 MiB**（`16,777,216 B`），锚点为既有 M1.2 raw 资产的最大值
-`14.47 MiB`（`sasea_demand_2024.zip`）向上取整。超限来源**一律拒绝下载**。
+`14.47 MiB`（`sasea_demand_2024.zip`）向上取整。超限来源**默认拒绝下载**；
+**唯一例外**是经人工逐条批准并带 `exception_cap_bytes` 的 pinned URL
+（见下方 B3），通用上限保持不变。
 
 ## 已冻结（`status=frozen`）
 
@@ -25,7 +27,9 @@
 | C | `windpowerlib_v0.2.2_power_curves.csv` | `https://raw.githubusercontent.com/wind-python/windpowerlib/v0.2.2/windpowerlib/data/default_turbine_data/power_curves.csv` | MIT | 26,042 | `7d91ddde701ce6d0ac4cacb31fac04b38f0664921b75ca44c174ca26cd394add` |
 | C | `windpowerlib_v0.2.2_turbine_data.csv` | `https://raw.githubusercontent.com/wind-python/windpowerlib/v0.2.2/windpowerlib/data/default_turbine_data/turbine_data.csv` | MIT | 22,922 | `d379379ba20fe41ec151f74ad5ddf368f9e1cce596756ccea73888d0614c3840` |
 
-两个仓库都以**不可变 tag** 固定（`v0.15.2` / `v0.2.2`），因此 URL 可长期复现。
+两个仓库都以 **pinned tag + 冻结 SHA-256** 固定（`v0.15.2` / `v0.2.2`）。
+⚠️ **准确表述**：Git tag **并非密码学不可移动**（tag 可以被重指或删除）。
+真正的冻结依据是**本地副本 + 本表登记的完整 SHA-256**；tag 只是便于复核的定位符。
 `pvsystem.py` 含 `pvwatts_dc` / `pvwatts_ac`（PVWatts V8 的模块与逆变器模型）。
 
 ## 未冻结（**必须按原因分别对待**）
@@ -62,12 +66,58 @@
    → `assert_parameters_approved()`
 4. **Azure 2019 trace 不得被静默重放成 2024 arrival** → `assert_no_silent_replay()`
 
-## 仍然 `UNAPPROVED` 的参数
+## 人工决定登记（**只登记，不实施**）
 
-| 路线 | 参数 | 状态 |
+> 以下决定已由人工作出并**逐项登记进 manifest**（`human_approved_parameters` /
+> 来源条目），但**本轮不生成任何正式序列**，**也不改变任何 readiness**。
+
+### B1 —— 2024 `carbon_intensity` 批准为**年内常数**
+
+- 值：**0.402 kgCO2/kWh**（decision_id `B1`，批准日期 2026-09-16）
+- `classification = human_approved_external_low_resolution`；
+  `resolution = annual_constant`
+- 来源：EMA 官方 Singapore Energy Statistics 页面（本环境被反爬拦截，未冻结文件）
+- ⚠️ **不得**描述为半小时实测，**不得**称为 `half_hourly` truth；
+  它把年内变化压平，是有明确来源的人工批准低分辨率 modeled 值
+
+### B2 —— `pvlib` v0.15.2 获批为**唯一 PV 模型实现来源**
+
+M1.3f-c 在生成数据前**必须补齐并冻结**以下依赖闭包（本轮**不**做）：
+solar position、GHI decomposition、transposition、cell-temperature、
+PVWatts DC、PVWatts AC 的完整代码/参数依赖。
+
+### B3 —— 批准下载精确的 Azure Functions 2019 官方发布包
+
+- 精确包：`142,968,140 B`；**仅**该 pinned URL 适用 **160 MiB 特例上限**
+  （`exception_cap_bytes`），通用 `MAX_SOURCE_BYTES = 16 MiB` **保持不变**
+- 正式下载时须**再次**核验 Content-Length、最终 URL、SHA-256、容器成员与许可
+- **本卡不下载该包**（`status` 仍为 `refused_over_size_cap`）
+
+### B4 —— 物理参数批准（**全部是 modeled benchmark，不是现场实测**）
+
+| 组 | 参数 | 批准值 | decision_id |
+|---|---|---|---|
+| PV | `pv_capacity_kw` | `500.0`（**本次新批准，非 legacy inheritance**） | B4 |
+| PV | `tilt_deg` | `10.0` | B4 |
+| PV | `azimuth_deg` | `180.0` | B4 |
+| PV | `array_type` | `fixed_open_rack` | B4 |
+| PV | `losses_pct` | `14.0` | B4 |
+| PV | `gamma_pdc_per_deg_c` | `-0.004` | B4 |
+| PV | `dc_ac_ratio` | `1.2` | B4 |
+| PV | `eta_inv_nom` | `0.96` | B4 |
+| PV | `temperature_model` | `open_rack_glass_polymer` | B4 |
+| Wind | `turbine_model` | `E48/800` | B4 |
+| Wind | `hub_height_m` | `60.0` | B4 |
+| Wind | `shear_exponent` | `1/7` | B4 |
+| Wind | `rated_capacity_kw` | `800.0` | B4 |
+
+**这些值本轮仍不得把任何 readiness 改为 true。**
+
+## 仍然 `UNAPPROVED` 的部分
+
+| 组 | 参数 | 状态 |
 |---|---|---|
-| B `local_pv_kw` | `pv_capacity_kw`、`tilt_deg`、`azimuth_deg`、`array_type`、`losses_pct` | **UNAPPROVED** |
-| C `wind_generation_kw` | `hub_height_m`、`shear_exponent`、`turbine_model`、`rated_capacity_kw` | **UNAPPROVED** |
+| `arrival` | `process_family`、`parameters`、`seed_policy` | **UNAPPROVED**（B3 只批准下载 trace 包，未批准过程族） |
 
 ## readiness
 
@@ -80,6 +130,9 @@ arrival_ready                     = false
 formal_scenario_bundle_ready      = false
 formal_training_ready             = false
 ```
+
+> 上表的 `public_source_frozen=true` 只表示**模型/方法来源已冻结**；
+> 六项「ready」全部为 `false`——本卡**未**生成任何正式序列。
 
 **本目录不产生任何正式 `local_pv_kw` / `wind_generation_kw` / `carbon_intensity` /
 `arrival` 序列**，也不解除任何训练门禁。
