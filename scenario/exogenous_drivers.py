@@ -14,9 +14,11 @@
 - **`wind_generation_kw`**：ERA5 10 m 风速按切变律外推到 60 m，
   再按**冻结的** windpowerlib v0.2.2 `E48/800` 功率曲线做确定性线性插值。
 - **`carbon_intensity`**：全 2024 为 **0.402 kgCO2/kWh** 年内常数（B1 人工批准）。
-- **`arrival`**：由 Azure Functions 2019 trace 校准的 **7×48 weekday × half-hour**
-  rate template，按固定 seed 用 Poisson **前向生成**；2019 trace 只校准
-  **分布形状**，**不**重放、**不**改称 2024 真实到达。
+- **`arrival`**：由 Azure Functions 2019 trace 校准的 **48-slot
+  day-of-benchmark-period** rate template（**date-free**：不使用、也不声称
+  archive 提供日期/星期/时区），按固定 seed 用 Poisson **前向生成**；
+  2019 trace 只校准**一个 24 小时周期内的分布形状**，**不**重放、
+  **不**改称 2024 真实到达。
 
 ## 无未来泄漏
 
@@ -57,11 +59,15 @@ PV_PARAMS: dict[str, Any] = {
     "eta_inv_nom": 0.96,
     "temperature_model": "open_rack_glass_polymer",
 }
-# B4 **未**冻结、必须显式登记的两处 pvlib 默认选择（不得静默当作已批准参数）
-PVLIB_DEFAULTS_NOT_HUMAN_APPROVED: dict[str, Any] = {
+# **B5-PV 人工批准**（2026-09-16）：PV 链的两处模型选择与地面反照率
+B5_PV_APPROVAL: dict[str, Any] = {
+    "decision_id": "B5-PV",
+    "approved_on": "2026-09-16",
     "decomposition_model": "pvlib.irradiance.erbs",
     "transposition_model": "isotropic",
     "albedo": 0.25,
+    "classification": "modeled_scenario",
+    "note": "**modeled**；不是 IDC 本地 PV 现场实测",
 }
 
 WIND_PARAMS: dict[str, Any] = {
@@ -88,7 +94,6 @@ CARBON_SOURCE_URL = "https://www.ema.gov.sg/resources/singapore-energy-statistic
 ARRIVAL_SEED = 20240916
 ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR = 1000.0
 ARRIVAL_CLASSIFICATION = "modeled_scenario_calibrated_from_benchmark_trace"
-ARRIVAL_TEMPLATE_SHAPE = (7, 48)
 ARRIVAL_UNIT = "work-units/step"
 # 依据：已批准的 benchmark 尺度 lambda_ref = 2000 work-units/hour × 0.5 hour
 ARRIVAL_SCALE_BASIS = "lambda_ref=2000 work-units/hour × 0.5 hour"
@@ -100,7 +105,7 @@ CARBON_UNIT = "kgCO2/kWh"
 CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
 CANONICAL_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
 SPLIT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
-EXOGENOUS_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"
+EXOGENOUS_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous_v2.json"
 PUBLIC_BENCHMARKS_DIR = REPO_ROOT / "data/raw/public_benchmarks"
 ARRIVAL_ARCHIVE = PUBLIC_BENCHMARKS_DIR / "azurefunctions_dataset2019.tar.xz"
 
@@ -171,6 +176,67 @@ def pv_ac_limit_kw(
     return float(pv_capacity_kw) / float(dc_ac_ratio)
 
 
+def pv_loss_multiplier(losses_pct: float) -> float:
+    """DC 侧**一次性**损耗乘子：`1 - losses_pct / 100`（只应用一次）。"""
+    if isinstance(losses_pct, bool) or not isinstance(losses_pct, (int, float)):
+        raise ExogenousDriverError(f"losses_pct 必须是数值，实际 {losses_pct!r}")
+    value = float(losses_pct)
+    if not (0.0 <= value < 100.0):
+        raise ExogenousDriverError(f"losses_pct 必须落在 [0, 100)，实际 {value!r}")
+    return 1.0 - value / 100.0
+
+
+def assert_pv_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """PV 参数块必须**逐字段等于**冻结的 `PV_PARAMS`（缺失或篡改一律拒绝）。"""
+    if params is None:
+        return dict(PV_PARAMS)
+    if not isinstance(params, dict):
+        raise ExogenousDriverError(f"PV 参数块必须是 object，实际 {type(params).__name__}")
+    if set(params) != set(PV_PARAMS):
+        raise ExogenousDriverError(
+            "PV 参数块键集合必须精确等于冻结参数；"
+            f"多出={sorted(set(params) - set(PV_PARAMS))} "
+            f"缺少={sorted(set(PV_PARAMS) - set(params))}"
+        )
+    for name, expected in PV_PARAMS.items():
+        if params[name] != expected:
+            raise ExogenousDriverError(
+                f"PV 参数 {name} 被篡改：期望 {expected!r}，实际 {params[name]!r}"
+            )
+    return dict(params)
+
+
+def pv_dc_before_losses(
+    times: pd.DatetimeIndex,
+    ghi_w_per_m2: Sequence[float] | np.ndarray,
+    temp_air_deg_c: Sequence[float] | np.ndarray,
+    wind_speed_10m_mps: Sequence[float] | np.ndarray,
+    *,
+    params: dict[str, Any] | None = None,
+) -> np.ndarray:
+    """pvlib 链条到 **DC**（`pvwatts_dc`）为止，**尚未应用损耗**。"""
+    return _pv_dc_stage(times, ghi_w_per_m2, temp_air_deg_c, wind_speed_10m_mps, params)
+
+
+def pv_ac_from_dc(pdc_before_losses: np.ndarray, *,
+                  params: dict[str, Any] | None = None,
+                  ghi_w_per_m2: Sequence[float] | np.ndarray | None = None) -> np.ndarray:
+    """DC → （一次性损耗）→ `inverter.pvwatts` → 双重上限 → kW。"""
+    p = assert_pv_params(params)
+    pdc = np.clip(np.asarray(pdc_before_losses, dtype=float), 0.0, None)
+    pdc = pdc * pv_loss_multiplier(p["losses_pct"])
+    ac = inverter.pvwatts(pdc, p["pv_capacity_kw"], eta_inv_nom=p["eta_inv_nom"])
+    ac = np.clip(np.nan_to_num(np.asarray(ac, dtype=float), nan=0.0), 0.0, None)
+    if ghi_w_per_m2 is not None:
+        ac = np.where(np.asarray(ghi_w_per_m2, dtype=float) <= 0.0, 0.0, ac)
+    limit = min(pv_ac_limit_kw(p["pv_capacity_kw"], p["dc_ac_ratio"]),
+                p["pv_capacity_kw"] * p["eta_inv_nom"])
+    result = np.clip(ac, 0.0, limit)
+    if not np.isfinite(result).all():
+        raise ExogenousDriverError("local_pv_kw 含非有限值")
+    return result
+
+
 def local_pv_kw(
     times: pd.DatetimeIndex,
     ghi_w_per_m2: Sequence[float] | np.ndarray,
@@ -182,13 +248,31 @@ def local_pv_kw(
     """按冻结链条计算 `local_pv_kw`（kW）。
 
     链条：solar position → `erbs` 分解 → `isotropic` 透射 →
-    `sapm_cell`（`open_rack_glass_polymer`）→ `pvwatts_dc` → `pvwatts_ac`。
+    `sapm_cell`（`open_rack_glass_polymer`）→ `pvwatts_dc`
+    → **一次性 DC 侧损耗** `× (1 - losses_pct/100)` → `inverter.pvwatts`。
+
+    **损耗只应用一次**：DC 阶段不施加任何损耗，乘子在进入逆变器**之前**施加一次。
 
     **双重上限**：pvlib 的 AC 模型饱和于 `pdc0 × eta_inv_nom`（= 480 kW），
     而批准的 `dc_ac_ratio=1.2` 给出更严格的 416.67 kW；
     实现取两者的**较小值**——只可能**降低**出力，绝不制造发电。
     """
-    p = dict(PV_PARAMS if params is None else params)
+    p = assert_pv_params(params)
+    dc = pv_dc_before_losses(
+        times, ghi_w_per_m2, temp_air_deg_c, wind_speed_10m_mps, params=p
+    )
+    return pv_ac_from_dc(dc, params=p, ghi_w_per_m2=ghi_w_per_m2)
+
+
+def _pv_dc_stage(
+    times: pd.DatetimeIndex,
+    ghi_w_per_m2: Sequence[float] | np.ndarray,
+    temp_air_deg_c: Sequence[float] | np.ndarray,
+    wind_speed_10m_mps: Sequence[float] | np.ndarray,
+    params: dict[str, Any] | None,
+) -> np.ndarray:
+    """pvlib 链条到 `pvwatts_dc` 为止（**不施加损耗**）。"""
+    p = assert_pv_params(params)
     ghi = np.clip(np.asarray(ghi_w_per_m2, dtype=float), 0.0, None)
     temp_air = np.asarray(temp_air_deg_c, dtype=float)
     wind = np.clip(np.asarray(wind_speed_10m_mps, dtype=float), 0.0, None)
@@ -196,17 +280,13 @@ def local_pv_kw(
     if not (len(ghi) == len(temp_air) == len(wind) == len(index)):
         raise ExogenousDriverError("PV 输入长度不一致")
 
-    position = solarposition.get_solarposition(
-        index, p["latitude"], p["longitude"]
-    )
+    position = solarposition.get_solarposition(index, p["latitude"], p["longitude"])
     zenith = _as_array(position["apparent_zenith"])
     azimuth = _as_array(position["azimuth"])
 
     decomposed = irradiance.erbs(ghi, zenith, index)
-    dni = np.nan_to_num(_as_array(decomposed["dni"]), nan=0.0)
-    dhi = np.nan_to_num(_as_array(decomposed["dhi"]), nan=0.0)
-    dni = np.clip(dni, 0.0, None)
-    dhi = np.clip(dhi, 0.0, None)
+    dni = np.clip(np.nan_to_num(_as_array(decomposed["dni"]), nan=0.0), 0.0, None)
+    dhi = np.clip(np.nan_to_num(_as_array(decomposed["dhi"]), nan=0.0), 0.0, None)
 
     poa = irradiance.get_total_irradiance(
         surface_tilt=p["tilt_deg"],
@@ -216,13 +296,12 @@ def local_pv_kw(
         dni=dni,
         ghi=ghi,
         dhi=dhi,
-        albedo=PVLIB_DEFAULTS_NOT_HUMAN_APPROVED["albedo"],
-        model=PVLIB_DEFAULTS_NOT_HUMAN_APPROVED["transposition_model"],
+        albedo=B5_PV_APPROVAL["albedo"],
+        model=B5_PV_APPROVAL["transposition_model"],
     )
     poa_global = np.clip(
         np.nan_to_num(_as_array(poa["poa_global"]), nan=0.0), 0.0, None
     )
-
     cell = temperature.sapm_cell(
         poa_global, temp_air, wind,
         **temperature.TEMPERATURE_MODEL_PARAMETERS["sapm"][p["temperature_model"]],
@@ -231,19 +310,7 @@ def local_pv_kw(
         poa_global, np.asarray(cell, dtype=float),
         pdc0=p["pv_capacity_kw"], gamma_pdc=p["gamma_pdc_per_deg_c"],
     )
-    dc = np.clip(np.nan_to_num(np.asarray(dc, dtype=float), nan=0.0), 0.0, None)
-    ac = inverter.pvwatts(dc, p["pv_capacity_kw"], eta_inv_nom=p["eta_inv_nom"])
-    ac = np.clip(np.nan_to_num(np.asarray(ac, dtype=float), nan=0.0), 0.0, None)
-
-    # 夜间（无辐照）必须为 0
-    ac = np.where(ghi <= 0.0, 0.0, ac)
-    # 双重上限：模型饱和值与批准的 DC/AC 上限取较小者
-    limit = min(pv_ac_limit_kw(p["pv_capacity_kw"], p["dc_ac_ratio"]),
-                p["pv_capacity_kw"] * p["eta_inv_nom"])
-    result = np.clip(ac, 0.0, limit)
-    if not np.isfinite(result).all():
-        raise ExogenousDriverError("local_pv_kw 含非有限值")
-    return result
+    return np.clip(np.nan_to_num(np.asarray(dc, dtype=float), nan=0.0), 0.0, None)
 
 
 # --- 风电：切变律 + 冻结功率曲线 ---------------------------------------------
@@ -381,66 +448,122 @@ def carbon_intensity(rows: int) -> np.ndarray:
     return np.full(rows, CARBON_KG_PER_KWH, dtype=float)
 
 
-# --- arrival：由 benchmark trace 校准的 rate template -------------------------
+# --- arrival：由 benchmark trace 校准的 **date-free** 48-slot template ---------
+#
+# ⚠️ 官方 Azure archive 的**成员名不含任何日期**，官方说明也只写「collected in
+# July of 2019」「14 files, one file per 24-h period」。因此本模块**不使用、也不
+# 声称** archive 提供日期、星期或时区：模板只是**一个 24 小时周期内的
+# 48 个半小时槽**（day-of-benchmark-period），再映射到 Singapore 2024 本地
+# 00:00..23:30。**不得**称其为 IDC 真实 arrival、Azure 2019 replay 或 2024 观测。
 
-def arrival_rate_template(counts: np.ndarray | Sequence[Sequence[float]]) -> np.ndarray:
-    """把 `7×48` 的 weekday × half-hour 计数归一化为**全年平均 1** 的 rate template。"""
+ARRIVAL_TEMPLATE_SLOTS = 48
+ARRIVAL_TEMPLATE_SHAPE = (ARRIVAL_TEMPLATE_SLOTS,)
+ARRIVAL_SLOT_MAPPING = "slot 0..47 → Singapore 2024 本地 00:00..23:30"
+ARRIVAL_PROCESS_FAMILY = "Poisson"
+ARRIVAL_SOURCE_AGGREGATION = (
+    "14 个 invocation 文件按 minute-of-24h 聚合（不使用、也不声称 archive 提供"
+    "日期、星期或时区）"
+)
+ARRIVAL_TEMPLATE_KIND = "48-slot day-of-benchmark-period template"
+
+# **B5-ARRIVAL 人工批准**（2026-09-16）
+B5_ARRIVAL_APPROVAL: dict[str, Any] = {
+    "decision_id": "B5-ARRIVAL",
+    "approved_on": "2026-09-16",
+    "template": ARRIVAL_TEMPLATE_KIND,
+    "source_aggregation": ARRIVAL_SOURCE_AGGREGATION,
+    "uses_archive_dates": False,
+    "slot_mapping": ARRIVAL_SLOT_MAPPING,
+    "process_family": ARRIVAL_PROCESS_FAMILY,
+    "seed": ARRIVAL_SEED,
+    "mean_arrival_work_units_per_half_hour": ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
+    "scale_basis": ARRIVAL_SCALE_BASIS,
+    "classification": ARRIVAL_CLASSIFICATION,
+    "note": (
+        "**不得**称为 IDC 真实 arrival、Azure 2019 replay 或 2024 observation；"
+        "2019 trace 只校准 24 小时周期内的分布形状"
+    ),
+}
+
+
+def assert_arrival_approved(record: dict[str, Any] | None) -> dict[str, Any]:
+    """arrival 的过程/尺度/seed/slot mapping 必须**逐字段等于** B5-ARRIVAL 批准记录。"""
+    if record is None:
+        raise ExogenousDriverError("缺少 B5-ARRIVAL 人工批准记录：拒绝物化 arrival")
+    if not isinstance(record, dict):
+        raise ExogenousDriverError(
+            f"B5-ARRIVAL 批准记录必须是 object，实际 {type(record).__name__}"
+        )
+    if set(record) != set(B5_ARRIVAL_APPROVAL):
+        raise ExogenousDriverError(
+            "B5-ARRIVAL 批准记录键集合必须精确等于冻结集合；"
+            f"多出={sorted(set(record) - set(B5_ARRIVAL_APPROVAL))} "
+            f"缺少={sorted(set(B5_ARRIVAL_APPROVAL) - set(record))}"
+        )
+    for name, expected in B5_ARRIVAL_APPROVAL.items():
+        if record[name] != expected:
+            raise ExogenousDriverError(
+                f"B5-ARRIVAL 的 {name} 与批准记录不符："
+                f"期望 {expected!r}，实际 {record[name]!r}"
+            )
+    return dict(record)
+
+
+def arrival_slot_counts(minute_totals: pd.Series) -> np.ndarray:
+    """把 `minute-of-24h` 的调用总量聚合为 **48 个半小时槽**。
+
+    **只**使用 minute（0..1439）；**不**使用、也不推断任何日期、星期或时区。
+    输入顺序不影响结果（按 minute **显式升序**聚合）。
+    """
+    if not isinstance(minute_totals, pd.Series) or minute_totals.empty:
+        raise ExogenousDriverError("minute_totals 必须是非空 Series")
+    minutes = np.asarray(minute_totals.index, dtype=int)
+    if ((minutes < 0) | (minutes >= 1440)).any():
+        raise ExogenousDriverError("minute 必须落在 [0, 1440)")
+    values = np.asarray(minute_totals.to_numpy(dtype=float))
+    if not np.isfinite(values).all() or (values < 0).any():
+        raise ExogenousDriverError("minute 调用量必须有限且非负")
+    order = np.argsort(minutes, kind="stable")
+    counts = np.zeros(ARRIVAL_TEMPLATE_SLOTS, dtype=float)
+    for index in order:
+        counts[int(minutes[index]) // 30] += float(values[index])
+    return counts
+
+
+def arrival_rate_template(counts: np.ndarray | Sequence[float]) -> np.ndarray:
+    """把 48 槽计数归一化为**均值 1** 的 rate template。"""
     counts = np.asarray(counts, dtype=float)
     if counts.shape != ARRIVAL_TEMPLATE_SHAPE:
         raise ExogenousDriverError(
-            f"计数矩阵形状必须是 {ARRIVAL_TEMPLATE_SHAPE}，实际 {counts.shape}"
+            f"计数向量形状必须是 {ARRIVAL_TEMPLATE_SHAPE}，实际 {counts.shape}"
         )
     if not np.isfinite(counts).all() or (counts < 0).any():
-        raise ExogenousDriverError("计数矩阵必须有限且非负")
-    total = counts.sum()
-    if total <= 0:
-        raise ExogenousDriverError("计数矩阵总量必须为正")
+        raise ExogenousDriverError("计数向量必须有限且非负")
+    if counts.sum() <= 0:
+        raise ExogenousDriverError("计数向量总量必须为正")
     template = counts / counts.mean()
     if not np.isclose(template.mean(), 1.0, rtol=1e-12):
-        raise ExogenousDriverError("rate template 未归一化为全年平均 1")
+        raise ExogenousDriverError("rate template 未归一化为均值 1")
     return template
 
 
-def arrival_counts_from_trace(
-    minute_totals: pd.Series,
-) -> np.ndarray:
-    """把 `(date, minute)` 的调用数汇总成 `7×48` 的 weekday × half-hour 计数矩阵。
-
-    **只**使用 trace 自带的日期与分钟；**不**接触 2024 的任何数据。
-    """
-    if not isinstance(minute_totals.index, pd.MultiIndex):
-        raise ExogenousDriverError("minute_totals 必须是 (date, minute) 的 MultiIndex")
-    frame = minute_totals.rename("invocations").reset_index()
-    frame.columns = ["date", "minute", "invocations"]
-    stamps = pd.to_datetime(frame["date"]) + pd.to_timedelta(
-        frame["minute"].astype(int), unit="m"
-    )
-    buckets = pd.DataFrame({
-        "weekday": stamps.dt.weekday,
-        "slot": (stamps.dt.hour * 2 + stamps.dt.minute // 30).astype(int),
-        "invocations": frame["invocations"].astype(float),
-    })
-    counts = np.zeros(ARRIVAL_TEMPLATE_SHAPE, dtype=float)
-    grouped = buckets.groupby(["weekday", "slot"])["invocations"].sum()
-    for (weekday, slot), value in grouped.items():
-        counts[int(weekday), int(slot)] = float(value)
-    return counts
+def arrival_template_slot(timestamps: pd.DatetimeIndex) -> np.ndarray:
+    """由 timestamp 的 **hour/minute** 选槽（**不读星期**）。"""
+    stamps = pd.DatetimeIndex(timestamps)
+    return (stamps.hour * 2 + stamps.minute // 30).to_numpy()
 
 
 def arrival_rate_template_from_cache(
     manifest_path: Path | str = EXOGENOUS_MANIFEST,
 ) -> np.ndarray:
-    """从已物化的 manifest 读取**冻结**的 rate template。
-
-    template 一旦冻结就与 2024 的任何数据无关，因此本函数**不读取** canonical 表。
-    """
+    """从已物化的 manifest 读取**冻结**的 48 槽 rate template（**不读 2024 truth**）。"""
     manifest_path = Path(manifest_path)
     if not manifest_path.is_file():
         raise ExogenousDriverError(f"缺少 {manifest_path}")
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    template = np.asarray(
-        payload["columns"]["arrival"]["rate_template"], dtype=float
-    )
+    arrival = payload["columns"]["arrival"]
+    assert_arrival_approved(arrival["b5_approval"])
+    template = np.asarray(arrival["rate_template"], dtype=float)
     if template.shape != ARRIVAL_TEMPLATE_SHAPE:
         raise ExogenousDriverError(
             f"冻结 template 形状必须是 {ARRIVAL_TEMPLATE_SHAPE}，实际 {template.shape}"
@@ -450,15 +573,16 @@ def arrival_rate_template_from_cache(
 
 def generate_arrival(
     timestamps: pd.DatetimeIndex,
-    template: np.ndarray | Sequence[Sequence[float]],
+    template: np.ndarray | Sequence[float],
     *,
     seed: int = ARRIVAL_SEED,
     mean_per_half_hour: float = ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
 ) -> np.ndarray:
     """按 `Poisson(rate_template × mean)` **前向生成** arrival（work-units/step）。
 
-    只依赖：冻结的 `template`、每个 timestamp 的**星期与时刻**、固定 `seed`。
-    **不读取**任何 truth——因此不存在未来信息泄漏。
+    只依赖：冻结的 `template`、每个 timestamp 的 **hour/minute**、固定 `seed`。
+    **不读取**任何 truth、价格、负荷、PV、风电、温度或未来 arrival——
+    因此不存在未来信息泄漏，也不依赖星期。
     """
     template = np.asarray(template, dtype=float)
     if template.shape != ARRIVAL_TEMPLATE_SHAPE:
@@ -472,9 +596,8 @@ def generate_arrival(
     stamps = pd.DatetimeIndex(timestamps)
     if len(stamps) == 0:
         raise ExogenousDriverError("timestamps 不得为空")
-    weekdays = stamps.weekday.to_numpy()
-    slots = (stamps.hour * 2 + stamps.minute // 30).to_numpy()
-    rates = template[weekdays, slots] * float(mean_per_half_hour)
+    slots = arrival_template_slot(stamps)
+    rates = template[slots] * float(mean_per_half_hour)
     rng = np.random.default_rng(seed)
     arrival = rng.poisson(rates).astype(np.int64)
     if (arrival < 0).any():

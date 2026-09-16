@@ -10,17 +10,17 @@
 `m13f_public_sources.json`（v1 保持字节不变）、**不**构造 `ScenarioBundle`、
 **不**接入训练。
 
-## 两个必须显式登记的口径（都不是「已批准参数」）
+## 已获人工批准的口径（B5）
 
-1. **PV 的两处 pvlib 默认选择**（辐照分解 `erbs`、透射 `isotropic`、
-   反照率 `0.25`）——见 `scenario.exogenous_drivers`。
-2. **Azure trace 的日期映射**：官方 archive 的**成员名里没有任何日期**，
-   官方说明只写「collected in July of 2019」「14 files, one file per 24-h
-   period」。日期映射取自**官方分析 notebook** 的绘图轴
-   （`2019-07-15 14:00 UTC … 2019-07-28 23:59 UTC`）：
-   **`d_k ↔ 2019-07-15 + (k-1) 天`（2019-07-15 是星期一，14 天正好两周）**，
-   文件内第 `m` 分钟视为该日的第 `m` 分钟。
-   **本条为可复现的显式假设，需人工确认。**
+1. **B5-PV**：PV 链的辐照分解 `pvlib.irradiance.erbs`、透射 `isotropic`、
+   地面反照率 `0.25`（此前未获批准，现已批准并在 manifest 中逐字段登记）。
+2. **B5-ARRIVAL**：arrival 模板是 **48-slot day-of-benchmark-period template**——
+   官方 archive 的成员名**不含日期**，官方说明也只写「collected in July of 2019」
+   与「14 files, one file per 24-h period」。因此本卡**不使用、也不声称** archive
+   提供**日期、星期或时区**：只按成员名 `d01..d14` **显式升序**读取、
+   按 **minute-of-24h** 聚合成 48 个半小时槽，再把 slot `0..47` 映射到
+   Singapore 2024 本地 `00:00..23:30`。**不得**称其为 IDC 真实 arrival、
+   Azure 2019 replay 或 2024 observation。
 
 ## 网络纪律
 
@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import io
 import json
@@ -54,10 +55,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scenario.exogenous_drivers import (
-    ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
-    ARRIVAL_SCALE_BASIS,
-    ARRIVAL_SEED,
     ARRIVAL_UNIT,
+    B5_ARRIVAL_APPROVAL,
+    B5_PV_APPROVAL,
     CANONICAL_MANIFEST,
     CANONICAL_PARQUET,
     CARBON_CLASSIFICATION,
@@ -67,23 +67,47 @@ from scenario.exogenous_drivers import (
     CARBON_UNIT,
     PV_PARAMS,
     PV_UNIT,
-    PVLIB_DEFAULTS_NOT_HUMAN_APPROVED,
     SPLIT_MANIFEST,
     WIND_CURVE_FILE,
     WIND_CURVE_SHA256,
     WIND_PARAMS,
     WIND_UNIT,
     FrozenInputs,
-    arrival_counts_from_trace,
     arrival_rate_template,
+    arrival_slot_counts,
+    assert_arrival_approved,
     build_frame,
     load_frozen_inputs,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers.parquet"
-OUT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"
-SOURCE_MANIFEST = REPO_ROOT / "data/manifest/m13f_materialization_sources.json"
+OUT_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers_v2.parquet"
+OUT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous_v2.json"
+SOURCE_MANIFEST = REPO_ROOT / "data/manifest/m13f_materialization_sources_v3.json"
+
+# v1（M1.3f-c）产物**原样保留**，标为 superseded，**不作为最终证据**
+SUPERSEDES: dict[str, Any] = {
+    "status": "superseded_pre_approval_and_loss_fix",
+    "output_parquet_path": "data/processed/singapore_2024/exogenous_drivers.parquet",
+    "output_parquet_sha256": (
+        "0c5e65d8fdc25ed8ced228e8087f13eb0605d0146d7e258caf54a552a246287c"
+    ),
+    "output_manifest_path": "data/manifest/singapore_2024_exogenous.json",
+    "output_manifest_sha256": (
+        "46d88c38247bf1eb1568e84abc48647f1f4aeb58a5c0b525a30b8bfb0b2ac224"
+    ),
+    "source_manifest_path": "data/manifest/m13f_materialization_sources.json",
+    "source_manifest_sha256": (
+        "6a80886a53056df80944db1fc536176d590f9cc10b315064d826436ae0bb1a72"
+    ),
+    "revision": "a3fe4c0a1824833668bbb1f8029d656512011870",
+    "reasons": [
+        "PV 的 losses_pct 从未被应用（0/14/99 输出逐位相同）",
+        "PV 的 pvlib 默认与 arrival 的日期映射当时未获人工批准",
+        "arrival 模板依赖一个未经验证的「把 trace 文件顺序当作日历星期」的假设；"
+        "官方 archive 并不提供日期、星期或时区",
+    ],
+}
 V1_MANIFEST = REPO_ROOT / "data/manifest/m13f_public_sources.json"
 PUBLIC_BENCHMARKS_DIR = REPO_ROOT / "data/raw/public_benchmarks"
 ARRIVAL_ARCHIVE = PUBLIC_BENCHMARKS_DIR / "azurefunctions_dataset2019.tar.xz"
@@ -104,14 +128,13 @@ AZURE_EXCEPTION_CAP_BYTES = 160 * 1024 * 1024
 AZURE_DECISION_ID = "B3"
 
 INVOCATION_MEMBER_PREFIX = "invocations_per_function_md.anon.d"
-# 官方 notebook 的绘图轴 + 「14 个 24 小时文件」= 两周
-TRACE_FIRST_DAY = "2019-07-15"
-TRACE_DATE_MAPPING = (
-    "官方 archive 的成员名**不含日期**；官方说明仅写 'collected in July of 2019' 与 "
-    "'14 files, one file per 24-h period'。本卡据官方分析 notebook 的绘图轴"
-    "（2019-07-15 14:00 UTC … 2019-07-28 23:59 UTC）取 "
-    "d_k ↔ 2019-07-15 + (k-1) 天（2019-07-15 为星期一，14 天正好两周），"
-    "文件内第 m 分钟视为该日第 m 分钟。**该映射为显式可复现假设，需人工确认。**"
+# 官方 archive 的成员名**不含日期**，官方说明只写「collected in July of 2019」
+# 「14 files, one file per 24-h period」。本卡**不使用、也不声称** archive 提供
+# 日期、星期或时区：只按 `d01..d14` 的**文件名顺序**读取，
+# 按 minute-of-24h 聚合成 48 个半小时槽（B5-ARRIVAL）。
+TRACE_MEMBER_ORDER_RULE = (
+    "按成员文件名 d01..d14 **显式升序**读取；成员名/archive **不提供日期、"
+    "星期或时区**，因此模板只表示 24 小时周期内的 48 个半小时槽"
 )
 
 READINESS: dict[str, bool] = {
@@ -352,13 +375,14 @@ def scan_arrival_archive(path: Path = ARRIVAL_ARCHIVE) -> dict:
 
 
 def trace_minute_totals(path: Path = ARRIVAL_ARCHIVE) -> pd.Series:
-    """流式读取全部 invocation 成员 → `(date, minute)` 的调用总数。
+    """流式读取全部 invocation 成员 → **minute-of-24h** 的调用总量（索引 0..1439）。
 
     每个成员是**一个 24 小时周期**：每分钟一列（1..1440），逐函数一行。
-    日期映射见模块 docstring 的 `TRACE_DATE_MAPPING`。
+    **只**使用 minute；**不**使用、也不推断任何日期、星期或时区。
+    成员按文件名 `d01..d14` **显式升序**处理（顺序不影响结果，但显式排序可复现）。
     """
     path = Path(path)
-    frames: list[pd.Series] = []
+    per_member: dict[str, np.ndarray] = {}
     with tarfile.open(path, mode="r|xz") as archive:
         for member in archive:
             _assert_safe_member(member.name)
@@ -367,29 +391,24 @@ def trace_minute_totals(path: Path = ARRIVAL_ARCHIVE) -> pd.Series:
             name = Path(member.name).name
             if not name.startswith(INVOCATION_MEMBER_PREFIX):
                 continue
-            suffix = name[len(INVOCATION_MEMBER_PREFIX):]
-            day_index = int(suffix.split(".")[0].lstrip("d"))
             extracted = archive.extractfile(member)
             if extracted is None:
                 raise MaterializationError(f"无法读取成员 {member.name}")
             frame = pd.read_csv(io.BytesIO(extracted.read()))
-            minute_columns = [c for c in frame.columns
-                              if str(c).isdigit()]
+            minute_columns = [c for c in frame.columns if str(c).isdigit()]
             if len(minute_columns) != 1440:
                 raise MaterializationError(
                     f"{name} 的分钟列数 {len(minute_columns)} != 1440：schema 不符"
                 )
-            totals = frame[minute_columns].sum(axis=0)
-            date = pd.Timestamp(TRACE_FIRST_DAY) + pd.Timedelta(days=day_index - 1)
-            index = pd.MultiIndex.from_tuples(
-                [(date.date(), int(c)) for c in minute_columns],
-                names=["date", "minute"],
-            )
-            frames.append(pd.Series(totals.to_numpy(dtype=float), index=index))
-    if not frames:
+            ordered = sorted(minute_columns, key=lambda c: int(c))
+            per_member[name] = frame[ordered].to_numpy(dtype=float).sum(axis=0)
+    if not per_member:
         raise MaterializationError("没有读到任何 invocation 成员")
-    combined = pd.concat(frames)
-    return combined.groupby(level=[0, 1]).sum().sort_index()
+    # **显式按成员名 d01..d14 升序**聚合（顺序不影响结果，但显式排序可复现）
+    totals = np.zeros(1440, dtype=float)
+    for name in sorted(per_member):
+        totals += per_member[name]
+    return pd.Series(totals, index=pd.Index(np.arange(1440), name="minute"))
 
 
 # --- 物化 ---------------------------------------------------------------------
@@ -440,8 +459,11 @@ def build_manifest(
                 "unit": PV_UNIT,
                 "method": "pvlib_v0.15.2_chain",
                 "parameters": dict(PV_PARAMS),
-                "pvlib_defaults_not_human_approved":
-                    dict(PVLIB_DEFAULTS_NOT_HUMAN_APPROVED),
+                "b5_pv_approval": dict(B5_PV_APPROVAL),
+                "loss_rule": (
+                    "单次 DC 侧损耗：pdc_after = pdc_before × "
+                    "(1 - losses_pct / 100)，之后才进入 inverter.pvwatts"
+                ),
                 "note": (
                     "**modeled**，不是 IDC 本地 PV 现场实测；"
                     "输入只来自同 timestamp 的 ERA5 GHI/温度/风速"
@@ -478,21 +500,28 @@ def build_manifest(
                 "classification": "modeled_scenario_calibrated_from_benchmark_trace",
                 "unit": ARRIVAL_UNIT,
                 "method": "poisson_forward_generation_from_frozen_template",
-                "seed": ARRIVAL_SEED,
-                "mean_arrival_work_units_per_half_hour_scale":
-                    ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
+                "template_kind": B5_ARRIVAL_APPROVAL["template"],
+                "source_aggregation": B5_ARRIVAL_APPROVAL["source_aggregation"],
+                "uses_archive_dates": False,
+                "member_order_rule": TRACE_MEMBER_ORDER_RULE,
+                "slot_mapping": B5_ARRIVAL_APPROVAL["slot_mapping"],
+                "template_slots": len(template),
+                "process_family": B5_ARRIVAL_APPROVAL["process_family"],
+                "seed": B5_ARRIVAL_APPROVAL["seed"],
+                "mean_arrival_work_units_per_half_hour_scale": (
+                    B5_ARRIVAL_APPROVAL["mean_arrival_work_units_per_half_hour"]
+                ),
                 "realized_annual_mean": float(frame["arrival"].mean()),
                 "realized_mean_note": (
-                    "尺度参数固定为 1000.0；2024 的星期分布并非恰好均匀"
+                    "尺度参数固定为 1000.0；2024 的每日槽位分布并非恰好均匀"
                     "（闰年 366 天），故实现年均略低于 1000"
                 ),
-                "scale_basis": ARRIVAL_SCALE_BASIS,
-                "rate_template": [[float(v) for v in row] for row in template],
-                "date_mapping": TRACE_DATE_MAPPING,
-                "note": (
-                    "2019 trace 只校准**分布形状**，不重放、不改称 2024 真实到达；"
-                    "生成只依赖冻结 template、星期/时刻与固定 seed"
-                ),
+                "scale_basis": B5_ARRIVAL_APPROVAL["scale_basis"],
+                "rate_template": [float(v) for v in np.asarray(template).ravel()],
+                "b5_approval": dict(B5_ARRIVAL_APPROVAL),
+                "decision_id": B5_ARRIVAL_APPROVAL["decision_id"],
+                "approved_on": B5_ARRIVAL_APPROVAL["approved_on"],
+                "note": B5_ARRIVAL_APPROVAL["note"],
             },
         },
         "azure": {
@@ -507,7 +536,7 @@ def build_manifest(
             "unused_members": members["unused_members"],
         },
         "output": {
-            "path": "data/processed/singapore_2024/exogenous_drivers.parquet",
+            "path": "data/processed/singapore_2024/exogenous_drivers_v2.parquet",
             "sha256": _sha256_file(output_path),
             "rows": len(frame),
             "columns": list(frame.columns),
@@ -521,6 +550,7 @@ def build_manifest(
                 for name in frame.columns if name != "timestamp"
             },
         },
+        "supersedes": copy.deepcopy(SUPERSEDES),
         "readiness": dict(READINESS),
     }
     text = json.dumps(payload, ensure_ascii=False)
@@ -565,8 +595,10 @@ def build_source_manifest(
             "allowed_final_hosts": archive.get("allowed_final_hosts"),
             "used_members": members["used_members"],
             "unused_members": members["unused_members"],
-            "date_mapping": TRACE_DATE_MAPPING,
+            "member_order_rule": TRACE_MEMBER_ORDER_RULE,
         },
+        "b5_pv_approval": dict(B5_PV_APPROVAL),
+        "b5_arrival_approval": dict(B5_ARRIVAL_APPROVAL),
         "wind_power_curve": {
             "source_id": "windpowerlib_power_curves",
             "member": WIND_CURVE_FILE,
@@ -597,8 +629,10 @@ def materialize_exogenous_drivers(
         split_manifest_path=SPLIT_MANIFEST,
     )
     members = scan_arrival_archive(archive_path)
+    # 缺 B5-ARRIVAL 批准记录即拒绝物化
+    assert_arrival_approved(B5_ARRIVAL_APPROVAL)
     minute_totals = trace_minute_totals(archive_path)
-    template = arrival_rate_template(arrival_counts_from_trace(minute_totals))
+    template = arrival_rate_template(arrival_slot_counts(minute_totals))
     frame = build_frame(inputs, template=template)
 
     buffer = io.BytesIO()
