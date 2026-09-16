@@ -80,6 +80,10 @@
 !data/grid_node_sensitivity/.gitkeep
 !data/raw/
 !data/raw/*.md
+# M1.3f-b：只入库 public_benchmarks 的 README（说明与账本）；
+# 冻结的原始文件（*.csv/*.py/*.txt）仍然被忽略，不入 Git。
+!data/raw/public_benchmarks/
+!data/raw/public_benchmarks/*.md
 !data/manifest/
 !data/manifest/*.json
 !report_tools/
