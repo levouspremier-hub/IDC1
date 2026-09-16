@@ -899,6 +899,59 @@ git revert 593d291 8daea1c 38fe7df 0b5b04d ba15596 75792f1 f148a21 ae144c8
 （2024 GEF 官方机读来源 / NREL PVWatts 手册不可达的替代 / Azure trace 上限 /
 九项物理参数）。**M1.3 正式链仍 blocked，不新增 M5.5，不进入 M6。**
 
+### 7M.1 M1.3f-b-R1：第一轮审核返修（**执行完成，等待复审**）
+
+**M1.3f-b 第一轮人工审核不通过**；返修区间 `804b51a..`（见卡片 §D–§E）。
+
+**四个阻塞项与修复**：
+
+1. **manifest 未被严格校验** → 新增**单一严格入口**
+   `validate_public_source_manifest()`：顶层 / entry / 参数对象键集合精确、
+   `source_id` **集合与顺序**精确、每种 `status` 使用精确键集合、固定声明与
+   `SOURCE_SPECS` **逐字段恒等**、`blocked`/`refused` 来源**同样校验（不再被
+   verify 跳过）**、`readiness`/红线/参数块完整恒等、`frozen_at_utc` 必须规范
+   UTC、**bool 不得冒充 int**；任何畸形输入**只抛** `SourcePolicyError`。
+   `verify_local`、`--verify`、`--fetch` 后的复核**共用**它。
+2. **不可变性不足** → `write_manifest_atomic` 在**语义不同**时 **fail closed
+   禁止覆盖**；完全相同则直接返回、**不改变 `mtime_ns`**；新增
+   `existing_frozen_at_utc()` + `_now_utc()`，使重复 `--fetch` **复用**
+   `frozen_at_utc`（真实 `--fetch` 实测字节完全相同）。
+3. **审批守卫不可延续** → `assert_parameters_approved()` 重写为只接受**结构化
+   人工批准**（五键精确、`status=human_approved`、`decision_id` 非空、
+   `approved_on` 规范日期）；**经批准的 `pv_capacity_kw=500` 现在可以通过**，
+   而 `legacy_inherited` / `UNAPPROVED` / 缺 `decision_id` / 非结构化标量仍被拒绝。
+4. **账本失真** → 修正为 `7fd7b68 → 804b51a` 共 **10** 个提交（附完整列表）；
+   并把「不可变 tag」改为准确表述：**Git tag 并非密码学不可移动**，
+   冻结依据是**本地副本 + 登记 SHA-256**。
+
+**人工决定登记（只登记，不实施）**：
+
+- **B1**：2024 `carbon_intensity` = **0.402 kgCO2/kWh 年内常数**
+  （`decision_id=B1`）；`classification=human_approved_external_low_resolution`、
+  `resolution=annual_constant`；**不得**描述为半小时实测或 `half_hourly` truth。
+- **B2**：`pvlib` v0.15.2 为**唯一 PV 模型实现来源**；M1.3f-c 生成数据前必须
+  补齐并冻结 solar position / GHI decomposition / transposition /
+  cell-temperature / PVWatts DC / PVWatts AC 的依赖闭包。
+- **B3**：批准下载精确的 Azure 2019 包 `142,968,140 B`；**仅**该 pinned URL
+  适用 **160 MiB 特例上限**，通用 16 MiB 不变；下载时须再次核验
+  Content-Length / 最终 URL / SHA-256 / 容器成员 / 许可；**本轮不下载**。
+- **B4**：PV 九项（含 `pv_capacity_kw=500.0`，**本次新批准、非 legacy
+  inheritance**）与风电四项；**全部是 modeled benchmark，不是现场实测**。
+
+**`arrival` 的 `process_family` / `parameters` / `seed_policy` 仍 UNAPPROVED。**
+
+**readiness 七项全部未变**（仍只有 `public_source_frozen=true`）；
+`make check` exit 0（**2142 passed**）、`make smoke` exit 0、`make train` exit 2；
+上游十项资产 hash 未变；**范围外修改无**。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert 6db8aef 941c657 e1e4731 614e488 9c38ad7
+```
+
+**M1.3f-c 未开始**；**M1.3 正式链仍 blocked**，不新增 M5.5，不进入 M6。
+
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
 > 本行已更正；提交 `4519a29` 的提交信息保留原错误表述（Git 历史不重写）。
