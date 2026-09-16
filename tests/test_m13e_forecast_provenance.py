@@ -1045,12 +1045,27 @@ def test_artifact_prediction_hash_covers_values_units_and_order(chain):
 
 
 def test_artifact_content_hash_covers_the_audit_provenance(chain):
-    """D.7：不得为通过 leakage 测试而让 content_hash 忽略审计 provenance。"""
+    """D.7：不得为通过 leakage 测试而让 content_hash 忽略审计 provenance。
+
+    把顶层 hash 与五条 provenance 的对应 digest **一致地**换成另一个值——
+    这样构造仍然合法（内部闭环成立），此时 content_hash 必须变化而
+    prediction_hash 不变。**R2 起单改顶层字段会直接构造失败**（闭环被破坏）。
+    """
     from contracts.models import AvailableExogenousForecast
 
     artifact = forecast_artifact(chain, cutoff=4)
     payload = artifact.model_dump()
-    tampered = {**payload, "canonical_parquet_sha256": "c" * 64}
+    replacement = "c" * 64
+    provenance = {name: dict(payload["provenance"][name]) for name in DRIVERS}
+    for name in DRIVERS:
+        sources = [dict(digest) for digest in provenance[name]["sources"]]
+        sources[0]["sha256"] = replacement
+        provenance[name]["sources"] = sources
+    tampered = {
+        **payload,
+        "canonical_parquet_sha256": replacement,
+        "provenance": provenance,
+    }
     other = AvailableExogenousForecast(**tampered)
     assert other.content_hash() != artifact.content_hash()
     # 预测本身没变
@@ -1393,3 +1408,328 @@ def test_real_upstream_policy_materialization(tmp_path):
     assert manifest["readiness"]["available_driver_forecasts_ready"] is True
     assert manifest["readiness"]["formal_training_ready"] is False
     assert manifest["materializer_revision"] == artifact.code_revision
+
+
+# --- 14. M1.3e-R2：深度不可变 -------------------------------------------------
+
+def _entry(**over):
+    from contracts.models import ForecastSeriesProvenance
+
+    return ForecastSeriesProvenance(**{**make_series_provenance(), **over})
+
+
+def test_provenance_sources_are_an_immutable_tuple():
+    entry = _entry()
+    assert isinstance(entry.sources, tuple)
+    with pytest.raises(AttributeError):
+        entry.sources.append(  # type: ignore[attr-defined]
+            entry.sources[0]
+        )
+    with pytest.raises(TypeError):
+        entry.sources[0] = entry.sources[0]  # type: ignore[index]
+
+
+def test_list_input_is_normalised_to_an_immutable_tuple():
+    """JSON/list 输入可在严格验证后规范化为 tuple，但对外不得暴露可变容器。"""
+    entry = _entry(sources=[dict(make_series_provenance()["sources"][0])])
+    assert isinstance(entry.sources, tuple)
+    assert isinstance(entry.sources[0].role, str)
+    bundle = build_bundle()  # fixture 传的是 list
+    assert isinstance(bundle.price_forecast, tuple)
+
+
+def test_scenario_bundle_forecasts_are_immutable_tuples():
+    bundle = build_bundle()
+    before = bundle.content_hash()
+    for field in BUNDLE_FORECAST_FIELDS:
+        values = getattr(bundle, field)
+        assert isinstance(values, tuple), field
+        with pytest.raises(TypeError):
+            values[0] = 1.0  # type: ignore[index]
+    assert bundle.content_hash() == before
+
+
+def test_artifact_deep_immutability_keeps_the_content_hash_stable(chain):
+    """A.2：四种原地修改全部失败，且操作前后 content_hash 不变。"""
+    artifact = forecast_artifact(chain, cutoff=4)
+    entry = artifact.provenance["price_sgd_per_kwh"]
+    before = artifact.content_hash()
+
+    with pytest.raises(AttributeError):
+        entry.sources.append(entry.sources[0])  # type: ignore[attr-defined]
+    assert artifact.content_hash() == before
+
+    with pytest.raises(TypeError):
+        entry.sources[0] = entry.sources[0]  # type: ignore[index]
+    assert artifact.content_hash() == before
+
+    with pytest.raises((ValueError, TypeError)):
+        entry.method = "other"  # type: ignore[misc]
+    assert artifact.content_hash() == before
+
+    with pytest.raises(TypeError):
+        artifact.series["price_sgd_per_kwh"][0] = 1.0  # type: ignore[index]
+    assert artifact.content_hash() == before
+
+    assert artifact.content_hash() == forecast_artifact(chain, cutoff=4).content_hash()
+
+
+# --- 15. M1.3e-R2：顶层 ↔ 逐序列证据闭环 -------------------------------------
+
+def _artifact_payload(chain, **over):
+    artifact = forecast_artifact(chain, cutoff=4, **over)
+    return artifact, artifact.model_dump()
+
+
+def _mutate_provenance(payload, driver, field, value):
+    provenance = {name: dict(payload["provenance"][name]) for name in DRIVERS}
+    provenance[driver][field] = value
+    return {**payload, "provenance": provenance}
+
+
+def test_artifact_carries_all_four_upstream_paths(chain):
+    artifact = forecast_artifact(chain, cutoff=4)
+    for field in ("canonical_parquet_path", "canonical_manifest_path",
+                  "split_manifest_path", "policy_manifest_path"):
+        value = getattr(artifact, field)
+        assert isinstance(value, str) and value
+        assert not value.startswith("/") and "\\" not in value
+
+
+def test_artifact_five_provenances_carry_identical_sources(chain):
+    artifact = forecast_artifact(chain, cutoff=4)
+    reference = artifact.provenance[DRIVERS[0]].sources
+    assert [d.role for d in reference] == [
+        "canonical_parquet", "canonical_manifest", "split_manifest",
+        "forecast_policy_manifest",
+    ]
+    for driver in DRIVERS:
+        assert artifact.provenance[driver].sources == reference
+
+
+@pytest.mark.parametrize("field,value", [
+    ("code_revision", "b" * 40),
+    ("method", "persistence"),
+    ("model_name", "other_model"),
+    ("model_version", "v2"),
+    ("seed", 0),
+    ("generated_at", "2024-01-05T05:00:00+08:00"),
+    ("target_end_exclusive", "2024-01-05T07:00:00+08:00"),
+    ("lookback_start", "2024-01-03T04:00:00+08:00"),
+])
+def test_artifact_rejects_per_series_top_level_mismatch(chain, field, value):
+    """B.1/B.2/B.3/B.9：逐序列证据与顶层不一致 → **构造时**拒绝。"""
+    from contracts.models import AvailableExogenousForecast
+
+    _, payload = _artifact_payload(chain)
+    mutated = _mutate_provenance(payload, "ghi_w_per_m2", field, value)
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**mutated)
+
+
+@pytest.mark.parametrize("mutation", [
+    "drop_canonical_parquet",
+    "drop_policy",
+    "duplicate_split_manifest",
+    "extra_role",
+    "reorder",
+    "wrong_path",
+    "wrong_hash",
+])
+def test_artifact_rejects_broken_source_role_closure(chain, mutation):
+    """B.4–B.8：角色缺失、重复、额外、乱序，以及 path/hash 不一致全部拒绝。"""
+    from contracts.models import AvailableExogenousForecast
+
+    _, payload = _artifact_payload(chain)
+    sources = [dict(d) for d in payload["provenance"]["wind_speed_10m_mps"]["sources"]]
+
+    if mutation == "drop_canonical_parquet":
+        sources = [d for d in sources if d["role"] != "canonical_parquet"]
+    elif mutation == "drop_policy":
+        sources = [d for d in sources if d["role"] != "forecast_policy_manifest"]
+    elif mutation == "duplicate_split_manifest":
+        sources = [sources[0], sources[1], sources[2], sources[2]]
+    elif mutation == "extra_role":
+        sources = sources + [{"role": "shadow", "logical_path": "x", "sha256": "c" * 64}]
+    elif mutation == "reorder":
+        sources = [sources[1], sources[0], sources[2], sources[3]]
+    elif mutation == "wrong_path":
+        sources[2] = {**sources[2], "logical_path": "<external>/other.json"}
+    elif mutation == "wrong_hash":
+        sources[3] = {**sources[3], "sha256": "d" * 64}
+
+    mutated = _mutate_provenance(payload, "wind_speed_10m_mps", "sources", sources)
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**mutated)
+
+
+def test_artifact_digest_validates_itself_at_construction():
+    """B.10：ArtifactDigest 在构造时自校验，不等嵌套进 provenance。"""
+    from contracts.models import ArtifactDigest
+
+    with pytest.raises(ValueError):
+        ArtifactDigest(role="", logical_path="p", sha256="a" * 64)
+    with pytest.raises(ValueError):
+        ArtifactDigest(role="r", logical_path="", sha256="a" * 64)
+    with pytest.raises(ValueError):
+        ArtifactDigest(role="r", logical_path="/Users/someone/x", sha256="a" * 64)
+    for bad in ("abc", "A" * 64, "z" * 64, 5, None):
+        with pytest.raises(ValueError):
+            ArtifactDigest(role="r", logical_path="p", sha256=bad)
+
+
+def test_validate_available_forecast_reuses_the_construction_rules(chain):
+    """校验入口的防御性复验直接复用构造规则，不维护更弱的重复规则。"""
+    from contracts.validators import validate_available_forecast
+
+    artifact = forecast_artifact(chain, cutoff=4)
+    validate_available_forecast(artifact)  # 合法 → 通过
+
+    # `model_copy` **不重跑**构造校验，因此可以造出一个不合规对象
+    weak = artifact.model_copy(update={"period_steps": 47})
+    with pytest.raises(ValueError):
+        validate_available_forecast(weak)
+    weak = artifact.model_copy(update={"code_revision": "not-a-git-sha"})
+    with pytest.raises(ValueError):
+        validate_available_forecast(weak)
+
+
+# --- 16. M1.3e-R2：冻结 policy 规则与时间轴 -----------------------------------
+
+@pytest.mark.parametrize("field,value", [
+    ("split", "holdout"),
+    ("split", ""),
+    ("frequency", "1h"),
+    ("frequency", "60min"),
+    ("method", "persistence"),
+    ("method", "seasonal_naive"),
+    ("period_steps", 47),
+    ("period_steps", 49),
+])
+def test_artifact_rejects_non_frozen_policy_values(chain, field, value):
+    """C：合法但**错误**的取值同样必须拒绝（不是只查非空/正数）。"""
+    from contracts.models import AvailableExogenousForecast
+
+    _, payload = _artifact_payload(chain)
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, field: value})
+
+
+@pytest.mark.parametrize("mutation", [
+    "empty",
+    "duplicate",
+    "out_of_order",
+    "offset_17min",
+    "gap_60min",
+    "first_not_generated_at",
+])
+def test_artifact_rejects_bad_target_timeline(chain, mutation):
+    """D：重复、乱序、非 30 分钟网格、缺口、首项偏离全部拒绝，且不泄漏内建异常。"""
+    from contracts.models import AvailableExogenousForecast
+
+    _, payload = _artifact_payload(chain)
+    stamps = list(payload["target_timestamps"])
+    if mutation == "empty":
+        stamps = []
+    elif mutation == "duplicate":
+        stamps[1] = stamps[0]
+    elif mutation == "out_of_order":
+        stamps[0], stamps[1] = stamps[1], stamps[0]
+    elif mutation == "offset_17min":
+        stamps[1] = "2024-01-05T04:17:00+08:00"
+    elif mutation == "gap_60min":
+        stamps[1] = "2024-01-05T05:00:00+08:00"
+    elif mutation == "first_not_generated_at":
+        stamps[0] = "2024-01-05T04:30:00+08:00"
+    mutated = {**payload, "target_timestamps": stamps}
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        AvailableExogenousForecast(**mutated)
+
+
+@pytest.mark.parametrize("bad", (None, 5, 1, []))
+def test_target_timeline_rejections_do_not_leak_builtin_errors(chain, bad):
+    from contracts.models import AvailableExogenousForecast
+
+    _, payload = _artifact_payload(chain)
+    with pytest.raises(ValueError):
+        AvailableExogenousForecast(**{**payload, "target_timestamps": bad})
+
+
+def test_artifact_lookback_and_target_end_are_locked(chain):
+    """D.5/D.6：target 末端 = 最后 target + 30min；lookback 起点 = generated_at − 24h。"""
+    artifact = forecast_artifact(chain, cutoff=4)
+    for driver in DRIVERS:
+        entry = artifact.provenance[driver]
+        assert entry.target_end_exclusive == "2024-01-05T06:00:00+08:00"
+        assert entry.lookback_start == "2024-01-04T04:00:00+08:00"
+        assert entry.target_start == artifact.generated_at
+
+
+# --- 17. M1.3e-R2：revision 覆盖真实实现面 ------------------------------------
+
+R1_POLICY_REVISION = "05ad5521a14e9b6e04bcdc1f00655f9a135b1574"
+
+
+def test_forecast_source_paths_cover_the_contract_semantics():
+    module = importlib.import_module(FORECAST_MODULE)
+    required = {
+        "contracts/__init__.py",
+        "contracts/models.py",
+        "contracts/validators.py",
+        "scenario/forecast.py",
+        "scripts/materialize_singapore_forecast_policy.py",
+    }
+    assert required <= set(module.FORECAST_SOURCE_PATHS)
+    assert module.FORECAST_SOURCE_PATHS == tuple(
+        importlib.import_module(POLICY_MATERIALIZER).FORECAST_SOURCE_PATHS
+    )
+
+
+def test_revision_and_dirty_check_use_the_same_paths():
+    module = _policy_module()
+    assert module.FORECAST_SOURCE_PATHS == importlib.import_module(
+        FORECAST_MODULE).FORECAST_SOURCE_PATHS
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", *module.FORECAST_SOURCE_PATHS],
+        cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout
+    assert module._generator_is_dirty() is bool(status.strip())
+
+
+def test_every_source_path_is_tracked_by_git():
+    module = importlib.import_module(FORECAST_MODULE)
+    for path in module.FORECAST_SOURCE_PATHS:
+        assert (REPO_ROOT / path).exists(), path
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", path],
+            cwd=REPO_ROOT, capture_output=True, text=True).returncode
+        assert tracked == 0, f"{path} 未被 Git 跟踪，revision 解析将不可靠"
+
+
+def test_r1_policy_revision_is_no_longer_accepted(chain):
+    """E.2：实现 revision 变了之后，旧的（R1）policy revision 必须被拒绝。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    assert module.provider_code_revision() != R1_POLICY_REVISION
+    payload = _policy_json(chain["policy_manifest"])
+    payload["materializer_revision"] = R1_POLICY_REVISION
+    _rewrite_json(chain["policy_manifest"], payload)
+    with pytest.raises(ValueError):
+        forecast_artifact(chain)
+
+
+def test_r2_policy_manifest_revision_is_the_current_implementation(chain):
+    module = importlib.import_module(FORECAST_MODULE)
+    artifact = forecast_artifact(chain, cutoff=4)
+    assert artifact.code_revision == module.provider_code_revision()
+    assert tuple(d.sha256 for d in artifact.provenance[DRIVERS[0]].sources) == (
+        artifact.canonical_parquet_sha256,
+        artifact.canonical_manifest_sha256,
+        artifact.split_manifest_sha256,
+        artifact.policy_manifest_sha256,
+    )
+
+
+def test_scenario_split_names_match_the_frozen_split_module():
+    from contracts.models import SCENARIO_SPLIT_NAMES
+    from scenario.splits import SPLIT_NAMES
+
+    assert SCENARIO_SPLIT_NAMES == SPLIT_NAMES
