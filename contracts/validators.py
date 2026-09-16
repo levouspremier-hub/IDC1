@@ -16,6 +16,7 @@ from contracts.models import (
     ScenarioBundle,
     SystemSnapshot,
     TaskAllocation,
+    validate_available_forecast_artifact,
     validate_bundle_forecast_provenance,
     validate_forecast_series_provenance,
 )
@@ -210,12 +211,13 @@ validate_scenario_provenance = validate_bundle_forecast_provenance
 def validate_available_forecast(artifact: AvailableExogenousForecast) -> None:
     """driver forecast artifact 的显式完整性校验（**防御性第二道**）。
 
-    模型在构造时已自校验；此入口用于对「经由 `model_copy` 等手段绕开构造校验」
-    的对象再验一次。**做法是重新 `model_validate(model_dump())`**——
-    直接复用构造时的**同一套**规则，而不是另行维护一套更弱的重复规则
-    （M1.3e-R2 明确要求；重复规则迟早会与主规则漂移）。
+    模型在构造时已自校验；此入口用于对「经由 `model_copy(update=...)` 直接写入
+    `__dict__`」的对象再验一次。实现委托给 `contracts.models` 的
+    `validate_available_forecast_artifact()`：它把原始属性值重新过一遍**构造路径的
+    同一套规则**（而不是另写一套更弱的重复规则），且**不经过序列化器**
+    ——序列化器可能把值洗白（M1.3e-R3 §18.5）。
     """
-    type(artifact).model_validate(artifact.model_dump())
+    validate_available_forecast_artifact(artifact)
 
 
 def validate_forecast_purpose(scenario: ScenarioBundle, *, purpose: str) -> None:

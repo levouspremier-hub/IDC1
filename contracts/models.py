@@ -81,6 +81,65 @@ BUNDLE_FORBIDDEN_SOURCE_KINDS: tuple[str, ...] = ("unavailable",)
 _HEX_DIGITS = frozenset("0123456789abcdef")
 
 
+def _require_plain_int(value: object, *, field: str) -> int:
+    """**coercion 之前**的严格整数：只接受真正的 `int`。
+
+    pydantic 的宽松模式会在字段类型校验前把 `"200"` 变成 `200`、`200.0` 变成 `200`、
+    `True` 变成 `1`，因此必须在 `mode="before"` 的 validator 里先挡下来
+    （M1.3e-R3）。刻意**不**对整个 `ContractBase` 打开全局 `strict=True`，
+    以免无关契约大面积改变行为。
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} 必须是整数（bool 不算），实际 {value!r}")
+    return value
+
+
+def _require_finite_number(value: object, *, field: str) -> float:
+    """严格数值元素：接受 `int`/`float`（**bool 不算数值**）；拒绝 NaN/±Inf。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field} 必须是数值（bool 不算），实际 {value!r}")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{field} 必须是有限数值，实际 {value!r}")
+    return result
+
+
+def _normalise_forecast_series(value: object, *, field: str) -> tuple[float, ...]:
+    """预测序列元素规则：容器只接受 `list`/`tuple` 并规范化为 `tuple`。
+
+    `AvailableSeries` 与 `ScenarioBundle` **共用这一份实现**，避免两处规则漂移
+    （M1.3e-R3 明确要求「公共校验 helper 应只有一份」）。
+    """
+    if isinstance(value, (str, bytes)) or not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"{field} 必须是 list/tuple，实际 {type(value).__name__}"
+        )
+    return tuple(
+        _require_finite_number(element, field=f"{field}[{index}]")
+        for index, element in enumerate(value)
+    )
+
+
+def _require_canonical_logical_path(value: object, *, field: str) -> str:
+    """**规范 POSIX 逻辑路径**：非空、无空白、相对、无反斜杠、无 `.`/`..`/空片段。"""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} 必须是非空字符串，实际 {value!r}")
+    if value != value.strip() or any(character.isspace() for character in value):
+        raise ValueError(f"{field} 不得含空白（含前后缀）：{value!r}")
+    if value.startswith("/"):
+        raise ValueError(f"{field} 不得是绝对路径：{value!r}")
+    if "\\" in value:
+        raise ValueError(f"{field} 必须是 POSIX 逻辑路径（不得含反斜杠）：{value!r}")
+    for segment in value.split("/"):
+        if segment == "":
+            raise ValueError(
+                f"{field} 不得含空路径片段（如 'a//b' 或结尾 '/'）：{value!r}"
+            )
+        if segment in (".", ".."):
+            raise ValueError(f"{field} 不得含 '.' 或 '..' 路径片段：{value!r}")
+    return value
+
+
 def _is_lower_hex(value: object, length: int) -> bool:
     return (
         isinstance(value, str)
@@ -123,19 +182,15 @@ class ArtifactDigest(ContractBase):
     logical_path: str
     sha256: str
 
+    @field_validator("logical_path", mode="before")
+    @classmethod
+    def _check_logical_path(cls, value: object) -> object:
+        return _require_canonical_logical_path(value, field="ArtifactDigest.logical_path")
+
     @model_validator(mode="after")
     def _validate_digest(self) -> ArtifactDigest:
         if not isinstance(self.role, str) or not self.role:
             raise ValueError(f"ArtifactDigest.role 必须是非空字符串，实际 {self.role!r}")
-        if not isinstance(self.logical_path, str) or not self.logical_path:
-            raise ValueError(
-                f"ArtifactDigest.logical_path 必须是非空逻辑路径，实际 {self.logical_path!r}"
-            )
-        if self.logical_path.startswith("/") or "\\" in self.logical_path:
-            raise ValueError(
-                "ArtifactDigest.logical_path 必须是**仓库逻辑路径**，"
-                f"不得是机器绝对路径：{self.logical_path!r}"
-            )
         if not _is_lower_hex(self.sha256, 64):
             raise ValueError(
                 f"ArtifactDigest.sha256 必须是 64 位小写十六进制，实际 {self.sha256!r}"
@@ -351,6 +406,12 @@ class ScenarioBundle(ContractBase):
     generated_at: str
     forecast_provenance: ScenarioForecastProvenance
 
+    @field_validator(*BUNDLE_FORECAST_FIELDS, mode="before")
+    @classmethod
+    def _normalise_forecasts(cls, value: object, info) -> object:
+        """七个 forecast 序列与 artifact 共用**同一套**元素规则（M1.3e-R3）。"""
+        return _normalise_forecast_series(value, field=info.field_name)
+
     UNITS: ClassVar[dict[str, str]] = {
         "price_forecast": "SGD/kWh",
         "load_forecast": "MW",
@@ -438,6 +499,12 @@ class AvailableSeries(BaseModel):
     wind_speed_10m_mps: tuple[float, ...]
     ghi_w_per_m2: tuple[float, ...]
 
+    @field_validator(*AVAILABLE_DRIVER_SERIES, mode="before")
+    @classmethod
+    def _normalise_series(cls, value: object, info) -> object:
+        """容器规范化 + 元素严格验型，与 `ScenarioBundle` 共用同一份实现。"""
+        return _normalise_forecast_series(value, field=info.field_name)
+
     def __getitem__(self, driver: str) -> tuple[float, ...]:
         try:
             return getattr(self, driver)
@@ -505,11 +572,18 @@ class AvailableExogenousForecast(ContractBase):
         "origin", "global_origin", "forecast_cutoff", "period_steps", mode="before"
     )
     @classmethod
-    def _reject_bool_integers(cls, value: object) -> object:
-        """pydantic 宽松模式会把 `True` 变成 `1`；整数语义字段必须显式拒绝 bool。"""
-        if isinstance(value, bool):
-            raise ValueError("整数语义字段不得为 bool")
-        return value
+    def _require_integers(cls, value: object, info) -> object:
+        """**coercion 之前**的严格整数（M1.3e-R3）：bool/float/字符串/None/容器全拒绝。"""
+        return _require_plain_int(value, field=info.field_name)
+
+    @field_validator(
+        "canonical_parquet_path", "canonical_manifest_path",
+        "split_manifest_path", "policy_manifest_path", mode="before",
+    )
+    @classmethod
+    def _require_logical_paths(cls, value: object, info) -> object:
+        """四条上游 path 必须规范 POSIX 逻辑路径（首个错误字段名即 `info.field_name`）。"""
+        return _require_canonical_logical_path(value, field=info.field_name)
 
     @model_validator(mode="after")
     def _validate_available_forecast(self) -> AvailableExogenousForecast:
@@ -556,14 +630,10 @@ class AvailableExogenousForecast(ContractBase):
             raise ValueError(f"forecast_cutoff 必须是严格正整数，实际 {self.forecast_cutoff!r}")
 
     def _validate_paths_and_hashes(self) -> None:
+        # 顶层 path 已由 `_require_logical_paths`（mode="before"）在 coercion 前校验；
+        # 这里再确认一次，使「经由 model_copy 绕开构造」的对象也被抓住。
         for field in AVAILABLE_SOURCE_PATH_FIELDS.values():
-            value = getattr(self, field)
-            if not isinstance(value, str) or not value:
-                raise ValueError(f"{field} 必须是非空逻辑路径，实际 {value!r}")
-            if value.startswith("/") or "\\" in value:
-                raise ValueError(
-                    f"{field} 必须是仓库逻辑路径，不得是机器绝对路径：{value!r}"
-                )
+            _require_canonical_logical_path(getattr(self, field), field=field)
         for field in AVAILABLE_SOURCE_HASH_FIELDS.values():
             if not _is_lower_hex(getattr(self, field), 64):
                 raise ValueError(
@@ -725,6 +795,32 @@ class AvailableExogenousForecast(ContractBase):
         return hashlib.sha256(
             json.dumps(self.model_dump(mode="json"), sort_keys=True).encode("utf-8")
         ).hexdigest()
+
+
+def raw_model_payload(model: BaseModel) -> dict:
+    """把模型还原成**原始值字典**（递归展开嵌套模型），**不经过序列化器**。
+
+    刻意不用 `model_dump()`：序列化器可能「洗白」值（例如把 `bool` 元素按
+    `float` 字段序列化成 `1.0`），用它做复验就会漏掉 R2/R3 要挡住的类型问题
+    （M1.3e-R3 §18.5）。
+    """
+    payload: dict = {}
+    for name in type(model).model_fields:
+        value = getattr(model, name)
+        if isinstance(value, BaseModel):
+            value = raw_model_payload(value)
+        payload[name] = value
+    return payload
+
+
+def validate_available_forecast_artifact(artifact: AvailableExogenousForecast) -> None:
+    """对 artifact 做**防御性复验**：把原始属性值重新过一遍构造时的**同一套**规则。
+
+    直接复用构造路径（`model_validate` + `mode="before"` validator），
+    因此不会像「另写一套更弱的重复规则」那样随时间漂移；对经由
+    `model_copy(update=...)` 直接写入 `__dict__` 的对象同样有效。
+    """
+    type(artifact).model_validate(raw_model_payload(artifact))
 
 
 class TaskState(ContractBase):
