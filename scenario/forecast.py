@@ -53,6 +53,7 @@ from contracts import CONTRACT_VERSION_ID
 from contracts.models import (
     AVAILABLE_DRIVER_SERIES,
     AVAILABLE_FORECAST_SOURCE_KIND,
+    AVAILABLE_SOURCE_ROLES,
     ArtifactDigest,
     AvailableDriverProvenance,
     AvailableExogenousForecast,
@@ -91,9 +92,14 @@ UNAVAILABLE_NOT_MATERIALIZED: tuple[str, ...] = (
 
 STEP_MINUTES = 30
 
-# provider **与** policy 物化器的实现文件：revision 由这一组路径解析，
-# 因此 provider 解析出的 revision 与 policy 的 `materializer_revision` 恒等。
+# provider、policy 物化器**与 artifact 契约语义**的实现文件：revision 由这一组
+# 路径解析，因此 provider 解析出的 revision 与 policy 的 `materializer_revision`
+# 恒等；**M1.3e-R2 起覆盖 `contracts/`**——否则改了契约语义而 policy revision
+# 不变，等于用旧 revision 为新的契约语义背书。
 FORECAST_SOURCE_PATHS: tuple[str, ...] = (
+    "contracts/__init__.py",
+    "contracts/models.py",
+    "contracts/validators.py",
     "scenario/forecast.py",
     "scripts/materialize_singapore_forecast_policy.py",
 )
@@ -438,32 +444,39 @@ def build_available_exogenous_forecast(
         + timedelta(minutes=STEP_MINUTES)
     ).isoformat()
 
-    digest = ArtifactDigest(
-        role="forecast_policy_manifest",
-        logical_path=logical_repo_path(policy_manifest_path),
-        sha256=sources["policy_manifest_sha256"],
-    )
+    # 顶层四条 logical path：与逐序列 digest **逐项恒等**（由契约在构造时校验）
+    logical_paths = {
+        "canonical_parquet_path": logical_repo_path(canonical_parquet_path),
+        "canonical_manifest_path": logical_repo_path(canonical_manifest_path),
+        "split_manifest_path": logical_repo_path(split_manifest_path),
+        "policy_manifest_path": logical_repo_path(policy_manifest_path),
+    }
     digest_by_role = {
         "canonical_parquet": ArtifactDigest(
             role="canonical_parquet",
-            logical_path=logical_repo_path(canonical_parquet_path),
+            logical_path=logical_paths["canonical_parquet_path"],
             sha256=sources["canonical_parquet_sha256"],
         ),
         "canonical_manifest": ArtifactDigest(
             role="canonical_manifest",
-            logical_path=logical_repo_path(canonical_manifest_path),
+            logical_path=logical_paths["canonical_manifest_path"],
             sha256=sources["canonical_manifest_sha256"],
         ),
         "split_manifest": ArtifactDigest(
             role="split_manifest",
-            logical_path=logical_repo_path(split_manifest_path),
+            logical_path=logical_paths["split_manifest_path"],
             sha256=sources["split_manifest_sha256"],
         ),
+        "forecast_policy_manifest": ArtifactDigest(
+            role="forecast_policy_manifest",
+            logical_path=logical_paths["policy_manifest_path"],
+            sha256=sources["policy_manifest_sha256"],
+        ),
     }
-    all_sources = [digest_by_role["canonical_parquet"],
-                   digest_by_role["canonical_manifest"],
-                   digest_by_role["split_manifest"],
-                   digest]
+    # 角色**按序**等于冻结集合：缺失、重复、额外、乱序都会被契约拒绝
+    all_sources = tuple(
+        digest_by_role[role] for role in AVAILABLE_SOURCE_ROLES
+    )
 
     series: dict[str, tuple[float, ...]] = {}
     provenance: dict[str, ForecastSeriesProvenance] = {}
@@ -488,7 +501,7 @@ def build_available_exogenous_forecast(
             model_version=MODEL_VERSION,
             code_revision=expected_revision,
             seed=None,
-            sources=list(all_sources),
+            sources=all_sources,
         )
 
     return AvailableExogenousForecast(
@@ -503,8 +516,11 @@ def build_available_exogenous_forecast(
         target_timestamps=target_timestamps,
         series=AvailableSeries(**series),
         provenance=AvailableDriverProvenance(**provenance),
-        policy_manifest_path=logical_repo_path(policy_manifest_path),
+        policy_manifest_path=logical_paths["policy_manifest_path"],
         policy_manifest_sha256=sources["policy_manifest_sha256"],
+        canonical_parquet_path=logical_paths["canonical_parquet_path"],
+        canonical_manifest_path=logical_paths["canonical_manifest_path"],
+        split_manifest_path=logical_paths["split_manifest_path"],
         canonical_parquet_sha256=sources["canonical_parquet_sha256"],
         canonical_manifest_sha256=sources["canonical_manifest_sha256"],
         split_manifest_sha256=sources["split_manifest_sha256"],
