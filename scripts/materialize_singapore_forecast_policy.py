@@ -44,60 +44,31 @@ from contracts import CONTRACT_VERSION_ID
 from scenario.forecast import (
     AVAILABLE_DRIVERS,
     FORECAST_PERIOD_STEPS,
+    FORECAST_SOURCE_PATHS,
     FREQUENCY,
+    INFORMATION_POLICY,
     METHOD,
+    POLICY_MANIFEST_KEYS,
+    POLICY_READINESS,
+    POLICY_SCHEMA,
+    SEED_POLICY,
+    TARGET_POLICY,
     UNAVAILABLE_NOT_MATERIALIZED,
+    provider_code_revision,
 )
 from scenario.splits import (
     SplitError,
     _require_canonical_utc,
-    _verify_canonical,
+    load_truth_split,
     logical_repo_path,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-POLICY_SCHEMA = "m1.3e-singapore-2024-forecast-policy-v1"
-
-# 本 policy 的 revision 由「最后修改这些实现的提交」解析。
-FORECAST_SOURCE_PATHS: tuple[str, ...] = (
-    "scenario/forecast.py",
-    "scripts/materialize_singapore_forecast_policy.py",
-)
-
-INFORMATION_POLICY = "closed_open_[origin-48, origin)"
-TARGET_POLICY = "half_open_[origin, origin+C)"
-SEED_POLICY = None  # 冻结方法不使用随机数
-
-READINESS: dict[str, bool] = {
-    "available_driver_forecasts_ready": True,
-    "complete_scenario_forecasts_ready": False,
-    "formal_scenario_bundle_ready": False,
-    "formal_training_ready": False,
-}
-
-# 冻结的键集合：**必须精确相等**；未知字段一律拒绝。
-POLICY_MANIFEST_KEYS: tuple[str, ...] = (
-    "schema",
-    "contract_version",
-    "canonical_parquet_path",
-    "canonical_parquet_sha256",
-    "canonical_manifest_path",
-    "canonical_manifest_sha256",
-    "split_manifest_path",
-    "split_manifest_sha256",
-    "materializer_revision",
-    "available_drivers",
-    "method",
-    "period_steps",
-    "frequency",
-    "information_policy",
-    "target_policy",
-    "seed_policy",
-    "unavailable_not_materialized",
-    "readiness",
-    "frozen_at_utc",
-)
+# 冻结的 policy schema 与键集合由 `scenario.forecast`（provider）**唯一**定义，
+# 物化器只导入复用，避免两处漂移。`READINESS` 为旧名保留的别名。
+READINESS = POLICY_READINESS
+STATIC_POLICY_SOURCE_PATHS = FORECAST_SOURCE_PATHS
 
 
 class ForecastPolicyError(ValueError):
@@ -113,16 +84,18 @@ def _git(*args: str) -> str:
 
 
 def resolve_forecast_materializer_revision() -> str:
-    """本 policy 的 revision = 最后修改 provider/materializer 实现的提交。"""
-    revision = _git(
-        "log", "-1", "--format=%H", "--", *FORECAST_SOURCE_PATHS
-    ).strip()
-    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+    """本 policy 的 revision = 最后修改 provider/materializer 实现的提交。
+
+    与 provider 使用**同一** `scenario.forecast.FORECAST_SOURCE_PATHS`，
+    因此 artifact 的 `code_revision` 与本 manifest 的 `materializer_revision` 恒等。
+    """
+    try:
+        return provider_code_revision()
+    except ValueError as error:
         raise ForecastPolicyError(
-            f"materializer_revision 无法由 Git 解析（{revision!r}）："
-            "provider/materializer 实现必须先提交"
-        )
-    return revision
+            f"materializer_revision 无法由 Git 解析：{error}"
+            "（provider/materializer 实现必须先提交）"
+        ) from error
 
 
 def _generator_is_dirty() -> bool:
@@ -179,24 +152,30 @@ def build_forecast_policy_manifest(
     split_manifest_path: Path | str,
     frozen_at_utc: str,
 ) -> dict:
-    """构造候选 forecast policy manifest（**只读**上游，逐级校验 hash）。"""
+    """构造候选 forecast policy manifest（**只读**上游，逐级校验 hash）。
+
+    M1.3e-R1：除 canonical manifest → canonical parquet 的 hash 链外，还会走
+    **M1.3d 的完整严格校验**（`load_truth_split("train", ...)`：split manifest 的
+    精确键集合/冻结声明/readiness/unavailable/train-only 统计重算，以及整条
+    canonical 时间轴）。policy manifest 因此只会在「split 声明可被完整验证」时产出。
+    """
     canonical_parquet_path = Path(canonical_parquet_path)
     canonical_manifest_path = Path(canonical_manifest_path)
     split_manifest_path = Path(split_manifest_path)
 
     _require_canonical_utc(frozen_at_utc, field="frozen_at_utc")
 
-    try:
-        split_manifest = json.loads(split_manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ForecastPolicyError(f"split manifest 不可读：{error}") from error
-    if not isinstance(split_manifest, dict):
-        raise ForecastPolicyError("split manifest 必须是 object")
-
-    # canonical manifest → canonical parquet 逐级校验（不符即 fail closed）
-    parquet_sha = _verify_canonical(
-        canonical_parquet_path, canonical_manifest_path, split_manifest
+    # M1.3d 的**完整**严格校验（split manifest 精确键集合与冻结声明、canonical
+    # manifest → canonical parquet 的 hash 链、整条 canonical 时间轴、
+    # train-only 统计重算）。复用既有 reader，**不**复制宽松校验器，也**不**在
+    # 严格校验之前先触碰 split manifest 的字段（否则畸形输入会泄漏 KeyError）。
+    load_truth_split(
+        "train",
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
     )
+    parquet_sha = hashlib.sha256(canonical_parquet_path.read_bytes()).hexdigest()
 
     manifest = {
         "schema": POLICY_SCHEMA,

@@ -5,20 +5,35 @@
     price_sgd_per_kwh、system_load_mw、temperature_deg_c、
     wind_speed_10m_mps、ghi_w_per_m2
 
-**冻结方法**：trailing seasonal-naive，周期**固定** `PERIOD_STEPS = 48`
+**冻结方法**：trailing seasonal-naive，周期**固定** `FORECAST_PERIOD_STEPS = 48`
 （半小时 × 48 = 一个物理日周期，**不从 validation/test 选择**）。
 
 对全局 origin = i：
 
 - 历史模板**只允许**读取 `[i-48, i)`；**绝不**读取 i 或 i 之后的 truth；
-- forecast 第 k 项取模板的 `k mod 48` 项；
+- forecast 第 k 项取模板的 `k mod 48` 项（模板按**时间正序**，等价
+  `forecast[k] = y(i + k − 48)`）；
 - `generated_at = information_cutoff_exclusive = lookback_end_exclusive = origin`；
 - target = `[origin, origin+C)`，`C` 必须通过 M1.3d `validate_forecast_origin`；
 - 历史不足 48 步（如 train 内 `origin < 48`）**fail closed**，不回填、不跨年环绕；
-- 不使用任何随机数（`seed` 明确为 `null`）；不在本卡暗中引入任何拟合。
+- 不使用任何随机数（`seed` 明确为 `null`）；不引入任何拟合。
+
+**M1.3e-R1：完整信任链**。`build_available_exogenous_forecast()` 逐层校验
+
+```text
+policy manifest → split manifest → canonical manifest → canonical parquet
+```
+
+- policy manifest 的 schema/契约版本/method/period/drivers/readiness/路径/三个 hash/
+  revision 全部校验；声明的路径必须与调用者实际提供的 logical repo path 一致；
+- split manifest 走 **M1.3d 的完整严格校验**（`load_truth_split`），不另写宽松校验器；
+- canonical manifest **自身字节**的 SHA-256 必须与 policy 声明一致；
+- `code_revision` **没有**公开参数：只能由内部 Git resolver 得到，并与 policy 的
+  `materializer_revision` 恒等。
 
 本模块**不**生成 PV / 风电发电量 / 碳强度 / arrival 的 forecast，
-也**不**构造正式 `ScenarioBundle` —— 它只产出「available exogenous forecast artifact」。
+也**不**构造正式 `ScenarioBundle` —— 它只产出严格冻结的
+`contracts.AvailableExogenousForecast` artifact。
 """
 
 from __future__ import annotations
@@ -26,20 +41,34 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, Sequence
 
 import pandas as pd
 
 from contracts import CONTRACT_VERSION_ID
+from contracts.models import (
+    AVAILABLE_DRIVER_SERIES,
+    AVAILABLE_FORECAST_SOURCE_KIND,
+    ArtifactDigest,
+    AvailableDriverProvenance,
+    AvailableExogenousForecast,
+    AvailableSeries,
+    ForecastSeriesProvenance,
+)
 from scenario.splits import (
-    CANONICAL_SCHEMA,
     FREQUENCY,
-    STEP_MINUTES,
-    TIMEZONE,
-    TOTAL_ROWS,
     SplitName,
+    _require_canonical_utc,
     _require_dict,
+    _require_exact_keys,
+    _require_git_sha40,
     _require_hex64,
+    _require_int,
+    _require_str_list,
+    load_truth_split,
     logical_repo_path,
     validate_canonical_timeline,
     validate_forecast_origin,
@@ -51,143 +80,282 @@ PERIOD_STEPS = FORECAST_PERIOD_STEPS
 METHOD = "trailing_seasonal_naive"
 MODEL_NAME = "trailing_seasonal_naive"
 MODEL_VERSION = "v1"
-SOURCE_KIND = "seasonal_naive"
+SOURCE_KIND = AVAILABLE_FORECAST_SOURCE_KIND
 
-AVAILABLE_DRIVERS: tuple[str, ...] = (
-    "price_sgd_per_kwh",
-    "system_load_mw",
-    "temperature_deg_c",
-    "wind_speed_10m_mps",
-    "ghi_w_per_m2",
-)
+AVAILABLE_DRIVERS: tuple[str, ...] = AVAILABLE_DRIVER_SERIES
 # 这四个字段本卡**不**生成 forecast（不得用全零或默认曲线补齐）
 UNAVAILABLE_NOT_MATERIALIZED: tuple[str, ...] = (
     "local_pv_kw", "wind_generation_kw", "carbon_intensity", "arrival",
 )
 
-FORECAST_SOURCE_PATHS = ("scenario/forecast.py",)
+STEP_MINUTES = 30
+
+# provider **与** policy 物化器的实现文件：revision 由这一组路径解析，
+# 因此 provider 解析出的 revision 与 policy 的 `materializer_revision` 恒等。
+FORECAST_SOURCE_PATHS: tuple[str, ...] = (
+    "scenario/forecast.py",
+    "scripts/materialize_singapore_forecast_policy.py",
+)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# --- forecast policy manifest 的冻结 schema（provider 与物化器共用） ---------
+
+POLICY_SCHEMA = "m1.3e-singapore-2024-forecast-policy-v1"
+INFORMATION_POLICY = "closed_open_[origin-48, origin)"
+TARGET_POLICY = "half_open_[origin, origin+C)"
+SEED_POLICY = None
+POLICY_READINESS: dict[str, bool] = {
+    "available_driver_forecasts_ready": True,
+    "complete_scenario_forecasts_ready": False,
+    "formal_scenario_bundle_ready": False,
+    "formal_training_ready": False,
+}
+POLICY_MANIFEST_KEYS: tuple[str, ...] = (
+    "schema",
+    "contract_version",
+    "canonical_parquet_path",
+    "canonical_parquet_sha256",
+    "canonical_manifest_path",
+    "canonical_manifest_sha256",
+    "split_manifest_path",
+    "split_manifest_sha256",
+    "materializer_revision",
+    "available_drivers",
+    "method",
+    "period_steps",
+    "frequency",
+    "information_policy",
+    "target_policy",
+    "seed_policy",
+    "unavailable_not_materialized",
+    "readiness",
+    "frozen_at_utc",
+)
 
 
 class ForecastError(ValueError):
     """因果 forecast 的**明确失败**。"""
 
 
-def _require_positive_int(value, *, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise ForecastError(f"{field} 必须是整数（half-hour steps），实际 {value!r}")
-    if value <= 0:
-        raise ForecastError(f"{field} 必须是严格正整数，实际 {value!r}")
-    return value
+# --- 纯计算：trailing seasonal-naive ----------------------------------------
 
+def seasonal_naive_forecast(
+    series: Sequence[float],
+    *,
+    origin: int,
+    forecast_cutoff: int,
+    period_steps: int = FORECAST_PERIOD_STEPS,
+) -> tuple[float, ...]:
+    """**纯函数**：trailing seasonal-naive，`forecast[k] = y(origin + k − period)`。
+
+    这是本卡冻结规则的**唯一**实现，`build_available_exogenous_forecast` 也调用它。
+    leakage 回归因此可以直接在这一层做因果性断言（不依赖冻结资产的字节）。
+
+    - 只读取 `[origin - period, origin)`，**绝不**读取 `origin` 或之后的值；
+    - 第 k 项取模板的 `k mod period` 项（模板按时间正序）；
+    - `origin < period` fail closed（不回填、不环绕）；
+    - 历史窗口含非有限值即拒绝。
+    """
+    for field, value in (("origin", origin), ("forecast_cutoff", forecast_cutoff),
+                         ("period_steps", period_steps)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ForecastError(f"{field} 必须是整数，实际 {value!r}")
+    if forecast_cutoff < 1:
+        raise ForecastError(f"forecast_cutoff 必须是严格正整数，实际 {forecast_cutoff!r}")
+    if period_steps < 1:
+        raise ForecastError(f"period_steps 必须是严格正整数，实际 {period_steps!r}")
+    if origin < 0:
+        raise ForecastError(f"origin 必须是非负整数，实际 {origin!r}")
+
+    history_start = origin - period_steps
+    if history_start < 0:
+        raise ForecastError(
+            f"origin={origin} 不足 {period_steps} 步历史；fail closed，不回填、不跨年环绕"
+        )
+    values = [float(x) for x in series[history_start:origin]]
+    if len(values) != period_steps:
+        raise ForecastError(
+            f"历史模板长度必须是 {period_steps}，实际 {len(values)}"
+        )
+    for value in values:
+        if not math.isfinite(value):
+            raise ForecastError(f"历史模板含非有限值：{value!r}")
+    return tuple(values[k % period_steps] for k in range(forecast_cutoff))
+
+
+# --- Git revision ------------------------------------------------------------
+
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def provider_code_revision() -> str:
+    """provider/materializer 实现的 Git revision（40 位小写 SHA）。
+
+    **没有**调用者入口：revision 只能由 Git 解析，且与 policy manifest 的
+    `materializer_revision` 使用**同一组** `FORECAST_SOURCE_PATHS`，因此两者恒等。
+    """
+    revision = _git(
+        "log", "-1", "--format=%H", "--", *FORECAST_SOURCE_PATHS
+    ).strip()
+    return _require_git_sha40(revision, field="provider code_revision")
+
+
+# --- policy manifest ---------------------------------------------------------
 
 def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _verify_canonical_parquet(
-    *, canonical_parquet_path: Path, canonical_manifest_path: Path,
-    split_manifest: dict,
-) -> str:
-    """逐级校验**实际读取的那份 canonical parquet 字节**（不符即 fail closed）。
+def read_forecast_policy_manifest(
+    policy_manifest_path: Path | str,
+    *,
+    canonical_parquet_path: Path | str,
+    canonical_manifest_path: Path | str,
+    split_manifest_path: Path | str,
+    expected_revision: str,
+    expected_sources: dict[str, str] | None = None,
+) -> dict:
+    """读取并**严格**校验 forecast policy manifest。
 
-    - split manifest 的 `canonical_parquet_sha256`
-    - canonical manifest 的 `output_parquet_sha256`
-    - parquet 文件的实测 sha256
-
-    三者必须相等，且 canonical manifest 的 schema/行数/时区/频率必须与冻结值一致。
-
-    **范围说明**：本函数**不**校验 canonical manifest 文件自身的 hash
-    （split manifest 的 `canonical_manifest_sha256`）—— 那是 M1.3d `load_truth_split`
-    读取链的职责；provider 只对「它真正读到的字节」负责，
-    以免把与本次预测无关的 manifest 元数据变化误判为数据变化。
+    校验 schema/契约版本/method/period/frequency/drivers/两条 policy/seed/
+    unavailable/readiness/frozen_at_utc/路径可移植性，并逐项对齐：
+    - 声明的三条 logical repo path 必须与调用者实际提供的路径一致；
+    - 声明的三个 SHA-256 必须与实际文件**字节**一致（`expected_sources` 已提供时
+      直接比对，避免重复读盘）；
+    - `materializer_revision` 必须等于 `expected_revision`（内部 Git resolver）。
     """
+    canonical_parquet_path = Path(canonical_parquet_path)
+    canonical_manifest_path = Path(canonical_manifest_path)
+    split_manifest_path = Path(split_manifest_path)
+
     try:
-        canonical = json.loads(canonical_manifest_path.read_text(encoding="utf-8"))
+        manifest = json.loads(Path(policy_manifest_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        raise ForecastError(f"canonical manifest 不可读：{error}") from error
-    canonical = _require_dict(canonical, field="canonical manifest")
-    if canonical.get("schema") != CANONICAL_SCHEMA:
-        raise ForecastError(
-            f"canonical manifest schema 必须是 {CANONICAL_SCHEMA!r}，"
-            f"实际 {canonical.get('schema')!r}"
-        )
-    if canonical.get("row_count") != TOTAL_ROWS:
-        raise ForecastError(f"canonical manifest row_count 必须是 {TOTAL_ROWS}")
-    if canonical.get("timezone") != TIMEZONE or canonical.get("frequency") != FREQUENCY:
-        raise ForecastError("canonical manifest 的 timezone/frequency 不符")
-
-    expected = _require_hex64(
-        split_manifest["canonical_parquet_sha256"], field="canonical_parquet_sha256"
-    )
-    recorded = _require_hex64(
-        canonical.get("output_parquet_sha256"), field="output_parquet_sha256"
-    )
-    actual = _sha256_file(canonical_parquet_path)
-    if actual != expected:
-        raise ForecastError(
-            "canonical parquet SHA-256 与 split manifest 不符："
-            f"split={expected} 实际={actual}"
-        )
-    if actual != recorded:
-        raise ForecastError(
-            "canonical parquet SHA-256 与 canonical manifest 不符："
-            f"canonical={recorded} 实际={actual}"
-        )
-    return actual
-
-
-def _git(*args: str) -> str:
-    import subprocess
-
-    return subprocess.run(
-        ["git", *args], cwd=Path(__file__).resolve().parent.parent,
-        capture_output=True, text=True, check=True,
-    ).stdout
-
-
-def _source_revision() -> str:
-    """本 provider 实现的 revision（由 Git 解析，不用漂移的 HEAD）。"""
-    revision = _git("log", "-1", "--format=%H", "--", *FORECAST_SOURCE_PATHS).strip()
-    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
-        raise ForecastError(f"provider revision 无效：{revision!r}")
-    return revision
-
-
-class AvailableExogenousForecast:
-    """**available exogenous forecast artifact** —— 不是完整 `ScenarioBundle`。
-
-    只含五个 driver 的 forecast 与其结构化 provenance；**不**含
-    PV / 风电发电量 / 碳强度 / arrival，故**不得**被当作完整场景。
-    """
-
-    # `content_hash` 只覆盖**预测内容本身**（这套预测的确定性身份）：
-    # 上游制品的 sha256 会随上游文件字节变化，而预测值未必变化——把它们算进
-    # content hash，会让「同一份预测」在上游重物化后得到不同身份。
-    # 上游 digest 仍完整保留在 `to_dict()["provenance"][*]["sources"]` 中供审计，
-    # 并对**实际读取的 parquet 字节**做 fail-closed 校验（`_verify_canonical_parquet`）。
-    _CONTENT_HASH_KEYS: tuple[str, ...] = (
-        "contract_version", "split", "origin", "global_origin", "forecast_cutoff",
-        "frequency", "method", "period_steps", "generated_at",
-        "target_timestamps", "series",
+        raise ForecastError(f"forecast policy manifest 不可读：{error}") from error
+    manifest = _require_dict(manifest, field="forecast policy manifest")
+    _require_exact_keys(
+        manifest, field="forecast policy manifest", expected=POLICY_MANIFEST_KEYS
     )
 
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
+    if manifest.get("schema") != POLICY_SCHEMA:
+        raise ForecastError(
+            f"policy manifest schema 必须是 {POLICY_SCHEMA!r}，"
+            f"实际 {manifest.get('schema')!r}"
+        )
+    if manifest.get("contract_version") != CONTRACT_VERSION_ID:
+        raise ForecastError(
+            f"policy manifest contract_version 必须是 {CONTRACT_VERSION_ID!r}，"
+            f"实际 {manifest.get('contract_version')!r}"
+        )
+    if manifest.get("method") != METHOD:
+        raise ForecastError(
+            f"policy manifest method 必须是 {METHOD!r}，实际 {manifest.get('method')!r}"
+        )
+    if _require_int(manifest.get("period_steps"), field="period_steps") != (
+        FORECAST_PERIOD_STEPS
+    ):
+        raise ForecastError(
+            f"policy manifest period_steps 必须是 {FORECAST_PERIOD_STEPS}"
+        )
+    if manifest.get("frequency") != FREQUENCY:
+        raise ForecastError(
+            f"policy manifest frequency 必须是 {FREQUENCY!r}，"
+            f"实际 {manifest.get('frequency')!r}"
+        )
+    _require_str_list(
+        manifest.get("available_drivers"), field="available_drivers",
+        expected=AVAILABLE_DRIVERS,
+    )
+    for field, expected in (("information_policy", INFORMATION_POLICY),
+                            ("target_policy", TARGET_POLICY)):
+        if manifest.get(field) != expected:
+            raise ForecastError(
+                f"policy manifest {field} 必须是 {expected!r}，实际 {manifest.get(field)!r}"
+            )
+    if manifest.get("seed_policy") is not SEED_POLICY:
+        raise ForecastError(
+            f"policy manifest seed_policy 必须是 {SEED_POLICY!r}，"
+            f"实际 {manifest.get('seed_policy')!r}"
+        )
+    _require_str_list(
+        manifest.get("unavailable_not_materialized"),
+        field="unavailable_not_materialized", expected=UNAVAILABLE_NOT_MATERIALIZED,
+    )
+    readiness = _require_dict(manifest.get("readiness"), field="readiness")
+    _require_exact_keys(readiness, field="readiness", expected=tuple(POLICY_READINESS))
+    if readiness != POLICY_READINESS:
+        raise ForecastError(
+            f"policy manifest readiness 必须严格等于 {POLICY_READINESS}，实际 {readiness!r}"
+        )
+    _require_canonical_utc(manifest.get("frozen_at_utc"), field="frozen_at_utc")
+    _require_git_sha40(manifest.get("materializer_revision"),
+                       field="materializer_revision")
 
-    def __getattr__(self, name: str):
+    # 路径声明必须与调用者实际提供的 logical repo path 一致
+    for field, actual in (
+        ("canonical_parquet_path", canonical_parquet_path),
+        ("canonical_manifest_path", canonical_manifest_path),
+        ("split_manifest_path", split_manifest_path),
+    ):
+        declared = manifest.get(field)
+        if not isinstance(declared, str) or not declared:
+            raise ForecastError(f"policy manifest {field} 必须是非空字符串，实际 {declared!r}")
+        if declared != logical_repo_path(actual):
+            raise ForecastError(
+                f"policy manifest 的 {field} 与实际提供的路径不符："
+                f"声明={declared!r} 实际={logical_repo_path(actual)!r}"
+            )
+
+    # 声明的 hash 必须与实际文件**字节**一致
+    actual_sources = expected_sources or {
+        "canonical_parquet_sha256": _sha256_file(canonical_parquet_path),
+        "canonical_manifest_sha256": _sha256_file(canonical_manifest_path),
+        "split_manifest_sha256": _sha256_file(split_manifest_path),
+    }
+    for field in (
+        "canonical_parquet_sha256", "canonical_manifest_sha256", "split_manifest_sha256",
+    ):
+        declared = _require_hex64(manifest.get(field), field=field)
+        if declared != actual_sources[field]:
+            raise ForecastError(
+                f"policy manifest 的 {field} 与实际文件不符："
+                f"声明={declared} 实际={actual_sources[field]}"
+            )
+
+    declared_revision = _require_git_sha40(
+        manifest.get("materializer_revision"), field="materializer_revision"
+    )
+    if declared_revision != expected_revision:
+        raise ForecastError(
+            "policy manifest 的 materializer_revision 与当前 provider/materializer "
+            f"实现的 Git revision 不一致：policy={declared_revision} "
+            f"实际={expected_revision}（实现已改动，必须重新生成 policy manifest）"
+        )
+    return manifest
+
+
+# --- provider ----------------------------------------------------------------
+
+def _policy_sources(
+    canonical_parquet_path: Path, canonical_manifest_path: Path,
+    split_manifest_path: Path, policy_manifest_path: Path,
+) -> dict[str, str]:
+    """四个来源文件的实测 SHA-256；**缺失一律干净 fail closed**（不泄漏 OSError）。"""
+    sources: dict[str, str] = {}
+    for key, path in (
+        ("canonical_parquet_sha256", canonical_parquet_path),
+        ("canonical_manifest_sha256", canonical_manifest_path),
+        ("split_manifest_sha256", split_manifest_path),
+        ("policy_manifest_sha256", policy_manifest_path),
+    ):
         try:
-            return self._payload[name]
-        except KeyError as error:  # pragma: no cover - 属性拼写错误
-            raise AttributeError(name) from error
-
-    def to_dict(self) -> dict:
-        return json.loads(json.dumps(self._payload))
-
-    def content_hash(self) -> str:
-        content = {key: self._payload[key] for key in self._CONTENT_HASH_KEYS}
-        return hashlib.sha256(
-            json.dumps(content, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        ).hexdigest()
+            sources[key] = _sha256_file(path)
+        except OSError as error:
+            raise ForecastError(f"冻结资产不可读（{key}）：{path}：{error}") from error
+    return sources
 
 
 def build_available_exogenous_forecast(
@@ -198,114 +366,155 @@ def build_available_exogenous_forecast(
     canonical_parquet_path: Path | str,
     canonical_manifest_path: Path | str,
     split_manifest_path: Path | str,
-    code_revision: str | None = None,
+    policy_manifest_path: Path | str,
 ) -> AvailableExogenousForecast:
     """按**冻结**的 trailing seasonal-naive 规则生成五个 driver 的 forecast。
 
     `origin` 是 split-**本地** half-hour step；历史窗口取**全局** `[i-48, i)`，
     因此 validation/test 的起点可以使用其**之前已经发生**的 canonical 历史。
+
+    信任链：policy → split → canonical manifest → canonical parquet，逐层校验，
+    任一不符即 fail closed。`code_revision` **不接受**调用者输入。
     """
-    cutoff = _require_positive_int(forecast_cutoff, field="forecast_cutoff")
     canonical_parquet_path = Path(canonical_parquet_path)
     canonical_manifest_path = Path(canonical_manifest_path)
     split_manifest_path = Path(split_manifest_path)
+    policy_manifest_path = Path(policy_manifest_path)
 
     # C 必须通过 M1.3d 的 origin 门禁（越界即拒绝，不截断、不换段）
-    global_origin = validate_forecast_origin(split, origin, cutoff)
+    global_origin = validate_forecast_origin(split, origin, forecast_cutoff)
 
-    history_start = global_origin - PERIOD_STEPS
-    if history_start < 0:
-        raise ForecastError(
-            f"{split} 内 origin={origin}（全局 {global_origin}）不足 {PERIOD_STEPS} 步历史；"
-            "fail closed，不回填、不跨年环绕"
-        )
+    # policy manifest 必须存在且自洽（缺失、畸形、被篡改、路径不匹配均拒绝）
+    expected_revision = provider_code_revision()
+    sources = _policy_sources(
+        canonical_parquet_path, canonical_manifest_path, split_manifest_path,
+        policy_manifest_path,
+    )
+    read_forecast_policy_manifest(
+        policy_manifest_path,
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        expected_revision=expected_revision,
+        expected_sources={
+            "canonical_parquet_sha256": sources["canonical_parquet_sha256"],
+            "canonical_manifest_sha256": sources["canonical_manifest_sha256"],
+            "split_manifest_sha256": sources["split_manifest_sha256"],
+        },
+    )
 
-    # 逐级校验 canonical manifest → canonical parquet（任一 hash 不符即 fail closed）
-    split_manifest = json.loads(split_manifest_path.read_text(encoding="utf-8"))
+    # split manifest 必须走 M1.3d 的**完整**严格校验（含 canonical 链、整条时间轴
+    # 与 train-only 统计重算）；不复制宽松校验器。
+    load_truth_split(
+        split,
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+    )
 
     frame = pd.read_parquet(canonical_parquet_path)
     validate_canonical_timeline(frame, label="canonical")
-    if len(frame) <= global_origin + cutoff - 1:
-        raise ForecastError("canonical 行数不足以覆盖 target 窗口")
-    missing = [d for d in AVAILABLE_DRIVERS if d not in frame.columns]
+    missing = [driver for driver in AVAILABLE_DRIVERS if driver not in frame.columns]
     if missing:
         raise ForecastError(f"canonical 缺少 driver 列：{missing}")
-
-    template = frame.iloc[history_start:global_origin]
-    if len(template) != FORECAST_PERIOD_STEPS:
-        raise ForecastError(
-            f"历史模板长度必须是 {FORECAST_PERIOD_STEPS}，实际 {len(template)}"
-        )
+    if len(frame) < global_origin + forecast_cutoff:
+        raise ForecastError("canonical 行数不足以覆盖 target 窗口")
 
     stamps = frame["timestamp"]
     generated_at = _iso(stamps.iloc[global_origin])
+    history_start = global_origin - FORECAST_PERIOD_STEPS
+    if history_start < 0:
+        raise ForecastError(
+            f"{split} 内 origin={origin}（全局 {global_origin}）不足 "
+            f"{FORECAST_PERIOD_STEPS} 步历史；fail closed，不回填、不跨年环绕"
+        )
     lookback_start = _iso(stamps.iloc[history_start])
-    target_end_exclusive = stamps.iloc[global_origin + cutoff - 1] + pd.Timedelta(
-        minutes=STEP_MINUTES
+    target_timestamps = tuple(
+        _iso(stamp) for stamp in stamps.iloc[global_origin:global_origin + forecast_cutoff]
     )
-    target_timestamps = [_iso(t) for t in stamps.iloc[global_origin:global_origin + cutoff]]
+    target_end_exclusive = (
+        datetime.fromisoformat(target_timestamps[-1])
+        + timedelta(minutes=STEP_MINUTES)
+    ).isoformat()
 
-    revision = code_revision or _source_revision()
-    parquet_sha = _verify_canonical_parquet(
-        canonical_parquet_path=canonical_parquet_path,
-        canonical_manifest_path=canonical_manifest_path,
-        split_manifest=split_manifest,
+    digest = ArtifactDigest(
+        role="forecast_policy_manifest",
+        logical_path=logical_repo_path(policy_manifest_path),
+        sha256=sources["policy_manifest_sha256"],
     )
-    sources = [
-        {"role": "canonical_parquet",
-         "logical_path": logical_repo_path(canonical_parquet_path),
-         "sha256": parquet_sha},
-        {"role": "canonical_manifest",
-         "logical_path": logical_repo_path(canonical_manifest_path),
-         "sha256": _sha256_file(canonical_manifest_path)},
-        {"role": "split_manifest",
-         "logical_path": logical_repo_path(split_manifest_path),
-         "sha256": _sha256_file(split_manifest_path)},
-    ]
+    digest_by_role = {
+        "canonical_parquet": ArtifactDigest(
+            role="canonical_parquet",
+            logical_path=logical_repo_path(canonical_parquet_path),
+            sha256=sources["canonical_parquet_sha256"],
+        ),
+        "canonical_manifest": ArtifactDigest(
+            role="canonical_manifest",
+            logical_path=logical_repo_path(canonical_manifest_path),
+            sha256=sources["canonical_manifest_sha256"],
+        ),
+        "split_manifest": ArtifactDigest(
+            role="split_manifest",
+            logical_path=logical_repo_path(split_manifest_path),
+            sha256=sources["split_manifest_sha256"],
+        ),
+    }
+    all_sources = [digest_by_role["canonical_parquet"],
+                   digest_by_role["canonical_manifest"],
+                   digest_by_role["split_manifest"],
+                   digest]
 
-    series: dict[str, list[float]] = {}
-    provenance: dict[str, dict] = {}
+    series: dict[str, tuple[float, ...]] = {}
+    provenance: dict[str, ForecastSeriesProvenance] = {}
     for driver in AVAILABLE_DRIVERS:
-        values = [float(v) for v in template[driver].to_numpy()]
-        if not all(math.isfinite(v) for v in values):
-            raise ForecastError(f"{driver} 的历史模板含非有限值")
-        # forecast 第 k 项 = 模板的第 (k mod 48) 项
-        forecast = [values[k % FORECAST_PERIOD_STEPS] for k in range(cutoff)]
-        series[driver] = forecast
-        provenance[driver] = {
-            "series_name": driver,
-            "source_kind": SOURCE_KIND,
-            "method": METHOD,
-            "generated_at": generated_at,
-            "information_cutoff_exclusive": generated_at,
-            "target_start": generated_at,
-            "target_end_exclusive": _iso(target_end_exclusive),
-            "lookback_start": lookback_start,
-            "lookback_end_exclusive": generated_at,
-            "model_name": MODEL_NAME,
-            "model_version": MODEL_VERSION,
-            "code_revision": revision,
-            "seed": None,
-            "sources": sources,
-        }
+        values = seasonal_naive_forecast(
+            frame[driver].to_numpy(),
+            origin=global_origin,
+            forecast_cutoff=forecast_cutoff,
+        )
+        series[driver] = values
+        provenance[driver] = ForecastSeriesProvenance(
+            series_name=driver,
+            source_kind=SOURCE_KIND,
+            method=METHOD,
+            generated_at=generated_at,
+            information_cutoff_exclusive=generated_at,
+            target_start=generated_at,
+            target_end_exclusive=target_end_exclusive,
+            lookback_start=lookback_start,
+            lookback_end_exclusive=generated_at,
+            model_name=MODEL_NAME,
+            model_version=MODEL_VERSION,
+            code_revision=expected_revision,
+            seed=None,
+            sources=list(all_sources),
+        )
 
-    return AvailableExogenousForecast({
-        "artifact": "available_exogenous_forecast",
-        "contract_version": CONTRACT_VERSION_ID,
-        "split": split,
-        "origin": int(origin),
-        "global_origin": int(global_origin),
-        "forecast_cutoff": cutoff,
-        "frequency": FREQUENCY,
-        "method": METHOD,
-        "period_steps": FORECAST_PERIOD_STEPS,
-        "generated_at": generated_at,
-        "target_timestamps": target_timestamps,
-        "series": series,
-        "provenance": provenance,
-        "unavailable_not_materialized": list(UNAVAILABLE_NOT_MATERIALIZED),
-    })
+    return AvailableExogenousForecast(
+        split=split,
+        origin=int(origin),
+        global_origin=int(global_origin),
+        forecast_cutoff=forecast_cutoff,
+        frequency=FREQUENCY,
+        method=METHOD,
+        period_steps=FORECAST_PERIOD_STEPS,
+        generated_at=generated_at,
+        target_timestamps=target_timestamps,
+        series=AvailableSeries(**series),
+        provenance=AvailableDriverProvenance(**provenance),
+        policy_manifest_path=logical_repo_path(policy_manifest_path),
+        policy_manifest_sha256=sources["policy_manifest_sha256"],
+        canonical_parquet_sha256=sources["canonical_parquet_sha256"],
+        canonical_manifest_sha256=sources["canonical_manifest_sha256"],
+        split_manifest_sha256=sources["split_manifest_sha256"],
+        code_revision=expected_revision,
+    )
 
 
-def _iso(stamp) -> str:
+def _iso(stamp: Any) -> str:
     return pd.Timestamp(stamp).isoformat()
+
+
+def frozen_at_utc_now() -> str:
+    """物化时使用的规范 UTC 时间戳（独立函数便于测试）。"""
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
