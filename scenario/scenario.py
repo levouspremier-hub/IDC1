@@ -126,7 +126,8 @@ def build_oracle_debug_scenario_from_truth(
         model_name="oracle_debug_truth_copy",
         seed=seed,
         digest_role="visible_truth_window",
-        digest_path="scenario://oracle_debug/visible_truth_window",
+        # M1.3e-R3：`logical_path` 必须是规范 POSIX 逻辑路径（不得含空片段）
+        digest_path=GENERATOR_LOGICAL_PATH,
     )
 
 
@@ -172,7 +173,8 @@ def _build_synthetic(
         model_name="scenario._build_synthetic",
         seed=int(seed),
         digest_role="synthetic_generator_window",
-        digest_path="scenario://synthetic/generated_window",
+        # M1.3e-R3：同上，改为规范 POSIX 逻辑路径
+        digest_path=GENERATOR_LOGICAL_PATH,
     )
 
 

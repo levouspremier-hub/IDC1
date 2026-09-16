@@ -43,7 +43,8 @@ ORACLE_DEBUG_NOTE = (
     "不能标 formal，不得用于训练或评估（M1.3e）。正式 causal forecast 接线属 M1.3g。"
 )
 ORACLE_DEBUG_DIGEST_ROLE = "oracle_debug_env_truth_window"
-ORACLE_DEBUG_DIGEST_PATH = "envs/idc_price_env.py://visible_truth_window"
+# M1.3e-R3：`logical_path` 必须是规范 POSIX 逻辑路径（不得含 `://` 这类空片段）
+ORACLE_DEBUG_DIGEST_PATH = "envs/idc_price_env.py"
 ADAPTER_LOGICAL_PATH = "planning/snapshot_adapter.py"
 
 PLANNING_HORIZON_CAP = 24
