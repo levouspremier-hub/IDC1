@@ -113,11 +113,34 @@ def _require_ordering(earlier: str, later: str, *, label: str, strict: bool = Fa
 
 
 class ArtifactDigest(ContractBase):
-    """一个**上游制品**的逻辑身份：角色 + 仓库相对路径 + 内容 SHA-256。"""
+    """一个**上游制品**的逻辑身份：角色 + 仓库相对路径 + 内容 SHA-256。
+
+    **构造时**自校验（M1.3e-R2）：不能等到嵌套进 provenance 之后才检查，
+    否则一个畸形 digest 可以借由「先构造再放置」绕过单点校验。
+    """
 
     role: str
     logical_path: str
     sha256: str
+
+    @model_validator(mode="after")
+    def _validate_digest(self) -> ArtifactDigest:
+        if not isinstance(self.role, str) or not self.role:
+            raise ValueError(f"ArtifactDigest.role 必须是非空字符串，实际 {self.role!r}")
+        if not isinstance(self.logical_path, str) or not self.logical_path:
+            raise ValueError(
+                f"ArtifactDigest.logical_path 必须是非空逻辑路径，实际 {self.logical_path!r}"
+            )
+        if self.logical_path.startswith("/") or "\\" in self.logical_path:
+            raise ValueError(
+                "ArtifactDigest.logical_path 必须是**仓库逻辑路径**，"
+                f"不得是机器绝对路径：{self.logical_path!r}"
+            )
+        if not _is_lower_hex(self.sha256, 64):
+            raise ValueError(
+                f"ArtifactDigest.sha256 必须是 64 位小写十六进制，实际 {self.sha256!r}"
+            )
+        return self
 
 
 def validate_forecast_series_provenance(
@@ -208,7 +231,9 @@ class ForecastSeriesProvenance(ContractBase):
     model_version: str
     code_revision: str
     seed: int | None
-    sources: list[ArtifactDigest]
+    # 不可变 tuple：`frozen=True` 只冻结字段赋值，不冻结容器内容。
+    # JSON/list 输入会被 pydantic 规范化为 tuple，但**对外不暴露可变容器**。
+    sources: tuple[ArtifactDigest, ...]
 
     @field_validator("seed", mode="before")
     @classmethod
@@ -313,13 +338,15 @@ class ScenarioBundle(ContractBase):
     start: str
     horizon: int
     forecast_cutoff: int
-    price_forecast: list[float]
-    load_forecast: list[float]
-    pv_forecast: list[float]
-    wind_forecast: list[float]
-    temperature_forecast: list[float]
-    carbon_forecast: list[float]
-    arrival_forecast: list[float]
+    # 不可变 tuple（M1.3e-R2）：调用方仍按只读 `Sequence` 语义使用，
+    # 但构造后**无法**原地修改，`content_hash()` 因此不会被事后篡改。
+    price_forecast: tuple[float, ...]
+    load_forecast: tuple[float, ...]
+    pv_forecast: tuple[float, ...]
+    wind_forecast: tuple[float, ...]
+    temperature_forecast: tuple[float, ...]
+    carbon_forecast: tuple[float, ...]
+    arrival_forecast: tuple[float, ...]
     mode: str
     generated_at: str
     forecast_provenance: ScenarioForecastProvenance
@@ -366,8 +393,38 @@ DRIVER_UNITS: dict[str, str] = {
     "wind_speed_10m_mps": "m/s",
     "ghi_w_per_m2": "W/m2",
 }
-# 本 artifact 的**冻结来源类别**：trailing seasonal-naive。
+# 本 artifact 的**冻结 policy 规则**（M1.3e-R2 锁死）：
+# 不是「非空 / 正数」这类弱约束，而是**精确取值**——任何其他合法字符串或正整数
+# 都必须被拒绝。
 AVAILABLE_FORECAST_SOURCE_KIND = "seasonal_naive"
+AVAILABLE_FORECAST_METHOD = "trailing_seasonal_naive"
+AVAILABLE_FORECAST_MODEL_NAME = "trailing_seasonal_naive"
+AVAILABLE_FORECAST_MODEL_VERSION = "v1"
+AVAILABLE_FORECAST_FREQUENCY = "30min"
+AVAILABLE_FORECAST_PERIOD_STEPS = 48
+AVAILABLE_FORECAST_STEP_MINUTES = 30
+SCENARIO_SPLIT_NAMES: tuple[str, ...] = ("train", "validation", "test")
+
+# 四个来源制品的**角色集合与顺序**（缺失、重复、额外、乱序一律拒绝）。
+AVAILABLE_SOURCE_ROLES: tuple[str, ...] = (
+    "canonical_parquet",
+    "canonical_manifest",
+    "split_manifest",
+    "forecast_policy_manifest",
+)
+# 角色 → artifact 顶层字段（路径与 SHA-256）：逐序列 digest 必须与顶层**逐项恒等**。
+AVAILABLE_SOURCE_PATH_FIELDS: dict[str, str] = {
+    "canonical_parquet": "canonical_parquet_path",
+    "canonical_manifest": "canonical_manifest_path",
+    "split_manifest": "split_manifest_path",
+    "forecast_policy_manifest": "policy_manifest_path",
+}
+AVAILABLE_SOURCE_HASH_FIELDS: dict[str, str] = {
+    "canonical_parquet": "canonical_parquet_sha256",
+    "canonical_manifest": "canonical_manifest_sha256",
+    "split_manifest": "split_manifest_sha256",
+    "forecast_policy_manifest": "policy_manifest_sha256",
+}
 
 
 class AvailableSeries(BaseModel):
@@ -413,9 +470,14 @@ class AvailableExogenousForecast(ContractBase):
     """**严格冻结**的 driver forecast artifact（contract-v8）。
 
     与 `ScenarioBundle` 的区别是**结构性**的：这里只有五个 driver，没有
-    PV / 风电发电量 / 碳强度 / arrival；因此它带 `policy_manifest_path` 与四个
+    PV / 风电发电量 / 碳强度 / arrival；因此它带**三条上游 logical path** 与四个
     来源 SHA-256，可被审计到**完整的冻结资产链**（policy → split → canonical →
     parquet），且被 purpose gate 在 `training`/`evaluation` 下拒绝。
+
+    **M1.3e-R2：内部证据闭环。** 顶层四个 path/hash 与逐序列 provenance 的四个
+    digest 必须在**构造时**逐项恒等（角色集合与顺序也固定），因此逐序列证据无法
+    被局部篡改而不被发现；policy 规则（split/frequency/method/period_steps/
+    model_name/model_version/seed）与 target/lookback 时间轴同样在构造时锁死。
     """
 
     split: str
@@ -429,6 +491,9 @@ class AvailableExogenousForecast(ContractBase):
     target_timestamps: tuple[str, ...]
     series: AvailableSeries
     provenance: AvailableDriverProvenance
+    canonical_parquet_path: str
+    canonical_manifest_path: str
+    split_manifest_path: str
     policy_manifest_path: str
     policy_manifest_sha256: str
     canonical_parquet_sha256: str
@@ -448,8 +513,35 @@ class AvailableExogenousForecast(ContractBase):
 
     @model_validator(mode="after")
     def _validate_available_forecast(self) -> AvailableExogenousForecast:
-        if not self.split:
-            raise ValueError("split 不得为空")
+        self._validate_locked_policy()
+        self._validate_integer_fields()
+        self._validate_paths_and_hashes()
+        self._validate_target_timeline()
+        self._validate_series_and_provenance_closure()
+        return self
+
+    # --- 冻结 policy 规则（精确取值，不是「非空/正数」） ---------------------
+
+    def _validate_locked_policy(self) -> None:
+        if self.split not in SCENARIO_SPLIT_NAMES:
+            raise ValueError(
+                f"split 必须是 {list(SCENARIO_SPLIT_NAMES)} 之一，实际 {self.split!r}"
+            )
+        for name, expected in (
+            ("frequency", AVAILABLE_FORECAST_FREQUENCY),
+            ("method", AVAILABLE_FORECAST_METHOD),
+        ):
+            actual = getattr(self, name)
+            if actual != expected:
+                raise ValueError(f"{name} 必须精确等于 {expected!r}，实际 {actual!r}")
+        if self.period_steps != AVAILABLE_FORECAST_PERIOD_STEPS:
+            raise ValueError(
+                f"period_steps 必须精确等于 {AVAILABLE_FORECAST_PERIOD_STEPS}，"
+                f"实际 {self.period_steps!r}"
+            )
+        _require_canonical_timestamp(self.generated_at, field="generated_at")
+
+    def _validate_integer_fields(self) -> None:
         for name in ("origin", "global_origin"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -462,39 +554,76 @@ class AvailableExogenousForecast(ContractBase):
             or self.forecast_cutoff < 1
         ):
             raise ValueError(f"forecast_cutoff 必须是严格正整数，实际 {self.forecast_cutoff!r}")
-        if (
-            isinstance(self.period_steps, bool)
-            or not isinstance(self.period_steps, int)
-            or self.period_steps < 1
-        ):
-            raise ValueError(f"period_steps 必须是严格正整数，实际 {self.period_steps!r}")
-        for name in ("frequency", "method"):
-            if not getattr(self, name):
-                raise ValueError(f"{name} 不得为空")
-        _require_canonical_timestamp(self.generated_at, field="generated_at")
+
+    def _validate_paths_and_hashes(self) -> None:
+        for field in AVAILABLE_SOURCE_PATH_FIELDS.values():
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"{field} 必须是非空逻辑路径，实际 {value!r}")
+            if value.startswith("/") or "\\" in value:
+                raise ValueError(
+                    f"{field} 必须是仓库逻辑路径，不得是机器绝对路径：{value!r}"
+                )
+        for field in AVAILABLE_SOURCE_HASH_FIELDS.values():
+            if not _is_lower_hex(getattr(self, field), 64):
+                raise ValueError(
+                    f"{field} 必须是 64 位小写十六进制，实际 {getattr(self, field)!r}"
+                )
         if not _is_lower_hex(self.code_revision, 40):
             raise ValueError(
                 f"code_revision 必须是 40 位小写 Git SHA，实际 {self.code_revision!r}"
             )
-        for name in (
-            "policy_manifest_sha256", "canonical_parquet_sha256",
-            "canonical_manifest_sha256", "split_manifest_sha256",
-        ):
-            if not _is_lower_hex(getattr(self, name), 64):
-                raise ValueError(
-                    f"{name} 必须是 64 位小写十六进制，实际 {getattr(self, name)!r}"
-                )
-        if not self.policy_manifest_path:
-            raise ValueError("policy_manifest_path 不得为空")
 
+    # --- target / lookback 时间轴 -------------------------------------------
+
+    def _step(self) -> timedelta:
+        return timedelta(minutes=AVAILABLE_FORECAST_STEP_MINUTES)
+
+    def _target_end_exclusive(self) -> str:
+        """target 窗口右端 = 最后一个 target 时间戳 + 一个 30 分钟 step。"""
+        return (datetime.fromisoformat(self.target_timestamps[-1]) + self._step()).isoformat()
+
+    def _lookback_start(self) -> str:
+        """历史窗口左端 = `generated_at − period_steps × 30 分钟`。"""
+        return (
+            datetime.fromisoformat(self.generated_at)
+            - self._step() * self.period_steps
+        ).isoformat()
+
+    def _validate_target_timeline(self) -> None:
+        if not self.target_timestamps:
+            raise ValueError("target_timestamps 不得为空")
+        for stamp in self.target_timestamps:
+            _require_canonical_timestamp(stamp, field="target_timestamps[*]")
         if len(self.target_timestamps) != self.forecast_cutoff:
             raise ValueError(
                 "target_timestamps 长度 "
                 f"{len(self.target_timestamps)} != forecast_cutoff {self.forecast_cutoff}"
             )
-        for stamp in self.target_timestamps:
-            _require_canonical_timestamp(stamp, field="target_timestamps[*]")
+        if self.target_timestamps[0] != self.generated_at:
+            raise ValueError(
+                "target_timestamps[0] 必须等于 generated_at "
+                f"{self.generated_at!r}，实际 {self.target_timestamps[0]!r}"
+            )
+        parsed = [datetime.fromisoformat(stamp) for stamp in self.target_timestamps]
+        for index in range(1, len(parsed)):
+            if parsed[index] <= parsed[index - 1]:
+                raise ValueError(
+                    "target_timestamps 必须严格递增且唯一，"
+                    f"第 {index} 项 {self.target_timestamps[index]!r} 未严格大于前一项"
+                )
+            if parsed[index] - parsed[index - 1] != self._step():
+                raise ValueError(
+                    f"target_timestamps 必须是严格 {AVAILABLE_FORECAST_STEP_MINUTES} "
+                    f"分钟网格，第 {index} 项间隔为 {parsed[index] - parsed[index - 1]}"
+                )
 
+    # --- 逐序列与顶层的闭环 ------------------------------------------------
+
+    def _validate_series_and_provenance_closure(self) -> None:
+        expected_target_end = self._target_end_exclusive()
+        expected_lookback_start = self._lookback_start()
+        reference_sources: tuple[ArtifactDigest, ...] | None = None
         for driver in AVAILABLE_DRIVER_SERIES:
             values = self.series[driver]
             if len(values) != self.forecast_cutoff:
@@ -505,50 +634,69 @@ class AvailableExogenousForecast(ContractBase):
             for value in values:
                 if not math.isfinite(value):
                     raise ValueError(f"series.{driver} 含非有限值：{value!r}")
+
             entry = self.provenance[driver]
             if entry.series_name != driver:
                 raise ValueError(
                     f"provenance.{driver}.series_name 必须是 {driver!r}，"
                     f"实际 {entry.series_name!r}"
                 )
-            if entry.source_kind != AVAILABLE_FORECAST_SOURCE_KIND:
-                raise ValueError(
-                    f"provenance.{driver}.source_kind 必须是 "
-                    f"{AVAILABLE_FORECAST_SOURCE_KIND!r}，实际 {entry.source_kind!r}"
-                )
-            if entry.method != self.method:
-                raise ValueError(
-                    f"provenance.{driver}.method 必须等于 artifact.method "
-                    f"{self.method!r}，实际 {entry.method!r}"
-                )
             for field, expected in (
+                ("source_kind", AVAILABLE_FORECAST_SOURCE_KIND),
+                ("method", AVAILABLE_FORECAST_METHOD),
+                ("model_name", AVAILABLE_FORECAST_MODEL_NAME),
+                ("model_version", AVAILABLE_FORECAST_MODEL_VERSION),
+                ("code_revision", self.code_revision),
                 ("generated_at", self.generated_at),
                 ("information_cutoff_exclusive", self.generated_at),
                 ("lookback_end_exclusive", self.generated_at),
                 ("target_start", self.generated_at),
+                ("target_end_exclusive", expected_target_end),
+                ("lookback_start", expected_lookback_start),
             ):
                 actual = getattr(entry, field)
                 if actual != expected:
                     raise ValueError(
-                        f"provenance.{driver}.{field} 必须是 {expected!r}，实际 {actual!r}"
+                        f"provenance.{driver}.{field} 必须等于 {expected!r}，实际 {actual!r}"
                     )
-            if entry.target_end_exclusive != self._target_end_exclusive():
+            if entry.seed is not None:
                 raise ValueError(
-                    f"provenance.{driver}.target_end_exclusive 必须等于 "
-                    f"artifact 的 target 末端 {self._target_end_exclusive()!r}，"
-                    f"实际 {entry.target_end_exclusive!r}"
+                    f"provenance.{driver}.seed 必须为 None（冻结方法不使用随机数），"
+                    f"实际 {entry.seed!r}"
                 )
-        return self
+            self._validate_source_closure(driver, entry)
+            if reference_sources is None:
+                reference_sources = entry.sources
+            elif entry.sources != reference_sources:
+                raise ValueError(
+                    f"provenance.{driver}.sources 必须与其它 driver 的四个 source "
+                    "digest 完全相同（path/hash/role 逐项恒等）"
+                )
 
-    def _target_end_exclusive(self) -> str:
-        """target 窗口右端：最后一个 target 时间戳 + 一个 step（30min）。
-
-        没有外部输入时用 `target_timestamps[-1]` 加固定 30 分钟；调用方必须保证
-        `target_timestamps` 是严格 30 分钟网格（由 provenance 的窗口语义约束）。
-        """
-        return (
-            datetime.fromisoformat(self.target_timestamps[-1]) + timedelta(minutes=30)
-        ).isoformat()
+    def _validate_source_closure(
+        self, driver: str, entry: ForecastSeriesProvenance
+    ) -> None:
+        roles = tuple(digest.role for digest in entry.sources)
+        if roles != AVAILABLE_SOURCE_ROLES:
+            raise ValueError(
+                f"provenance.{driver}.sources 的角色必须精确、按序等于 "
+                f"{list(AVAILABLE_SOURCE_ROLES)}，实际 {list(roles)}"
+            )
+        for digest in entry.sources:
+            expected_path = getattr(self, AVAILABLE_SOURCE_PATH_FIELDS[digest.role])
+            expected_hash = getattr(self, AVAILABLE_SOURCE_HASH_FIELDS[digest.role])
+            if digest.logical_path != expected_path:
+                raise ValueError(
+                    f"provenance.{driver}.sources[{digest.role}].logical_path 必须等于 "
+                    f"顶层 {AVAILABLE_SOURCE_PATH_FIELDS[digest.role]} "
+                    f"{expected_path!r}，实际 {digest.logical_path!r}"
+                )
+            if digest.sha256 != expected_hash:
+                raise ValueError(
+                    f"provenance.{driver}.sources[{digest.role}].sha256 必须等于顶层 "
+                    f"{AVAILABLE_SOURCE_HASH_FIELDS[digest.role]} "
+                    f"{expected_hash!r}，实际 {digest.sha256!r}"
+                )
 
     def to_dict(self) -> dict:
         return self.model_dump(mode="json")
