@@ -37,6 +37,9 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from contracts import CONTRACT_VERSION_ID
 from scenario.forecast import (
     AVAILABLE_DRIVERS,
