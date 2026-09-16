@@ -552,10 +552,13 @@ manifest 未变）；实际变更文件仅 `contracts/{__init__,models,validator
 
 ```text
 1d9a91d..bee96f7  = 7 个   （实现/产物/测试；18f598e … bee96f7）
-1d9a91d..048dc32  = 8 个  （+ docs(card) 返修证据）
-1d9a91d..de2f88b  = 9 个  （+ docs(handoff) 本交接；即本轮最终 HEAD）
+1d9a91d..048dc32  = 8 个   （+ docs(card) 返修证据）
+1d9a91d..de2f88b  = 9 个   （+ docs(handoff) 本交接）
 66ce93c..de2f88b  = 23 个  （初始链 14 + 本轮 9）
 ```
+
+**截至父提交 `de2f88b`，`1d9a91d..de2f88b` 共 9 个；包含本行所在/后续文档提交后更多
+（最终 HEAD 的完整 SHA 见结束报告，不在提交内声称未知 SHA）。**
 
 **回滚（由新到旧，已只读验证零冲突）**：
 
