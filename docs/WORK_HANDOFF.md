@@ -13,7 +13,9 @@
 > `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
 > **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
 > **M1.3f-a 已通过人工审核**；**M1.3f-b（含 R1/R2）已通过人工审核**；
-> **M1.3f-c 已执行完成**（17,568 行四类外生驱动表已物化，等待审核）。
+> **M1.3f-c 第一轮审核不通过，已返修（M1.3f-c-R1）并再次提交复审**：
+> 修复了 PV 损耗未生效、未批准默认未闭合与 Azure 日期映射无据三项；
+> v1 产物标为 `superseded_pre_approval_and_loss_fix`，**v2 才是候选证据**。
 > ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 仍全为
 > `false`，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
 > **M1.3f-c 已执行完成**（四类外生驱动表已物化，见 §7N），**等待人工审核**。
@@ -1059,6 +1061,68 @@ git revert 81b4888 387531c 1a072a6 a3fe4c0 0945128 b09ef8c 02484b3 7e838ff d324b
 
 **M1.3g 未开始**：四项 ready 只表示驱动表已物化，**不代表已接入训练**；
 正式 `ScenarioBundle`、训练与评估仍 blocked。**不新增 M5.5，不进入 M6。**
+
+### 7N.1 M1.3f-c-R1：第一轮审核返修（**执行完成，等待复审**）
+
+**M1.3f-c 第一轮人工审核不通过**；返修区间 `a883b78..`（见卡片 §J–§K）。
+**审核指出三个问题，全部修复**：
+
+1. **PV 的 `losses_pct` 从未被应用**（实测 0/14/99 输出**逐位相同**）
+   → 拆成 `pv_dc_before_losses()` → `× pv_loss_multiplier(losses_pct)` →
+   `pv_ac_from_dc()`，损耗**只应用一次**；新增 `assert_pv_params()` 拒绝
+   缺失/篡改/增参的参数块。
+2. **未批准默认未闭合** → `erbs` 分解、`isotropic` 透射、`albedo=0.25` 由
+   **B5-PV** 正式批准；arrival 的过程族/尺度/seed/slot mapping 由 **B5-ARRIVAL**
+   批准，缺记录即**拒绝物化**（`assert_arrival_approved`）。
+3. **Azure 日期映射语义无据** → **删除** date/weekday 模板；
+   官方 archive 的成员名**不含日期**，官方说明也只写「collected in July of
+   2019」「14 files, one file per 24-h period」，因此**不使用、也不声称**
+   archive 提供日期/星期/时区；改为 **48-slot day-of-benchmark-period template**
+   （按成员名 `d01..d14` 显式升序、按 minute-of-24h 聚合、归一化均值 1），
+   用 timestamp 的 **hour/minute** 选槽映射到 Singapore 2024 本地 00:00..23:30。
+
+**历史产物处理**：v1 三个产物**原样保留**、标为
+**`superseded_pre_approval_and_loss_fix`**、**不作为最终证据**：
+
+```text
+exogenous_drivers.parquet                 0c5e65d8fdc25ed8ced228e8087f13eb0605d0146d7e258caf54a552a246287c
+singapore_2024_exogenous.json             46d88c38247bf1eb1568e84abc48647f1f4aeb58a5c0b525a30b8bfb0b2ac224
+m13f_materialization_sources.json         6a80886a53056df80944db1fc536176d590f9cc10b315064d826436ae0bb1a72
+revision                                  a3fe4c0a1824833668bbb1f8029d656512011870
+```
+
+**v2 才是候选证据**：
+
+```text
+exogenous_drivers_v2.parquet              11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf
+singapore_2024_exogenous_v2.json          0e27848109735eae02bdc0cdd46a03f84aed1f926bed59f34982e01c2c0a6fdf
+m13f_materialization_sources_v3.json      4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6
+revision                                  9aedf744a58eedfeec872a06d540b25875b59e8a
+```
+
+**v2 四列实测**：`local_pv_kw` 0–**357.6032** kW（均值 72.57；v1 为 415.45，
+差异即 14% 损耗生效）、`wind_generation_kw` 0–262.3179 kW、`carbon_intensity`
+恒定 **0.402**（`classification = human_approved_external_low_resolution`，
+**不是** `modeled_scenario`）、`arrival` 整数 **803–1230**（均值 1000.17）。
+
+**先红实测**：`30ebd70` 上 50 项中 **21 failed + 21 errors**，含
+`AssertionError: exogenous_drivers.py 含 'weekday'` 与 v2 产物缺失。
+
+**验收**：focused **50 + 1** 全绿；`m12/m13/contracts` 组 **1073 passed**；
+`make check` exit 0（**2247 passed**）；`make smoke` exit 0；`make train` exit 2
+且不回退 synthetic；checkpoint 0；三个保留名未创建；连续物化两次 bytes/hash/
+`mtime_ns` 全不变、0 临时文件；**上游十一项（含 v1 三产物与 v1 source manifest）
+hash 全部未变**；范围外修改**无**。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert c1d6a3e 094047c 9aedf74 30ebd70 896edf7
+```
+
+**M1.3g 未开始**：**不得**称 Azure trace 有经证实的真实日期映射；
+四项 ready 只表示驱动表已物化，**不代表已接入训练**。
+**不新增 M5.5，不进入 M6。**
 
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
