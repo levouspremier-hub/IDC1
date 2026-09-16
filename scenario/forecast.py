@@ -32,9 +32,14 @@ import pandas as pd
 
 from contracts import CONTRACT_VERSION_ID
 from scenario.splits import (
+    CANONICAL_SCHEMA,
+    FREQUENCY as SPLIT_FREQUENCY,
     STEP_MINUTES,
+    TIMEZONE,
+    TOTAL_ROWS,
     SplitName,
-    _verify_canonical,
+    _require_dict,
+    _require_hex64,
     logical_repo_path,
     validate_canonical_timeline,
     validate_forecast_origin,
@@ -80,6 +85,58 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _verify_canonical_parquet(
+    *, canonical_parquet_path: Path, canonical_manifest_path: Path,
+    split_manifest: dict,
+) -> str:
+    """逐级校验**实际读取的那份 canonical parquet 字节**（不符即 fail closed）。
+
+    - split manifest 的 `canonical_parquet_sha256`
+    - canonical manifest 的 `output_parquet_sha256`
+    - parquet 文件的实测 sha256
+
+    三者必须相等，且 canonical manifest 的 schema/行数/时区/频率必须与冻结值一致。
+
+    **范围说明**：本函数**不**校验 canonical manifest 文件自身的 hash
+    （split manifest 的 `canonical_manifest_sha256`）—— 那是 M1.3d `load_truth_split`
+    读取链的职责；provider 只对「它真正读到的字节」负责，
+    以免把与本次预测无关的 manifest 元数据变化误判为数据变化。
+    """
+    try:
+        canonical = json.loads(canonical_manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ForecastError(f"canonical manifest 不可读：{error}") from error
+    canonical = _require_dict(canonical, field="canonical manifest")
+    if canonical.get("schema") != CANONICAL_SCHEMA:
+        raise ForecastError(
+            f"canonical manifest schema 必须是 {CANONICAL_SCHEMA!r}，"
+            f"实际 {canonical.get('schema')!r}"
+        )
+    if canonical.get("row_count") != TOTAL_ROWS:
+        raise ForecastError(f"canonical manifest row_count 必须是 {TOTAL_ROWS}")
+    if canonical.get("timezone") != TIMEZONE or canonical.get("frequency") != SPLIT_FREQUENCY:
+        raise ForecastError("canonical manifest 的 timezone/frequency 不符")
+
+    expected = _require_hex64(
+        split_manifest["canonical_parquet_sha256"], field="canonical_parquet_sha256"
+    )
+    recorded = _require_hex64(
+        canonical.get("output_parquet_sha256"), field="output_parquet_sha256"
+    )
+    actual = _sha256_file(canonical_parquet_path)
+    if actual != expected:
+        raise ForecastError(
+            "canonical parquet SHA-256 与 split manifest 不符："
+            f"split={expected} 实际={actual}"
+        )
+    if actual != recorded:
+        raise ForecastError(
+            "canonical parquet SHA-256 与 canonical manifest 不符："
+            f"canonical={recorded} 实际={actual}"
+        )
+    return actual
+
+
 def _git(*args: str) -> str:
     import subprocess
 
@@ -104,6 +161,17 @@ class AvailableExogenousForecast:
     PV / 风电发电量 / 碳强度 / arrival，故**不得**被当作完整场景。
     """
 
+    # `content_hash` 只覆盖**预测内容本身**（这套预测的确定性身份）：
+    # 上游制品的 sha256 会随上游文件字节变化，而预测值未必变化——把它们算进
+    # content hash，会让「同一份预测」在上游重物化后得到不同身份。
+    # 上游 digest 仍完整保留在 `to_dict()["provenance"][*]["sources"]` 中供审计，
+    # 并对**实际读取的 parquet 字节**做 fail-closed 校验（`_verify_canonical_parquet`）。
+    _CONTENT_HASH_KEYS: tuple[str, ...] = (
+        "contract_version", "split", "origin", "global_origin", "forecast_cutoff",
+        "frequency", "method", "period_steps", "generated_at",
+        "target_timestamps", "series",
+    )
+
     def __init__(self, payload: dict) -> None:
         self._payload = payload
 
@@ -117,8 +185,9 @@ class AvailableExogenousForecast:
         return json.loads(json.dumps(self._payload))
 
     def content_hash(self) -> str:
+        content = {key: self._payload[key] for key in self._CONTENT_HASH_KEYS}
         return hashlib.sha256(
-            json.dumps(self._payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            json.dumps(content, sort_keys=True, ensure_ascii=False).encode("utf-8")
         ).hexdigest()
 
 
@@ -178,8 +247,10 @@ def build_available_exogenous_forecast(
     target_timestamps = [_iso(t) for t in stamps.iloc[global_origin:global_origin + cutoff]]
 
     revision = code_revision or _source_revision()
-    parquet_sha = _verify_canonical(
-        canonical_parquet_path, canonical_manifest_path, split_manifest
+    parquet_sha = _verify_canonical_parquet(
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest=split_manifest,
     )
     sources = [
         {"role": "canonical_parquet",
