@@ -132,7 +132,8 @@ def _oracle_debug_bundle(
             model_version="v1",
             code_revision=revision,
             seed=None,
-            sources=[digest],
+            # M1.3e-R2：`sources` 与七个 forecast 序列均为不可变 tuple
+            sources=(digest,),
         )
         for name in BUNDLE_FORECAST_FIELDS
     }
@@ -142,13 +143,13 @@ def _oracle_debug_bundle(
         start=str(t),
         horizon=horizon,
         forecast_cutoff=cutoff,
-        price_forecast=windows["price_forecast"],
-        load_forecast=windows["load_forecast"],
-        pv_forecast=windows["pv_forecast"],
-        wind_forecast=windows["wind_forecast"],
-        temperature_forecast=windows["temperature_forecast"],
-        carbon_forecast=windows["carbon_forecast"],
-        arrival_forecast=windows["arrival_forecast"],
+        price_forecast=tuple(windows["price_forecast"]),
+        load_forecast=tuple(windows["load_forecast"]),
+        pv_forecast=tuple(windows["pv_forecast"]),
+        wind_forecast=tuple(windows["wind_forecast"]),
+        temperature_forecast=tuple(windows["temperature_forecast"]),
+        carbon_forecast=tuple(windows["carbon_forecast"]),
+        arrival_forecast=tuple(windows["arrival_forecast"]),
         mode="oracle_debug",
         generated_at=generated_at,
         forecast_provenance=ScenarioForecastProvenance(**provenance),

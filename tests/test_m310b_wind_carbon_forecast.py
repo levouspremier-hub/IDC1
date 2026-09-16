@@ -41,10 +41,10 @@ def _fixture_series(field: str) -> ForecastSeriesProvenance:
         model_version="v1",
         code_revision="a" * 40,
         seed=None,
-        sources=[
+        sources=(
             ArtifactDigest(role="fixture", logical_path="tests/fixtures/none",
-                           sha256="b" * 64)
-        ],
+                           sha256="b" * 64),
+        ),
     )
 
 
@@ -136,7 +136,8 @@ def test_snapshot_wind_carbon_share_window_and_padding():
         window = getattr(snap.forecast, field)
         assert len(window) == 4
         assert sum(1 for v in window if v != 0.0) == 1  # 尾部仅 1 个可见点
-        assert window[1:] == [0.0, 0.0, 0.0]
+        # M1.3e-R2：forecast 序列为不可变 tuple，切片比较用 tuple 字面量
+        assert window[1:] == (0.0, 0.0, 0.0)
 
 
 # --- 3. 窗口内变更影响 / 窗口外不影响 ---

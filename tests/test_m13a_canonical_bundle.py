@@ -10,6 +10,7 @@
 正式 causal forecast 的 leakage 回归在 `tests/test_m13e_forecast_provenance.py`。
 """
 
+import collections.abc
 from pathlib import Path
 
 import numpy as np
@@ -75,10 +76,20 @@ def test_no_local_duplicate_class():
 
 @pytest.mark.parametrize("cutoff", [2, 6])
 def test_all_six_forecast_fields_present(cutoff):
+    """六类预测字段都在、都是**定长只读序列**，长度等于 cutoff。
+
+    **M1.3e-R2 迁移**：`ScenarioBundle` 的七个 forecast 序列改为不可变 `tuple`
+    （`frozen=True` 只冻结字段赋值，不冻结容器内容，可变 list 可在构造后被原地
+    修改而使 `content_hash()` 失真）。本断言的本意是「有长度的序列」，
+    因此写为 `Sequence` 不强求具体容器类型；下方的 `tuple` 断言把新语义固定下来。
+    """
     b = build_scenario("train", "s", 24, cutoff, synthetic=True, seed=1)
     for field in SIX_FORECAST_FIELDS:
         values = getattr(b, field)
-        assert isinstance(values, list)
+        assert isinstance(values, collections.abc.Sequence)
+        assert isinstance(values, tuple), field
+        with pytest.raises(TypeError):
+            values[0] = 1.0  # type: ignore[index]
         assert len(values) == cutoff, f"{field} 长度 {len(values)} != cutoff {cutoff}"
     assert b.forecast_cutoff == cutoff
     assert b.split == "train"

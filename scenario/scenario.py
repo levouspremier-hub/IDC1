@@ -226,7 +226,8 @@ def _assemble_bundle(
             model_version="v1",
             code_revision=revision,
             seed=seed,
-            sources=list(sources),
+            # M1.3e-R2：`sources` 与七个 forecast 序列均为不可变 tuple
+            sources=tuple(sources),
         )
 
     return ScenarioBundle(
@@ -234,13 +235,13 @@ def _assemble_bundle(
         start=start,
         horizon=horizon,
         forecast_cutoff=forecast_cutoff,
-        price_forecast=visible["price"],
-        load_forecast=visible["load"],
-        pv_forecast=visible["pv"],
-        wind_forecast=visible["wind"],
-        temperature_forecast=visible["temperature"],
-        carbon_forecast=visible["carbon"],
-        arrival_forecast=visible["arrival"],
+        price_forecast=tuple(visible["price"]),
+        load_forecast=tuple(visible["load"]),
+        pv_forecast=tuple(visible["pv"]),
+        wind_forecast=tuple(visible["wind"]),
+        temperature_forecast=tuple(visible["temperature"]),
+        carbon_forecast=tuple(visible["carbon"]),
+        arrival_forecast=tuple(visible["arrival"]),
         mode=mode,
         generated_at=DEV_PROVENANCE_ANCHOR,
         forecast_provenance=ScenarioForecastProvenance(**provenance),

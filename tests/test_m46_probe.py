@@ -37,10 +37,10 @@ def _fixture_series(field: str) -> ForecastSeriesProvenance:
         model_version="v1",
         code_revision="a" * 40,
         seed=None,
-        sources=[
+        sources=(
             ArtifactDigest(role="fixture", logical_path="tests/fixtures/none",
-                           sha256="b" * 64)
-        ],
+                           sha256="b" * 64),
+        ),
     )
 
 
@@ -63,13 +63,13 @@ def _forecast() -> ScenarioBundle:
         start="0",
         horizon=24,
         forecast_cutoff=4,
-        price_forecast=[0.2] * 24,
-        load_forecast=[0.0] * 24,
-        pv_forecast=[0.0] * 24,
-        wind_forecast=[0.0] * 24,
-        temperature_forecast=[28.0] * 24,
-        arrival_forecast=[0.0] * 24,
-        carbon_forecast=[0.0] * 24,
+        price_forecast=(0.2,) * 24,
+        load_forecast=(0.0,) * 24,
+        pv_forecast=(0.0,) * 24,
+        wind_forecast=(0.0,) * 24,
+        temperature_forecast=(28.0,) * 24,
+        arrival_forecast=(0.0,) * 24,
+        carbon_forecast=(0.0,) * 24,
         mode="synthetic",
         generated_at=_FIXTURE_GENERATED_AT,
         forecast_provenance=_provenance(),
