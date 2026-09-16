@@ -7,9 +7,9 @@
 >
 > 当前 HEAD（整合分支）：M1.3b **已通过**、M1.3c 审计通过、
 > **M1.3d 已通过人工审核**（2026-09-16，含 R1/R2/R3 三轮返修）、
-> **M1.3e 执行完成**（contract-v8 + 因果 forecast provenance + 五类
-> seasonal-naive provider + forecast policy manifest），**等待人工审查**。
-> 详见下方 §7K。
+> **M1.3e 第一轮审核不通过，已返修（M1.3e-R1）并再次提交复审**。
+> ⚠️ **在 M1.3e-R1 通过人工复审之前，M1.3e 不得视为通过**；**M1.3f 未开始**。
+> 详见下方 §7K（含 §7K.8 本轮返修）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -487,6 +487,82 @@ revert 链后 HEAD^{tree}     = a9129c3a2794bbc40137f7aa89f173255402f8e2
 `data/manifest/singapore_2024_forecast_policy.json` 为本卡新增，可随 revert 删除；
 **不**删除 raw、**不**改 canonical/source/split manifest、**不**移动任何分支指针。
 **回滚必须由新到旧**（M1.3d §13.12 实测得到的操作约束）。
+
+### 7K.8 M1.3e-R1：第一轮审核返修（**执行完成，等待人工复审**）
+
+**M1.3e 第一轮人工审核不通过**；返修区间 `1d9a91d..bee96f7`（**7 个**提交），
+详见 `docs/task_cards/M1.3e.md` §14–§15。
+
+**审核给出的六个阻塞项，全部修复：**
+
+1. **policy manifest 未进入 provider 信任链** → provider 现在**必填**
+   `policy_manifest_path`，逐层校验 policy → split → canonical manifest → parquet。
+2. **provider 接受伪造的最小 split manifest** → split manifest 走 **M1.3d 的
+   `load_truth_split` 完整严格校验**（复用，不复制宽松校验器）；最小伪造 JSON、
+   extra/missing key、错误 readiness、伪造 train 统计等 13 类篡改全部拒绝。
+3. **provider 接受任意 `code_revision`** → **删除**该公开参数；revision 只能由内部
+   Git resolver 从 `FORECAST_SOURCE_PATHS`（provider + policy 物化器）解析，
+   并与 policy 的 `materializer_revision` **恒等**。
+4. **`ContractBase` 可显式声明 `contract-v7`** → 在**基底类**统一锁定
+   `schema_version == CONTRACT_VERSION_ID`；旧版本、空串、bool、数字、list、dict、
+   None 全部干净拒绝。
+5. **`AvailableExogenousForecast` 不是严格冻结契约** → 改为 frozen Pydantic 契约
+   （`AvailableSeries`/`AvailableDriverProvenance`，五个 driver 精确齐全、嵌套为
+   不可变 tuple、整数语义字段显式拒绝 bool）；并拆出**两个语义不同的摘要**：
+   `prediction_hash()`（只覆盖预测数值/单位/顺序）与 `content_hash()`（覆盖含审计
+   provenance 的完整 artifact）。
+6. **mode/source_kind 语义过宽** → `synthetic`/`oracle_debug` 要求七条**逐项**为唯一
+   来源；`formal` 只允许 external/seasonal_naive/persistence/modeled_scenario；
+   **任何** mode 的完整 bundle 都不得以 `unavailable` 占位；
+   `ScenarioBundle.generated_at` 与七项 provenance **逐项恒等**。
+
+**leakage 测试已按审核要求下沉**：因果性断言落在**纯函数**
+`seasonal_naive_forecast(series, origin, cutoff)` 上（卡片字面规则
+`forecast[k] = y(origin + k − 48)`，模板按时间正序）；provider 层则用**两条各自
+完整自洽的冻结链**做对照（不是「同步改几个 hash 绕过校验」），并新增一条边界回归
+固定「只有模板下标 `< C` 的行参与计算」。
+
+**改前实测**（在临时 detached worktree 中检出「先红」提交 `ed5b877`）：
+`216 collected, 115 failed, 0 errors`。
+
+| 命令 | 结果 |
+|---|---|
+| `pytest tests/test_m13e_forecast_provenance.py -q -m "not slow"` | **216 passed** |
+| `pytest tests/test_m13e_forecast_provenance.py -q -m slow` | **1 passed** |
+| `pytest tests/test_m12*.py tests/test_m13*.py tests/test_contracts.py tests/test_contract_validators.py -q` | **626 passed** |
+| `make check` | **exit 0**，**1802 passed**, 45 deselected |
+| `make smoke` | **exit 0** |
+| `make train` | **exit 2**，**未**回退 synthetic、无 checkpoint |
+| `train.json` / `validation.json` / `test.json` | **均未创建** |
+
+**最终 policy manifest**：`materializer_revision =
+05ad5521a14e9b6e04bcdc1f00655f9a135b1574`；SHA-256 =
+`d2221802dbd99381f805e6ab76c517b3d73da058be240f1e451583d99d79ce8d`；
+最终 HEAD 复跑两次 bytes/hash/`mtime_ns` 不变；首冻失败原子；已存在且不同拒绝覆盖。
+
+**上游仍未变**：`d4e24d6f…` / `e6484d6b…` / `a096535f…` / `dec76ea2…`；
+`configs/frozen_refs/refs.json` 未动；split 边界未变。
+**本轮未修改 `scenario/splits.py`**（因此其 materializer revision 与冻结 split
+manifest 未变）；实际变更文件仅 `contracts/{__init__,models,validators}.py`、
+`scenario/forecast.py`、`scripts/materialize_singapore_forecast_policy.py`、
+`tests/test_m13e_forecast_provenance.py`、policy manifest 与两份 docs。
+
+**账本勘误（审核指出）**：上一轮结束报告把已逐条列出的 **14** 个提交
+（`66ce93c..1d9a91d`）写成了「共 13 个」——列表正确、计数错误。
+稳定写法：**截至父提交 `1d9a91d`，`66ce93c..1d9a91d` 共 14 个**；
+加本轮 8 个后，`66ce93c..HEAD` 共 **22 个**。
+
+**回滚（由新到旧，已只读验证零冲突）**：
+
+```bash
+git revert bee96f7 05ad552 89f915b f5d5656 d681608 ed5b877 18f598e
+# 1d9a91d 的树 = 75e5348f95ab369f698184f2de7f58ce64c517e3 = revert 后 HEAD^{tree}
+```
+
+**M1.3e-R1 通过人工复审之前：M1.3e 不得视为通过；M1.3f 未开始；
+`forecast_ready` 不得因「只存在 policy manifest」就提前声明**
+（policy 的 readiness 只有 `available_driver_forecasts_ready=true`，
+其余三项 false；split manifest 的 `forecast_ready` 仍为 false）。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
@@ -1073,6 +1149,13 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
   真值窗口、`load_forecast` 为全零占位）表述为正式 forecast 或用于训练/评估。
 - 不得把 M1.3a 的「可见 truth 改变 bundle」断言表述为正式 forecast 的泄漏门禁；
   它是 **oracle-debug 语义**，正式 causal provider 的 leakage 回归是**另一组独立**测试。
+- 不得在 **M1.3e-R1 通过人工复审之前**把 M1.3e 说成已通过；不得说 M1.3f 已开始。
+- 不得因为「`data/manifest/singapore_2024_forecast_policy.json` 存在」就声明
+  `forecast_ready`：该 manifest 的 readiness 明确只有
+  `available_driver_forecasts_ready=true`，其余三项 false。
+- 不得把 `prediction_hash()` 与 `content_hash()` 混为一谈：前者只覆盖预测数值、
+  单位与顺序（用于证明未来真值变化不改变预测），后者覆盖含审计 provenance 的
+  完整 artifact。
 
 ## 11. 当前可安全执行的命令
 
