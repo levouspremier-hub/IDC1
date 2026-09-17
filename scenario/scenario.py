@@ -24,6 +24,7 @@ import json
 import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -33,6 +34,7 @@ from contracts.models import (
     ScenarioBundle,
     ScenarioForecastProvenance,
 )
+from scenario.splits import SplitName
 
 # 七类预测序列（M1.3a 增补 carbon，与契约字段一一对应）。
 SERIES_KEYS = ("price", "load", "pv", "wind", "temperature", "carbon", "arrival")
@@ -294,8 +296,11 @@ def _build_from_manifest(
         raise ValueError(
             f"正式 split manifest 缺少字段 {missing}（M1.3g-c 负责生成完整 schema）"
         )
+    if split not in ("train", "validation", "test"):
+        raise ValueError(f"未知 split：{split!r}（必须是 train/validation/test）")
+    validated_split: SplitName = cast(SplitName, split)
     return build_formal_scenario(
-        split,
+        validated_split,
         origin=int(manifest["origin_index"]),
         forecast_cutoff=int(manifest["forecast_cutoff"]),
         horizon=int(manifest["horizon"]),

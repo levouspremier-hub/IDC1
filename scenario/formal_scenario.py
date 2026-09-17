@@ -15,8 +15,10 @@ canonical parquet + canonical manifest + split manifest
 
 | 序列 | 构造 | `source_kind` |
 |---|---|---|
-| `price` / `load` / `temperature` | M1.3e `seasonal_naive_forecast`（`[i−48, i)`） | `seasonal_naive` |
-| `pv` | **forecast** 的 GHI / 温度 / 10 m 风速 + **target 日历时刻**过 `local_pv_kw` | `modeled_scenario` |
+| `price` / `load` / `temperature` | M1.3e `seasonal_naive_forecast`
+  （只读 `[i−48, i)`） | `seasonal_naive` |
+| `pv` | **forecast** 的 GHI / 温度 / 10 m 风速
+  + **target 日历时刻**过 `local_pv_kw` | `modeled_scenario` |
 | `wind` | **forecast** 的 10 m 风速过 `wind_generation_kw` | `modeled_scenario` |
 | `carbon` | 经核验的 v2 **B1 常数** `0.402` | `human_approved_external_low_resolution` |
 | `arrival` | **D3：期望值** `rate_template[hour*2 + minute//30] × 1000` | `modeled_scenario` |
@@ -49,6 +51,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+
 import pandas as pd
 
 from contracts.models import (
@@ -74,7 +77,6 @@ from scenario.forecast import (
 )
 from scenario.splits import (
     SplitName,
-    load_truth_split,
     logical_repo_path,
     validate_canonical_timeline,
     validate_forecast_origin,
@@ -146,6 +148,13 @@ def _require(condition: bool, message: str) -> None:
         raise FormalScenarioError(message)
 
 
+def _require_dict(value: object, *, field: str) -> dict:
+    """必须是 object；否则 fail closed（同时让类型检查器收窄）。"""
+    if not isinstance(value, dict):
+        raise FormalScenarioError(f"{field} 必须是 object，实际 {type(value).__name__}")
+    return value
+
+
 def _load_json(path: Path) -> dict:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -199,10 +208,10 @@ def load_verified_exogenous(
         f"实际 {payload.get('schema')!r}",
     )
 
-    columns = payload.get("columns")
-    _require(isinstance(columns, dict), "exogenous v2 manifest 缺少 columns")
-    carbon = columns.get("carbon_intensity")
-    _require(isinstance(carbon, dict), "exogenous v2 manifest 缺少 carbon_intensity")
+    columns = _require_dict(payload.get("columns"),
+                            field="exogenous v2 manifest.columns")
+    carbon = _require_dict(columns.get("carbon_intensity"),
+                           field="columns.carbon_intensity")
     _require(
         carbon.get("classification") == CARBON_SOURCE_KIND,
         "carbon_intensity 的 classification 必须是 "
@@ -214,16 +223,18 @@ def load_verified_exogenous(
         f"carbon_intensity 的 B1 常数必须是 {CARBON_KG_PER_KWH}，"
         f"实际 {carbon.get('value')!r}",
     )
-    decision = carbon.get("human_decision")
+    decision = _require_dict(carbon.get("human_decision"),
+                             field="columns.carbon_intensity.human_decision")
     _require(
-        isinstance(decision, dict) and decision.get("decision_id") == "B1",
+        decision.get("decision_id") == "B1",
         f"carbon_intensity 缺少 B1 人工批准声明，实际 {decision!r}",
     )
 
-    pv_approval = (columns.get("local_pv_kw") or {}).get("b5_pv_approval")
+    local_pv = _require_dict(columns.get("local_pv_kw"), field="columns.local_pv_kw")
+    pv_approval = _require_dict(local_pv.get("b5_pv_approval"),
+                                field="columns.local_pv_kw.b5_pv_approval")
     _require(
-        isinstance(pv_approval, dict)
-        and pv_approval.get("decision_id") == B5_PV_APPROVAL["decision_id"],
+        pv_approval.get("decision_id") == B5_PV_APPROVAL["decision_id"],
         f"local_pv_kw 缺少 B5-PV 人工批准声明，实际 {pv_approval!r}",
     )
     for name, expected in B5_PV_APPROVAL.items():
@@ -233,12 +244,11 @@ def load_verified_exogenous(
             f"期望 {expected!r} 实际 {pv_approval.get(name)!r}",
         )
 
-    arrival = columns.get("arrival")
-    _require(isinstance(arrival, dict), "exogenous v2 manifest 缺少 arrival")
-    arrival_approval = arrival.get("b5_approval")
+    arrival = _require_dict(columns.get("arrival"), field="columns.arrival")
+    arrival_approval = _require_dict(arrival.get("b5_approval"),
+                                     field="columns.arrival.b5_approval")
     _require(
-        isinstance(arrival_approval, dict)
-        and arrival_approval.get("decision_id") == B5_ARRIVAL_APPROVAL["decision_id"],
+        arrival_approval.get("decision_id") == B5_ARRIVAL_APPROVAL["decision_id"],
         f"arrival 缺少 B5-ARRIVAL 人工批准声明，实际 {arrival_approval!r}",
     )
     for name, expected in B5_ARRIVAL_APPROVAL.items():
@@ -256,8 +266,8 @@ def load_verified_exogenous(
         "arrival 不得声明使用 archive 的日期/星期/时区",
     )
 
-    declared_output = payload.get("output")
-    _require(isinstance(declared_output, dict), "exogenous v2 manifest 缺少 output")
+    declared_output = _require_dict(payload.get("output"),
+                                    field="exogenous v2 manifest.output")
     _require(
         declared_output.get("path") == EXOGENOUS_OUTPUT_LOGICAL_PATH,
         f"exogenous v2 manifest 的 output.path 必须是 "
@@ -283,12 +293,15 @@ def exogenous_rate_template(
 ) -> list[float]:
     """从**已核验**的 v2 manifest 读 48 槽 rate template（期望值口径的模板）。"""
     payload = _load_json(Path(exogenous_manifest_path))
-    template = (payload.get("columns") or {}).get("arrival", {}).get("rate_template")
-    _require(
-        isinstance(template, list) and len(template) == ARRIVAL_TEMPLATE_SLOTS,
-        f"arrival rate_template 必须是 {ARRIVAL_TEMPLATE_SLOTS} 项的 list",
-    )
-    return template
+    columns = _require_dict(payload.get("columns"), field="exogenous manifest.columns")
+    arrival = _require_dict(columns.get("arrival"), field="columns.arrival")
+    template = arrival.get("rate_template")
+    if not isinstance(template, list) or len(template) != ARRIVAL_TEMPLATE_SLOTS:
+        raise FormalScenarioError(
+            f"arrival rate_template 必须是 {ARRIVAL_TEMPLATE_SLOTS} 项的 list，"
+            f"实际 {type(template).__name__}"
+        )
+    return [float(value) for value in template]
 
 
 # --- PV / 风电：对 forecast 的逐点确定性变换 ---------------------------------
@@ -464,10 +477,16 @@ def build_formal_scenario(
         start=str(origin),
         horizon=forecast_cutoff if horizon is None else horizon,
         forecast_cutoff=forecast_cutoff,
+        price_forecast=series["price_forecast"],
+        load_forecast=series["load_forecast"],
+        pv_forecast=series["pv_forecast"],
+        wind_forecast=series["wind_forecast"],
+        temperature_forecast=series["temperature_forecast"],
+        carbon_forecast=series["carbon_forecast"],
+        arrival_forecast=series["arrival_forecast"],
         mode="formal",
         generated_at=generated_at,
         forecast_provenance=ScenarioForecastProvenance(**provenance),
-        **series,
     )
     # 自证：formal bundle 必须能通过训练 purpose gate
     from contracts.validators import validate_forecast_purpose
@@ -490,12 +509,12 @@ def _method_for(field: str) -> str:
 
 def _formal_sources(
     *,
-    canonical_parquet_path: Path,
-    canonical_manifest_path: Path,
-    split_manifest_path: Path,
-    policy_manifest_path: Path,
-    exogenous_manifest_path: Path,
-    exogenous_source_manifest_path: Path,
+    canonical_parquet_path: Path | str,
+    canonical_manifest_path: Path | str,
+    split_manifest_path: Path | str,
+    policy_manifest_path: Path | str,
+    exogenous_manifest_path: Path | str,
+    exogenous_source_manifest_path: Path | str,
     code_revision: str,
 ) -> tuple[ArtifactDigest, ...]:
     """六条上游制品的 digest（角色、逻辑路径、实测 SHA-256）。"""
@@ -510,8 +529,8 @@ def _formal_sources(
     return tuple(
         ArtifactDigest(
             role=role,
-            logical_path=logical_repo_path(path),
-            sha256=_sha256_file(path),
+            logical_path=logical_repo_path(Path(path)),
+            sha256=_sha256_file(Path(path)),
         )
         for role, path in entries
     )
