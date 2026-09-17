@@ -211,16 +211,47 @@ def test_manifests_never_claim_training_or_env_readiness():
         }, split
 
 
+SERIES_FORECAST_KEYS = (
+    "price_forecast", "load_forecast", "pv_forecast", "wind_forecast",
+    "temperature_forecast", "carbon_forecast", "arrival_forecast",
+)
+
+
+def _walk_keys(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield key
+            yield from _walk_keys(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _walk_keys(item)
+
+
 @needs_assets
 def test_manifests_contain_no_forecast_values_or_single_origin():
-    """**不得**内置七序列 forecast 数值、未来 truth 或单点 `origin_index`。"""
-    forbidden = ("forecast", "price_forecast", "load_forecast", "pv_forecast",
-                 "wind_forecast", "temperature_forecast", "carbon_forecast",
-                 "arrival_forecast", "origin_index", "future")
+    """**不得**内置七序列 forecast 数值、未来 truth 或单点 `origin_index`。
+
+    注意：输入**角色名** `forecast_policy_manifest` 是信任链的一环，合法；
+    这里查的是**字段名与取值**，不是原始文本。
+    """
     for split, path in TRIAD.items():
-        text = path.read_text(encoding="utf-8")
-        for token in forbidden:
-            assert token not in text, f"{split} 含 {token!r}"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        keys = list(_walk_keys(payload))
+        for key in keys:
+            assert key not in SERIES_FORECAST_KEYS, f"{split} 含 forecast 字段 {key!r}"
+            assert key != "origin_index", f"{split} 含单点 origin_index"
+            assert "future" not in key.lower(), f"{split} 含未来真值字段 {key!r}"
+            assert "default_curve" not in key.lower(), f"{split} 含默认曲线字段 {key!r}"
+        # 不允许任何数组取值（forecast 数组 / origin 抽样结果的载体）
+        _assert_no_list_values(payload, split)
+
+
+def _assert_no_list_values(node, split: str) -> None:
+    if isinstance(node, dict):
+        for value in node.values():
+            _assert_no_list_values(value, split)
+    elif isinstance(node, list):
+        raise AssertionError(f"{split} 含数组取值（不得内置 forecast 数组或抽样结果）")
 
 
 # --- 2. 严格链：refs / hash / 上游绑定 ----------------------------------------
@@ -479,9 +510,18 @@ def test_build_calls_the_existing_strict_chain_checks(monkeypatch):
 
         return wrapper
 
-    for name in ("load_truth_split", "load_verified_exogenous",
-                 "load_frozen_refs"):
+    for name in ("load_truth_split", "load_verified_exogenous"):
         monkeypatch.setattr(module, name, _spy(name))
+
+    # refs 的严格校验由 `scripts.freeze_refs` 提供；spy 打在它真正的归属模块上
+    freeze_module = importlib.import_module("scripts.freeze_refs")
+    original_refs = freeze_module.load_frozen_refs
+
+    def _refs_spy(*args, **kwargs):
+        seen.append("load_frozen_refs")
+        return original_refs(*args, **kwargs)
+
+    monkeypatch.setattr(freeze_module, "load_frozen_refs", _refs_spy)
 
     module.build_split_manifest("train", inputs=_frozen_inputs())
     assert set(seen) == {"load_truth_split", "load_verified_exogenous",
