@@ -74,6 +74,10 @@ def freeze():
     return importlib.import_module(FREEZE_MODULE)
 
 
+def splits_module():
+    return importlib.import_module("scenario.splits")
+
+
 def _sha256(path) -> str:
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
 
@@ -154,6 +158,11 @@ def _synced_temp_chain(tmp_path, *, mutate=None, mutate_exogenous=None) -> dict:
     splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
     splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
     splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
+    # 若 mutation 落在 train 段，M1.3d 的 train-only 统计会被重算并比对；
+    # 这里用**同一个实现**重新计算，使临时链真正自洽（不是绕过校验）。
+    if mutate is not None:
+        splits["train_only_statistics"] = splits_module().train_only_statistics(
+            frame.iloc[: splits["splits"]["train"]["row_end_exclusive"]])
     split_manifest.write_text(json.dumps(splits))
 
     exogenous_parquet = cano_dir / "exogenous_drivers_v2.parquet"
@@ -678,11 +687,10 @@ def test_timestamp_misalignment_is_rejected(tmp_path, monkeypatch):
 @needs_assets
 def test_duplicate_timestamp_is_rejected(tmp_path, monkeypatch):
     module = freeze()
-    chain = _aligned_chain(
-        tmp_path,
-        mutate_exogenous=lambda f: f.__setitem__(
-            (1, "timestamp"), f.loc[0, "timestamp"]),
-    )
+    def _duplicate_stamp(frame: pd.DataFrame) -> None:
+        frame.loc[1, "timestamp"] = frame.loc[0, "timestamp"]
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_duplicate_stamp)
     _patch_frozen_root(monkeypatch, chain)
     with pytest.raises(ValueError):
         module.build_frozen_refs(**_chain_kwargs(chain))
@@ -692,11 +700,10 @@ def test_duplicate_timestamp_is_rejected(tmp_path, monkeypatch):
 def test_off_grid_timestamp_is_rejected(tmp_path, monkeypatch):
     """非严格 30 分钟网格 → 必须 fail closed。"""
     module = freeze()
-    chain = _aligned_chain(
-        tmp_path,
-        mutate_exogenous=lambda f: f.__setitem__(
-            (1, "timestamp"), f.loc[0, "timestamp"] + pd.Timedelta(minutes=7)),
-    )
+    def _off_grid(frame: pd.DataFrame) -> None:
+        frame.loc[1, "timestamp"] = frame.loc[0, "timestamp"] + pd.Timedelta(minutes=7)
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_off_grid)
     _patch_frozen_root(monkeypatch, chain)
     with pytest.raises(ValueError):
         module.build_frozen_refs(**_chain_kwargs(chain))
@@ -736,10 +743,10 @@ def test_missing_required_column_is_rejected(tmp_path, monkeypatch):
                                     "carbon_intensity"))
 def test_non_finite_exogenous_value_is_rejected(tmp_path, monkeypatch, column):
     module = freeze()
-    chain = _aligned_chain(
-        tmp_path,
-        mutate_exogenous=lambda f, c=column: f.__setitem__((0, c), float("nan")),
-    )
+    def _to_nan(frame: pd.DataFrame) -> None:
+        frame.loc[0, column] = float("nan")
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_to_nan)
     _patch_frozen_root(monkeypatch, chain)
     with pytest.raises(ValueError):
         module.build_frozen_refs(**_chain_kwargs(chain))
@@ -749,12 +756,19 @@ def test_non_finite_exogenous_value_is_rejected(tmp_path, monkeypatch, column):
 def test_alignment_failures_never_leak_builtin_errors(tmp_path, monkeypatch):
     """R1-3：任一失败都必须是 ValueError/SplitError，不得泄漏内建异常。"""
     module = freeze()
-    cases = (
-        lambda f: f.drop(columns=["local_pv_kw"], inplace=True),
-        lambda f: f.drop(columns=["timestamp"], inplace=True),
-        lambda f: f.drop(f.index[-100:], inplace=True),
-        lambda f: f["timestamp"].__class__,
-    )
+    def _drop(column: str):
+        def _apply(frame: pd.DataFrame) -> None:
+            frame.drop(columns=[column], inplace=True)
+        return _apply
+
+    def _truncate(frame: pd.DataFrame) -> None:
+        frame.drop(frame.index[-100:], inplace=True)
+        frame.reset_index(drop=True, inplace=True)
+
+    def _shuffle(frame: pd.DataFrame) -> None:
+        frame["timestamp"] = pd.DatetimeIndex(frame["timestamp"]).tz_localize(None)
+
+    cases = (_drop("local_pv_kw"), _drop("timestamp"), _truncate, _shuffle)
     for index, mutate in enumerate(cases):
         case_root = tmp_path / f"case{index}"
         case_root.mkdir()
