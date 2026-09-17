@@ -566,8 +566,13 @@ def test_arrival_template_comes_only_from_the_verified_payload():
         split_manifest_path=SPLIT_MANIFEST,
     )
     template = np.asarray(module.exogenous_rate_template(verified))
-    assert np.allclose(np.asarray(template),
-                       np.asarray(build().arrival_forecast) / ARRIVAL_MEAN)
+    assert template.shape == (48,)
+    bundle = build()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    stamps = pd.DatetimeIndex(canonical["timestamp"].iloc[_ORIGIN:_ORIGIN + _CUTOFF])
+    slots = drivers().arrival_template_slot(stamps)
+    assert np.allclose(np.asarray(bundle.arrival_forecast) / ARRIVAL_MEAN,
+                       template[slots])
     # 该入口**只**接受已核验 payload，不接受 manifest 路径
     with pytest.raises(TypeError):
         module.exogenous_rate_template(exogenous_manifest_path=ENDOGENOUS_MANIFEST)
