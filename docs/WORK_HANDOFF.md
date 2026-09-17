@@ -13,16 +13,17 @@
 > `formal_scenario_bundle_ready=false`、`formal_training_ready=false`；
 > **正式 `ScenarioBundle`、训练与评估仍然 blocked**；四项缺口仍 unavailable。
 > **M1.3f-a 已通过人工审核**；**M1.3f-b（含 R1/R2）已通过人工审核**；
-> **M1.3f-c 第一轮审核不通过，已返修（M1.3f-c-R1）并再次提交复审**：
+> **M1.3f-c 第一轮审核不通过，经返修（M1.3f-c-R1）后已通过人工复审**（2026-09-17）：
 > 修复了 PV 损耗未生效、未批准默认未闭合与 Azure 日期映射无据三项；
-> v1 产物标为 `superseded_pre_approval_and_loss_fix`，**v2 才是候选证据**。
-> ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 仍全为
-> `false`，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
-> **M1.3f-c 已执行完成**（四类外生驱动表已物化，见 §7N），**等待人工审核**。
-> ⚠️ 四项 ready 只表示驱动表已物化，**不代表已接入训练**；
+> v1 产物标为 `superseded_pre_approval_and_loss_fix`，**v2/v3 才是唯一最终证据**。
+> ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 现为 `true`
+> 只代表驱动表已物化，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
+> **M1.3g-a（formal ScenarioBundle / env / train 接线**只读**前置审计）已完成**，
+> 见 §7O。⚠️ **M1.3g-a 只是审计，未实现任何接线**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
-> **M1.3g 未开始**。
-> 详见 §7K（M1.3e）、§7L（M1.3f-a）、§7M（M1.3f-b）。
+> `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
+> **M1.3g 实现与 M6 均未开始**。
+> 详见 §7K（M1.3e）、§7L（M1.3f-a）、§7M（M1.3f-b）、§7N（M1.3f-c/c-R1）、§7O（M1.3g-a）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
 > `M5.4i 已通过人工审核，M5.4 工程门禁已解除`（见 §8）。
@@ -88,7 +89,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d **已通过**；e 执行完成待审） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + train-only 描述统计 + origin 门禁；**M1.3e contract-v8 + 因果 seasonal-naive provider + policy manifest**。 | **M1.3f**（PV/风电/碳强度/arrival 口径）→ **M1.3g**（正式 ScenarioBundle + env/train 接线，含 refs 冻结）未完成；正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f **已通过**；f-c-R1 **已通过复审**；g-a 只读审计完成待裁决） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e contract-v8 + 因果 seasonal-naive provider + policy manifest**；**M1.3f 四类外生驱动 v2/v3 已冻结**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；六项人工裁决 D1–D6 未完成；正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v8`**（M1.3e 起；v7 buffer/checkpoint 明确拒绝）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -1135,10 +1136,84 @@ git revert 56b75e1 d96fcd8 bd7be9d 9850b9a c1d6a3e 094047c 9aedf74 30ebd70 896ed
 四项 ready 只表示驱动表已物化，**不代表已接入训练**。
 **不新增 M5.5，不进入 M6。**
 
+### 7N.2 M1.3f-c-R1 **已通过人工复审**（2026-09-17）
+
+**M1.3f-c-R1 已通过人工复审，M1.3f-c 正式完成。**最终有效证据**只有 v2/v3**：
+
+```text
+exogenous_drivers_v2.parquet              11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf
+singapore_2024_exogenous_v2.json          640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9
+m13f_materialization_sources_v3.json      4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6
+materializer_revision                     bd7be9dd04e47b9db77198c3fdc3e1da2ae0884a
+```
+
+**v1 三产物继续标为 `superseded_pre_approval_and_loss_fix`**
+（`0c5e65d8…` / `46d88c38…` / `6a80886a…`）：**原样保留，不得删除、不得覆盖、
+不得作为正式训练证据**。
+
+四项 ready 只代表驱动表已物化，**不代表已接入训练**；
+`formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**。
+
 > **勘误（2026-09-16）**：上面写的决策矩阵维度「17 列 × 10 行」**是错的**。
 > 实测为 **15 列 × 9 个数据行**（四个缺口 + 五个已实现的 driver）。
 > 本行已更正；提交 `4519a29` 的提交信息保留原错误表述（Git 历史不重写）。
 > 以 `docs/task_cards/M1.3f.md` §11.2 为准。
+
+### 7O. M1.3g-a：formal ScenarioBundle / env / train 接线前置审计（**只读，已完成，等待人工裁决**）
+
+`docs/task_cards/M1.3g.md`。**纯只读审计卡**：只新增/修改三份 markdown，
+未触碰任何代码、测试、配置、raw、processed、manifest 或 `runs/`。
+
+**已登记**：M1.3f-c-R1 通过复审；v2/v3 为唯一最终外生驱动证据，v1 继续 superseded
+（见 §7N.2）。
+
+**审计的八处接口（精确行号见卡片 §b）**：
+
+| 文件 | 关键事实 |
+|---|---|
+| `scenario/scenario.py:283-286` | 正式路径**必然** `NotImplementedError`；`_REQUIRED_MANIFEST_FIELDS`（`:43`）只有 3 个字段 |
+| `scenario/forecast.py:89-91` | provider **只**产出五个 driver 的 forecast；`local_pv_kw`/`wind_generation_kw`/`carbon_intensity`/`arrival` 明确 `UNAVAILABLE_NOT_MATERIALIZED` |
+| `scenario/exogenous_drivers.py:240-264`/`:429-439` | `local_pv_kw()` / `wind_generation_kw()` 是**逐点纯函数**，可直接喂 forecast |
+| `contracts/models.py:62-68`/`:79` | `formal` 只允许 4 种 `source_kind`；**任何** bundle 不得带 `unavailable` |
+| `contracts/validators.py:223-248` | `validate_forecast_purpose` 是 training/evaluation 的唯一门 |
+| `envs/idc_price_env.py:123-137` | 可注入 `price_t`/`pv_t`/`wt_t`/`T_amb`/`carbon_factor_t`；可见性由 `visible_window_slice`（`:15-22`）在观测层裁剪 |
+| `planning/snapshot_adapter.py:86-157` | oracle-debug bundle：其「可见预测」**就是** env 真值窗口，`load_forecast` 全零 |
+| `safe_rl_v2/train.py:636-641` | 当前**无条件**抛 `TrainEntryError`；**完全没有** `validate_forecast_purpose` 调用 |
+
+**核心结论（卡片 §c）**：
+
+1. **PV / 风电 forecast 是五个 driver forecast 的逐点确定性变换**——
+   `pv_f[k] = local_pv_kw(ts[k], ghi_f[k], temp_f[k], v10_f[k])`，
+   `wind_f[k] = wind_generation_kw(v10_f[k])`；输入全部来自 `[i−48, i)`，
+   因此**因果性由构造继承**，且与真值物化**共用同一份物理实现**（无第二套代码）。
+2. `ts[k]` 是未来**日历时刻**（非未来真值）；太阳位置与 48 槽映射都是
+   天文/日历的确定性函数，在 origin 时已知。
+3. **carbon 的 `source_kind` 无法映射**：`human_approved_external_low_resolution`
+   **不在** contract 的 `SOURCE_KINDS` 里，而 M1.3f-c 又禁止写 `modeled_scenario`
+   → **必须人工裁决**（D1）。
+4. **四个 env 默认与 `refs.json` 声明不一致**：`lambda_ref`（1000 vs 2000）、
+   `queue_ref`/`queue_capacity_ref`（1500 vs 6000）、`cost_ref`（30 vs 60）
+   → **必须人工裁决**（D2）。
+5. **env 步长是 1 小时而数据是 30 分钟**（`envs/idc_price_env.py:81` vs canonical 17,568 行）
+   → 必须显式对齐（D4）。
+6. `scripts/freeze_refs.py:13-27` **硬编码声明尺度、完全不读数据**；
+   `refs.json:4-5` 的 `training_range`/`data_hash` 均为 `null` → M1.3g-d 需扩展。
+7. **arrival 的 RNG 口径**（每 origin 重启 seed vs 一次性全年）会产生**不同**结果，
+   必须在 manifest 中登记所采用口径（D3）。
+
+**六项人工裁决 D1–D6**（卡片 §c.7）：carbon source_kind、env/refs 差异、
+arrival RNG 口径、env 步长、split manifest 的 origin 集合、
+`refs.json` 哪些值由 train 推导。**D1–D6 全部裁决前，M1.3g-b..f 均不得开工。**
+
+**建议的下一张实现卡**：**M1.3g-b（formal causal `ScenarioBundle` 构造器）**，
+前置条件为 **D1–D6 全部裁决**。分卡序列 g-b → g-c（三份正式 split manifest）
+→ g-d（train-only refs）→ g-e（env 注入与步长对齐）→ g-f（train 入口门禁）。
+
+**只读验收**：`make check` exit 0（**2248 passed**）、`make smoke` exit 0、
+`make train` exit 2（不回退 synthetic）、checkpoint **0**、三个保留名**不存在**、
+上游全部资产 SHA-256 **逐字节未变**、`git diff --check` 与 `git status --short` 为空。
+
+**M1.3g-a 只是只读审计**：formal `ScenarioBundle`、训练、评估与 **M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
@@ -1745,6 +1820,19 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
   静默转换（`"200"→200`、`200.0→200`、`True→1.0`）；本卡的严格性来自
   `mode="before"` 的定向 validator。
 - 不得再引入含 `://`、空片段或 `..` 片段的 `ArtifactDigest.logical_path`。
+- 不得把 **v1** 外生驱动产物（`exogenous_drivers.parquet` / `singapore_2024_exogenous.json` /
+  `m13f_materialization_sources.json`）引用为最终证据：它们标为
+  `superseded_pre_approval_and_loss_fix`；**只有 v2/v3** 是最终证据。
+- 不得把 `prediction_hash()` 与 `content_hash()` 混为一谈（前者只覆盖预测数值/单位/顺序）。
+- 不得把 M1.3g-a 的**只读审计**说成「M1.3g 已开始/已完成」：它未实现任何接线，
+  `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**。
+- 不得把 `AvailableExogenousForecast`（五个 driver 的 artifact）当成正式
+  `ScenarioBundle`（七序列）使用；也不得用 `unavailable` 占位补足差额。
+- 不得把 `planning/snapshot_adapter` 的 oracle-debug bundle 或
+  `scenario/scenario.py:_build_synthetic` 的 synthetic 场景接进正式训练。
+- 不得把 `configs/frozen_refs/refs.json` 的**声明尺度**当作已由 train 冻结的
+  normalization refs（其 `training_range` 与 `data_hash` 仍为 `null`）。
+- 不得在 **D1–D6 六项人工裁决完成之前**开工 M1.3g-b..f。
 
 ## 11. 当前可安全执行的命令
 
