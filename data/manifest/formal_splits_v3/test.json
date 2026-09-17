@@ -5,7 +5,7 @@
   },
   "contract_version": "contract-v9",
   "frequency": "30min",
-  "frozen_at_utc": "2026-09-17T13:21:37+00:00",
+  "frozen_at_utc": "2026-09-17T13:26:37+00:00",
   "history_steps": 48,
   "inputs": {
     "canonical_manifest": {
@@ -41,7 +41,7 @@
       "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
     }
   },
-  "materializer_revision": "b06fc38422301164b3ec5c3f1a8190222cde2cfb",
+  "materializer_revision": "2d1f345345663faa4421412b63b86efff09a7ed5",
   "readiness": {
     "formal_env_ready": false,
     "formal_training_ready": false
