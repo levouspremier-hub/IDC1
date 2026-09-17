@@ -184,7 +184,14 @@ def test_arrival_is_the_template_expectation_not_a_poisson_draw():
     canonical = pd.read_parquet(CANONICAL_PARQUET)
     stamps = pd.DatetimeIndex(canonical["timestamp"].iloc[_ORIGIN:_ORIGIN + _CUTOFF])
     slots = drivers().arrival_template_slot(stamps)
-    template = np.asarray(module.exogenous_rate_template())
+    template = np.asarray(module.exogenous_rate_template(
+        module.load_verified_exogenous(
+            ENDOGENOUS_MANIFEST, ENDOGENOUS_SOURCE,
+            exogenous_parquet_path=ENDOGENOUS_PARQUET,
+            canonical_parquet_path=CANONICAL_PARQUET,
+            canonical_manifest_path=CANONICAL_MANIFEST,
+            split_manifest_path=SPLIT_MANIFEST,
+        )))
     expected = template[slots] * ARRIVAL_MEAN
 
     bundle = build()
@@ -551,10 +558,19 @@ def test_exogenous_manifest_path_binding_must_match(tmp_path):
 def test_arrival_template_comes_only_from_the_verified_payload():
     """R1：不得通过未核验的 manifest 单独读取 arrival template。"""
     module = formal()
-    template = module.exogenous_rate_template(
-        exogenous_manifest_path=ENDOGENOUS_MANIFEST)
+    verified = module.load_verified_exogenous(
+        ENDOGENOUS_MANIFEST, ENDOGENOUS_SOURCE,
+        exogenous_parquet_path=ENDOGENOUS_PARQUET,
+        canonical_parquet_path=CANONICAL_PARQUET,
+        canonical_manifest_path=CANONICAL_MANIFEST,
+        split_manifest_path=SPLIT_MANIFEST,
+    )
+    template = np.asarray(module.exogenous_rate_template(verified))
     assert np.allclose(np.asarray(template),
                        np.asarray(build().arrival_forecast) / ARRIVAL_MEAN)
+    # 该入口**只**接受已核验 payload，不接受 manifest 路径
+    with pytest.raises(TypeError):
+        module.exogenous_rate_template(exogenous_manifest_path=ENDOGENOUS_MANIFEST)
 
 
 # --- 10. M1.3g-b-R1：sources 必须含外生驱动表 ---------------------------------

@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -72,8 +73,12 @@ from scenario.exogenous_drivers import (
 )
 from scenario.forecast import (
     FORECAST_PERIOD_STEPS,
+    FORECAST_SOURCE_PATHS,
     build_available_exogenous_forecast,
-    seasonal_naive_forecast,
+    # 刻意保留这个**未使用**的 re-export：M1.3g-b-R1 的回归用
+    # `monkeypatch.setattr(module, "seasonal_naive_forecast", boom)` 证明
+    # formal 内核**没有**第二次独立调用它（seasonal 三序列直接取自 artifact）。
+    seasonal_naive_forecast,  # noqa: F401
 )
 from scenario.splits import (
     SplitName,
@@ -131,9 +136,43 @@ SUPERSEDED_EXOGENOUS_SHA256 = (
 MODEL_NAME = "formal_scenario_kernel"
 MODEL_VERSION = "v1"
 
+# **formal 内核自身的**实现文件集合（M1.3g-b-R1）。
+# 它**严格包含** provider 的 `FORECAST_SOURCE_PATHS`，外加真正参与 formal 语义的
+# 两个实现：formal 内核本身与外生驱动物理实现。`code_revision` 由**这一组**路径
+# 解析，因此任何一处改动都会改变 formal revision —— **不得**用旧提交为新实现背书。
+FORMAL_SOURCE_PATHS: tuple[str, ...] = (
+    *FORECAST_SOURCE_PATHS,
+    "scenario/formal_scenario.py",
+    "scenario/exogenous_drivers.py",
+)
+
 
 class FormalScenarioError(ValueError):
     """formal 场景构造的**明确失败**。"""
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout
+
+
+def formal_code_revision() -> str:
+    """**formal 内核自身的**冻结 revision（40 位小写 SHA）。
+
+    由 `FORMAL_SOURCE_PATHS`（provider 五文件 + formal 内核 + 外生驱动实现）
+    解析；**没有**调用者入口，因此 provenance 的 `code_revision` 不可能被伪造。
+    """
+    revision = _git("log", "-1", "--format=%H", "--", *FORMAL_SOURCE_PATHS).strip()
+    if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+        raise FormalScenarioError(f"formal code_revision 无效：{revision!r}")
+    return revision
+
+
+def formal_generator_is_dirty() -> bool:
+    """formal 实现是否有未提交修改（含未跟踪的新文件）——**同一**路径集合。"""
+    status = _git("status", "--porcelain", "--", *FORMAL_SOURCE_PATHS)
+    return bool(status.strip())
 
 
 def _sha256_file(path: Path) -> str:
@@ -166,24 +205,59 @@ def _load_json(path: Path) -> dict:
 
 # --- exogenous v2 / source v3 的核验 -----------------------------------------
 
+def _require_bound(
+    declared_path: object, declared_sha: object, actual: Path, *, field: str
+) -> None:
+    """**交叉绑定**：manifest 的声明必须等于本次调用**实际使用**的对象。
+
+    path 与 SHA-256 **逐项**校验——两边各自自洽但互不相符时**同样**拒绝。
+    """
+    expected_path = logical_repo_path(actual)
+    _require(
+        declared_path == expected_path,
+        f"{field} 的声明路径与实际提供的对象不符："
+        f"声明={declared_path!r} 实际={expected_path!r}",
+    )
+    measured = _sha256_file(actual)
+    _require(
+        declared_sha == measured,
+        f"{field} 的声明 SHA-256 与实际提供的对象不符："
+        f"声明={declared_sha!r} 实测={measured}",
+    )
+
+
 def load_verified_exogenous(
     exogenous_manifest_path: Path | str,
     exogenous_source_manifest_path: Path | str,
     *,
     exogenous_parquet_path: Path | str,
+    canonical_parquet_path: Path | str,
+    canonical_manifest_path: Path | str,
+    split_manifest_path: Path | str,
+    expected_manifest_sha256: str = EXOGENOUS_MANIFEST_SHA256,
+    expected_source_manifest_sha256: str = EXOGENOUS_SOURCE_MANIFEST_SHA256,
+    expected_output_sha256: str = EXOGENOUS_OUTPUT_SHA256,
 ) -> dict:
     """核验并返回 M1.3f-c-R1 的 v2 外生驱动声明。
 
     逐项校验：
 
-    1. 两份 manifest 的**字节** SHA-256 等于冻结登记值（逐字节绑定）；
+    1. 两份 manifest 的**字节** SHA-256 等于登记的期望值（生产链用冻结常量）；
     2. v2 manifest 的 schema、B1（carbon）与 B5（PV / arrival）声明完整；
-    3. 声明的 v2 output hash 等于 parquet 的**实测**字节 hash；
-    4. v1 产物**不得**被当作正式证据。
+    3. 声明的 output path/hash 等于**实际提供**的 v2 驱动表（含冻结 output hash）；
+    4. **交叉绑定**：声明的 canonical parquet / canonical manifest / split manifest
+       的 path **与** SHA-256 逐项等于**本次 formal 调用实际使用**的对象；
+    5. v1 产物**不得**被当作正式证据。
+
+    `expected_*` 默认是**冻结常量**（生产链由 `scenario/scenario.py` 调用，
+    **不传**任何覆盖）。测试用它们在临时链上验证交叉绑定本身。
     """
     exogenous_manifest_path = Path(exogenous_manifest_path)
     exogenous_source_manifest_path = Path(exogenous_source_manifest_path)
     exogenous_parquet_path = Path(exogenous_parquet_path)
+    canonical_parquet_path = Path(canonical_parquet_path)
+    canonical_manifest_path = Path(canonical_manifest_path)
+    split_manifest_path = Path(split_manifest_path)
 
     actual = _sha256_file(exogenous_manifest_path)
     if actual == SUPERSEDED_EXOGENOUS_SHA256:
@@ -192,16 +266,30 @@ def load_verified_exogenous(
             "它标为 superseded_pre_approval_and_loss_fix，不得作为正式链证据"
         )
     _require(
-        actual == EXOGENOUS_MANIFEST_SHA256,
-        f"exogenous v2 manifest 的 SHA-256 与冻结登记不符："
-        f"期望 {EXOGENOUS_MANIFEST_SHA256} 实际 {actual}",
+        actual == expected_manifest_sha256,
+        f"exogenous v2 manifest 的 SHA-256 与登记不符："
+        f"期望 {expected_manifest_sha256} 实际 {actual}",
     )
     _require(
-        _sha256_file(exogenous_source_manifest_path) == EXOGENOUS_SOURCE_MANIFEST_SHA256,
-        "exogenous source v3 manifest 的 SHA-256 与冻结登记不符",
+        _sha256_file(exogenous_source_manifest_path) == expected_source_manifest_sha256,
+        "exogenous source v3 manifest 的 SHA-256 与登记不符",
     )
 
     payload = _load_json(exogenous_manifest_path)
+
+    # 交叉绑定：v2 manifest 声明的上游对象 == 本次调用实际使用的对象
+    _require_bound(
+        payload.get("canonical_parquet_path"), payload.get("canonical_parquet_sha256"),
+        canonical_parquet_path, field="exogenous.canonical_parquet",
+    )
+    _require_bound(
+        payload.get("canonical_manifest_path"), payload.get("canonical_manifest_sha256"),
+        canonical_manifest_path, field="exogenous.canonical_manifest",
+    )
+    _require_bound(
+        payload.get("split_manifest_path"), payload.get("split_manifest_sha256"),
+        split_manifest_path, field="exogenous.split_manifest",
+    )
     _require(
         payload.get("schema") == EXOGENOUS_SCHEMA,
         f"exogenous v2 manifest 的 schema 必须是 {EXOGENOUS_SCHEMA!r}，"
@@ -268,32 +356,26 @@ def load_verified_exogenous(
 
     declared_output = _require_dict(payload.get("output"),
                                     field="exogenous v2 manifest.output")
-    _require(
-        declared_output.get("path") == EXOGENOUS_OUTPUT_LOGICAL_PATH,
-        f"exogenous v2 manifest 的 output.path 必须是 "
-        f"{EXOGENOUS_OUTPUT_LOGICAL_PATH!r}，实际 {declared_output.get('path')!r}",
+    _require_bound(
+        declared_output.get("path"), declared_output.get("sha256"),
+        exogenous_parquet_path, field="exogenous.output",
     )
     _require(
-        declared_output.get("sha256") == EXOGENOUS_OUTPUT_SHA256,
-        "exogenous v2 manifest 声明的 output.sha256 与冻结登记不符",
-    )
-    measured = _sha256_file(exogenous_parquet_path)
-    _require(
-        measured == declared_output.get("sha256"),
-        f"v2 外生驱动表的实测 SHA-256 与 manifest 声明不符："
-        f"声明={declared_output.get('sha256')} 实测={measured}",
+        _sha256_file(exogenous_parquet_path) == expected_output_sha256,
+        "v2 外生驱动表的 SHA-256 与登记的 output hash 不符",
     )
     return payload
 
 
-def exogenous_rate_template(
-    exogenous_manifest_path: Path | str = (
-        "data/manifest/singapore_2024_exogenous_v2.json"
-    ),
-) -> list[float]:
-    """从**已核验**的 v2 manifest 读 48 槽 rate template（期望值口径的模板）。"""
-    payload = _load_json(Path(exogenous_manifest_path))
-    columns = _require_dict(payload.get("columns"), field="exogenous manifest.columns")
+def exogenous_rate_template(verified_payload: dict) -> list[float]:
+    """从**已通过 `load_verified_exogenous` 的 payload** 取 48 槽 rate template。
+
+    刻意**不**接受 manifest 路径：formal 路径不得绕过核验单独读取 template。
+    """
+    columns = _require_dict(
+        _require_dict(verified_payload, field="verified exogenous payload").get("columns"),
+        field="exogenous manifest.columns",
+    )
     arrival = _require_dict(columns.get("arrival"), field="columns.arrival")
     template = arrival.get("rate_template")
     if not isinstance(template, list) or len(template) != ARRIVAL_TEMPLATE_SLOTS:
@@ -302,6 +384,15 @@ def exogenous_rate_template(
             f"实际 {type(template).__name__}"
         )
     return [float(value) for value in template]
+
+
+def build_available_forecast_only(**kwargs):
+    """暴露给审计/测试的**只读**入口：只构造 M1.3e 的 driver forecast artifact。
+
+    生产链**不**使用它；它存在的目的是让「seasonal 序列确实取自 artifact」这一
+    断言可以独立复算，而不必复制 provider 的内部调用。
+    """
+    return build_available_exogenous_forecast(**kwargs)
 
 
 # --- PV / 风电：对 forecast 的逐点确定性变换 ---------------------------------
@@ -366,6 +457,9 @@ def build_formal_scenario(
     exogenous_manifest_path: Path | str,
     exogenous_source_manifest_path: Path | str,
     horizon: int | None = None,
+    expected_exogenous_manifest_sha256: str = EXOGENOUS_MANIFEST_SHA256,
+    expected_exogenous_source_manifest_sha256: str = EXOGENOUS_SOURCE_MANIFEST_SHA256,
+    expected_exogenous_output_sha256: str = EXOGENOUS_OUTPUT_SHA256,
 ) -> ScenarioBundle:
     """构造 `mode="formal"` 的七序列 `ScenarioBundle`（**纯构造**，不写文件）。
 
@@ -380,6 +474,12 @@ def build_formal_scenario(
         raise FormalScenarioError(f"origin 必须是整数，实际 {origin!r}")
     if isinstance(forecast_cutoff, bool) or not isinstance(forecast_cutoff, int):
         raise FormalScenarioError(f"forecast_cutoff 必须是整数，实际 {forecast_cutoff!r}")
+
+    # 0) formal 实现必须**已提交**：不得用旧 revision 为未提交的新实现背书
+    if formal_generator_is_dirty():
+        raise FormalScenarioError(
+            "formal 实现有未提交修改：拒绝用旧 code_revision 为未提交代码背书（未提交）"
+        )
 
     global_origin = validate_forecast_origin(split, origin, forecast_cutoff)
     history_start = global_origin - FORECAST_PERIOD_STEPS
@@ -408,22 +508,29 @@ def build_formal_scenario(
     validate_canonical_timeline(frame, label="canonical")
     stamps = pd.DatetimeIndex(frame["timestamp"])
 
-    # 3) exogenous v2 / source v3 的逐字节核验（含 v2 output hash）
+    # 3) exogenous v2 / source v3 的逐字节核验 + **与本次调用的交叉绑定**
     exogenous_parquet_path = REPO_ROOT / EXOGENOUS_OUTPUT_LOGICAL_PATH
     exogenous = load_verified_exogenous(
         exogenous_manifest_path,
         exogenous_source_manifest_path,
         exogenous_parquet_path=exogenous_parquet_path,
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        expected_manifest_sha256=expected_exogenous_manifest_sha256,
+        expected_source_manifest_sha256=expected_exogenous_source_manifest_sha256,
+        expected_output_sha256=expected_exogenous_output_sha256,
     )
 
     # 4) 七条序列：全部只用 `[i−48, i)`
-    series: dict[str, tuple[float, ...]] = {}
-    for field, column in SEASONAL_DRIVER_COLUMNS.items():
-        series[field] = seasonal_naive_forecast(
-            frame[column].to_numpy(), origin=global_origin,
-            forecast_cutoff=forecast_cutoff,
-        )
+    #    price / load / temperature **直接取自 artifact** 的对应 series ——
+    #    **不**第二次独立调用 `seasonal_naive_forecast`（避免实现漂移）。
     drv = artifact.series.as_dict()
+    series: dict[str, tuple[float, ...]] = {
+        "price_forecast": drv["price_sgd_per_kwh"],
+        "load_forecast": drv["system_load_mw"],
+        "temperature_forecast": drv["temperature_deg_c"],
+    }
     ghi_f = drv[GHI_COLUMN]
     temp_f = drv[PV_TEMPERATURE_COLUMN]
     v10_f = drv[WIND_SPEED_COLUMN]
@@ -431,12 +538,15 @@ def build_formal_scenario(
         pd.DatetimeIndex(target_timestamps), ghi_f, temp_f, v10_f)
     series["wind_forecast"] = wind_forecast(v10_f)
     series["carbon_forecast"] = (CARBON_KG_PER_KWH,) * forecast_cutoff
+    # arrival 的 template **只**从已验证 payload 取得（不再单独读 manifest）
     series["arrival_forecast"] = arrival_forecast(
         pd.DatetimeIndex(target_timestamps),
-        exogenous["columns"]["arrival"]["rate_template"],
+        exogenous_rate_template(exogenous),
     )
 
-    # 5) provenance：七项 `generated_at` 恒等，时间顺序自洽
+    # 5) provenance：七项 `generated_at` 恒等，时间顺序自洽；
+    #    `code_revision` 是 **formal 内核自身**的冻结 revision（非 provider-only）
+    code_revision = formal_code_revision()
     target_end_exclusive = (
         datetime.fromisoformat(target_timestamps[-1]) + timedelta(minutes=STEP_MINUTES)
     ).isoformat()
@@ -449,7 +559,8 @@ def build_formal_scenario(
         policy_manifest_path=policy_manifest_path,
         exogenous_manifest_path=exogenous_manifest_path,
         exogenous_source_manifest_path=exogenous_source_manifest_path,
-        code_revision=artifact.code_revision,
+        exogenous_parquet_path=exogenous_parquet_path,
+        code_revision=code_revision,
     )
 
     provenance = {
@@ -465,7 +576,7 @@ def build_formal_scenario(
             lookback_end_exclusive=generated_at,
             model_name=MODEL_NAME,
             model_version=MODEL_VERSION,
-            code_revision=artifact.code_revision,
+            code_revision=code_revision,
             seed=None,
             sources=sources,
         )
@@ -515,6 +626,7 @@ def _formal_sources(
     policy_manifest_path: Path | str,
     exogenous_manifest_path: Path | str,
     exogenous_source_manifest_path: Path | str,
+    exogenous_parquet_path: Path | str,
     code_revision: str,
 ) -> tuple[ArtifactDigest, ...]:
     """六条上游制品的 digest（角色、逻辑路径、实测 SHA-256）。"""
@@ -525,6 +637,8 @@ def _formal_sources(
         ("forecast_policy_manifest", policy_manifest_path),
         ("exogenous_drivers_manifest", exogenous_manifest_path),
         ("exogenous_source_manifest", exogenous_source_manifest_path),
+        # M1.3g-b-R1：**经验证**的 v2 驱动表本身也必须作为来源 digest
+        ("exogenous_drivers_parquet", exogenous_parquet_path),
     )
     return tuple(
         ArtifactDigest(
