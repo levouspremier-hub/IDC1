@@ -86,6 +86,10 @@
 !data/raw/public_benchmarks/*.md
 !data/manifest/
 !data/manifest/*.json
+# M1.3g-c-R1：正式 split manifest 的 v2 triad 位于一层子目录下，既有规则
+# `!data/manifest/*.json` 只解开**直接子级**，故显式放行该子目录。
+!data/manifest/formal_splits_v2/
+!data/manifest/formal_splits_v2/*.json
 !report_tools/
 !report_tools/*.py
 !legacy/
