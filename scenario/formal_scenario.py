@@ -234,23 +234,21 @@ def load_verified_exogenous(
     canonical_parquet_path: Path | str,
     canonical_manifest_path: Path | str,
     split_manifest_path: Path | str,
-    expected_manifest_sha256: str = EXOGENOUS_MANIFEST_SHA256,
-    expected_source_manifest_sha256: str = EXOGENOUS_SOURCE_MANIFEST_SHA256,
-    expected_output_sha256: str = EXOGENOUS_OUTPUT_SHA256,
 ) -> dict:
     """核验并返回 M1.3f-c-R1 的 v2 外生驱动声明。
 
     逐项校验：
 
-    1. 两份 manifest 的**字节** SHA-256 等于登记的期望值（生产链用冻结常量）；
+    1. 两份 manifest 的**字节** SHA-256 等于**模块冻结常量**；
     2. v2 manifest 的 schema、B1（carbon）与 B5（PV / arrival）声明完整；
     3. 声明的 output path/hash 等于**实际提供**的 v2 驱动表（含冻结 output hash）；
     4. **交叉绑定**：声明的 canonical parquet / canonical manifest / split manifest
        的 path **与** SHA-256 逐项等于**本次 formal 调用实际使用**的对象；
     5. v1 产物**不得**被当作正式证据。
 
-    `expected_*` 默认是**冻结常量**（生产链由 `scenario/scenario.py` 调用，
-    **不传**任何覆盖）。测试用它们在临时链上验证交叉绑定本身。
+    **签名里没有任何 hash / revision / trust-root 覆盖参数**：信任根是模块
+    级冻结常量，调用者无法替换。测试若要验证临时链，只能 monkeypatch
+    **模块内部**的那几个常量（见 `tests/test_m13gb_formal_scenario.py`）。
     """
     exogenous_manifest_path = Path(exogenous_manifest_path)
     exogenous_source_manifest_path = Path(exogenous_source_manifest_path)
@@ -266,13 +264,13 @@ def load_verified_exogenous(
             "它标为 superseded_pre_approval_and_loss_fix，不得作为正式链证据"
         )
     _require(
-        actual == expected_manifest_sha256,
-        f"exogenous v2 manifest 的 SHA-256 与登记不符："
-        f"期望 {expected_manifest_sha256} 实际 {actual}",
+        actual == EXOGENOUS_MANIFEST_SHA256,
+        f"exogenous v2 manifest 的 SHA-256 与冻结登记不符："
+        f"期望 {EXOGENOUS_MANIFEST_SHA256} 实际 {actual}",
     )
     _require(
-        _sha256_file(exogenous_source_manifest_path) == expected_source_manifest_sha256,
-        "exogenous source v3 manifest 的 SHA-256 与登记不符",
+        _sha256_file(exogenous_source_manifest_path) == EXOGENOUS_SOURCE_MANIFEST_SHA256,
+        "exogenous source v3 manifest 的 SHA-256 与冻结登记不符",
     )
 
     payload = _load_json(exogenous_manifest_path)
@@ -361,8 +359,8 @@ def load_verified_exogenous(
         exogenous_parquet_path, field="exogenous.output",
     )
     _require(
-        _sha256_file(exogenous_parquet_path) == expected_output_sha256,
-        "v2 外生驱动表的 SHA-256 与登记的 output hash 不符",
+        _sha256_file(exogenous_parquet_path) == EXOGENOUS_OUTPUT_SHA256,
+        "v2 外生驱动表的 SHA-256 与冻结的 output hash 不符",
     )
     return payload
 
@@ -457,9 +455,6 @@ def build_formal_scenario(
     exogenous_manifest_path: Path | str,
     exogenous_source_manifest_path: Path | str,
     horizon: int | None = None,
-    expected_exogenous_manifest_sha256: str = EXOGENOUS_MANIFEST_SHA256,
-    expected_exogenous_source_manifest_sha256: str = EXOGENOUS_SOURCE_MANIFEST_SHA256,
-    expected_exogenous_output_sha256: str = EXOGENOUS_OUTPUT_SHA256,
 ) -> ScenarioBundle:
     """构造 `mode="formal"` 的七序列 `ScenarioBundle`（**纯构造**，不写文件）。
 
@@ -517,9 +512,6 @@ def build_formal_scenario(
         canonical_parquet_path=canonical_parquet_path,
         canonical_manifest_path=canonical_manifest_path,
         split_manifest_path=split_manifest_path,
-        expected_manifest_sha256=expected_exogenous_manifest_sha256,
-        expected_source_manifest_sha256=expected_exogenous_source_manifest_sha256,
-        expected_output_sha256=expected_exogenous_output_sha256,
     )
 
     # 4) 七条序列：全部只用 `[i−48, i)`
