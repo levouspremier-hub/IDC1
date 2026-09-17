@@ -1403,6 +1403,52 @@ git revert <交接提交> b78398f 3c24eab 91a26f7 03c53a7 8c49ba9 c5a4f2b
 `build_scenario(synthetic=False)` **仍 fail closed**；
 正式训练、评估与 **M6 仍未开始**。
 
+### 7R. M1.3g-b-R1：formal 内核的代码 provenance 与外生链交叉绑定（**执行完成，等待复审**）
+
+**M1.3g-b 第一轮审核不通过**，起点 `ca1df86`，实现终点 `3fd6140`；四项修正
+（详见卡片 §k–§l）：
+
+1. **代码 provenance 覆盖面**：新建 `FORMAL_SOURCE_PATHS` =
+   provider 的 `FORECAST_SOURCE_PATHS` **＋** `scenario/formal_scenario.py`
+   **＋** `scenario/exogenous_drivers.py`；唯一 resolver `formal_code_revision()`
+   与 dirty 检查 `formal_generator_is_dirty()` 使用**同一集合**，且 revision
+   **没有**调用者入口。
+   > 修正前 bundle 携带 **`080483b`**（一个**不含 formal 内核**的旧提交）；
+   > 现在携带 **`3fd6140`**。实测 `formal != provider` revision。
+2. **外生链交叉绑定**：`load_verified_exogenous` 显式接收本次调用**实际使用**的
+   canonical parquet / canonical manifest / split manifest / exogenous parquet，
+   对 v2 manifest 的声明做 **path 与 SHA-256 逐项**比对。
+   实测：mutation 过、各自完全自洽的临时链 + **仓库原样 exogenous manifest**
+   → **REJECTED**（`exogenous.canonical_parquet` 路径不符）。
+   **「保留原仓库 exogenous manifest」不叫同步链。**
+3. **`sources` 补 `exogenous_drivers_parquet`**（`11d322b2…`），七条逐条断言。
+4. **seasonal 三序列直接取 artifact**；回归用 monkeypatch 证明
+   formal 内核**没有**第二次调用 `seasonal_naive_forecast`。
+
+**另**：arrival template **只**从已验证 payload 取得
+（`exogenous_rate_template` 不接受 manifest 路径）。
+
+**先红实测**（`95095a7`）：`13 failed, 21 passed`。
+**转绿**：focused **34**、`m12/m13/contracts` **1146**、
+`make check` **exit 0（2325 passed）**、`make smoke` **exit 0**、
+`make train` **exit 2**（不回退 synthetic）、checkpoint **0**、
+三个保留名**未创建**、`refs.json` / `policy_v2` **未变**。
+**范围外修改：无。**
+
+> **开发期注意**：`build_formal_scenario` 现在带 **dirty 门禁**——
+> formal 实现有未提交修改时**拒绝构造**。这是有意的（不得用旧 revision
+> 为未提交代码背书）；跑 focused 测试前必须先提交实现。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> bae3ce4 649eff1 3fd6140 95095a7 e455bbf
+```
+
+**g-b-R1 通过复审之前**：`g-d / g-c / g-e / g-f` 均不得开始；
+`build_scenario(synthetic=False)` **仍 fail closed**；
+正式训练、评估与 **M6 仍未开始**。
+
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
 > ⚠️ **本节的历史说法是历史错误，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
