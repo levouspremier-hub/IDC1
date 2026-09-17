@@ -50,16 +50,19 @@ import pandas as pd
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scenario.formal_scenario import (
-    EXOGENOUS_OUTPUT_LOGICAL_PATH,
-    load_verified_exogenous,
-)
+from scenario.formal_scenario import load_verified_exogenous
 from scenario.splits import SplitName, load_truth_split, logical_repo_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-OUT_PATH = REPO_ROOT / "configs/frozen_refs/refs.json"
+OUT_PATH = REPO_ROOT / "configs/frozen_refs/refs_v3.json"
 
 REF_SCHEMA = "frozen-refs-v2"
+# M1.3g-d 的 legacy 输出（**已被取代**：superseded_pre_trust_boundary_fix）。
+# 本实现**只读**它，绝不写入；留作历史对照与「不可覆盖」回归。
+SUPERSEDED_V2_PATH = REPO_ROOT / "configs/frozen_refs/refs.json"
+SUPERSEDED_V2_SHA256 = (
+    "aae5a03e9f09239c4f490b735e4a9ab21d872783a547e7ac6fa9264bafc66827"
+)
 LEGACY_SCHEMA = "frozen-refs-v1"
 # legacy v1 的**登记**字节 hash（仅此一份允许被受控替换）
 LEGACY_V1_SHA256 = (
@@ -67,6 +70,8 @@ LEGACY_V1_SHA256 = (
 )
 
 # 生成器实现（dirty 检查与 revision 使用**同一**集合）
+SUPERSEDED_MARK = "superseded_pre_trust_boundary_fix"
+
 GENERATOR_SOURCE_PATHS: tuple[str, ...] = (
     "scripts/freeze_refs.py",
     "scenario/splits.py",
@@ -78,6 +83,9 @@ CANONICAL_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
 SPLIT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
 EXOGENOUS_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous_v2.json"
 EXOGENOUS_SOURCE = REPO_ROOT / "data/manifest/m13f_materialization_sources_v3.json"
+EXOGENOUS_PARQUET = (
+    REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers_v2.parquet"
+)
 TRAIN_SPLIT: SplitName = "train"
 
 # --- 声明物理尺度（**不得**由数据推导） -------------------------------------
@@ -214,19 +222,41 @@ def build_frozen_refs(
     split_manifest_path: Path | str = SPLIT_MANIFEST,
     exogenous_manifest_path: Path | str = EXOGENOUS_MANIFEST,
     exogenous_source_manifest_path: Path | str = EXOGENOUS_SOURCE,
-    frozen_at_utc: str | None = None,
-    canonical_frame: pd.DataFrame | None = None,
+    exogenous_parquet_path: Path | str = EXOGENOUS_PARQUET,
 ) -> dict:
     """构造候选 `frozen-refs-v2`（**只读**上游，逐层严格校验）。
 
-    `canonical_frame` 仅供测试注入一份**已修改**的 canonical 帧；
-    生产路径从不传它（因此仍走严格链校验）。
+    **公开签名只接受文件路径**：不存在 `frame` 注入、`expected_*` 信任根参数
+    或 `**kwargs`。任何绕过 manifest/hash 校验的入口都不存在。
     """
+    return _build_frozen_refs_payload(
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        exogenous_manifest_path=exogenous_manifest_path,
+        exogenous_source_manifest_path=exogenous_source_manifest_path,
+        exogenous_parquet_path=exogenous_parquet_path,
+        frozen_at_utc=_now_utc(),
+    )
+
+
+def _build_frozen_refs_payload(
+    *,
+    canonical_parquet_path: Path | str,
+    canonical_manifest_path: Path | str,
+    split_manifest_path: Path | str,
+    exogenous_manifest_path: Path | str,
+    exogenous_source_manifest_path: Path | str,
+    exogenous_parquet_path: Path | str,
+    frozen_at_utc: str,
+) -> dict:
+    """**私有**构造内核：调用方（公开入口）已完成路径解析与冻结时间戳决定。"""
     canonical_parquet_path = Path(canonical_parquet_path)
     canonical_manifest_path = Path(canonical_manifest_path)
     split_manifest_path = Path(split_manifest_path)
     exogenous_manifest_path = Path(exogenous_manifest_path)
     exogenous_source_manifest_path = Path(exogenous_source_manifest_path)
+    exogenous_parquet_path = Path(exogenous_parquet_path)
 
     # 1) split → canonical manifest → canonical parquet 的**完整严格校验**
     #    （含整条时间轴、精确键集合、train-only 统计重算）
@@ -239,7 +269,6 @@ def build_frozen_refs(
     _require(len(split_rows) > 0, "train 切分为空，拒绝冻结 refs")
 
     # 2) exogenous v2 / source v3 的逐字节核验 + 交叉绑定
-    exogenous_parquet_path = REPO_ROOT / EXOGENOUS_OUTPUT_LOGICAL_PATH
     load_verified_exogenous(
         exogenous_manifest_path,
         exogenous_source_manifest_path,
@@ -249,12 +278,14 @@ def build_frozen_refs(
         split_manifest_path=split_manifest_path,
     )
 
-    # 3) 只读 **train 行**（用注入帧时同样只取 train 段）
-    frame = (pd.read_parquet(canonical_parquet_path)
-             if canonical_frame is None else canonical_frame)
+    # 3) **iloc 切片之前**的严格对齐校验（长度 / 时间轴 / 逐行时间戳 / 列 / 有限性）
+    frame = pd.read_parquet(canonical_parquet_path)
+    exog_frame = pd.read_parquet(exogenous_parquet_path)
+    _require_aligned_chain(frame, exog_frame)
+
     train = frame.iloc[: len(split_rows)]
     _require(len(train) == len(split_rows), "canonical 行数不足以覆盖 train 切分")
-    exog = pd.read_parquet(exogenous_parquet_path).iloc[: len(train)]
+    exog = exog_frame.iloc[: len(train)]
 
     stamps = pd.DatetimeIndex(train["timestamp"])
     training_range = {
@@ -305,7 +336,7 @@ def build_frozen_refs(
     payload = {
         "schema_version": REF_SCHEMA,
         "materializer_revision": resolve_materializer_revision(),
-        "frozen_at_utc": frozen_at_utc or _now_utc(),
+        "frozen_at_utc": frozen_at_utc,
         "training_range": training_range,
         "sources": sources,
         "references": references,
@@ -313,6 +344,72 @@ def build_frozen_refs(
         "note": NOTE,
     }
     return validate_frozen_refs(payload)
+
+
+STEP_MINUTES = 30
+TIMESTAMP_COLUMN = "timestamp"
+
+
+def _require_datetime_index(frame: pd.DataFrame, *, label: str) -> pd.DatetimeIndex:
+    """取出 tz-aware 的 timestamp 索引；缺列 / naive 一律 fail closed。"""
+    if TIMESTAMP_COLUMN not in frame.columns:
+        raise FreezeRefsError(f"{label} 缺少 {TIMESTAMP_COLUMN!r} 列")
+    try:
+        stamps = pd.DatetimeIndex(frame[TIMESTAMP_COLUMN])
+    except (TypeError, ValueError) as error:
+        raise FreezeRefsError(f"{label} 的 {TIMESTAMP_COLUMN} 无法解析：{error}") from error
+    if stamps.tz is None:
+        raise FreezeRefsError(f"{label} 的 {TIMESTAMP_COLUMN} 必须是 tz-aware")
+    return stamps
+
+
+def _require_strict_timeline(
+    stamps: pd.DatetimeIndex, *, label: str
+) -> None:
+    """无重复、严格递增、严格 30 分钟网格。"""
+    if stamps.has_duplicates:
+        raise FreezeRefsError(f"{label} 的 {TIMESTAMP_COLUMN} 含重复时间戳")
+    if not stamps.is_monotonic_increasing:
+        raise FreezeRefsError(f"{label} 的 {TIMESTAMP_COLUMN} 必须严格递增")
+    if len(stamps) > 1:
+        deltas = pd.Series(stamps).diff().dropna().unique()
+        expected = pd.Timedelta(minutes=STEP_MINUTES)
+        if len(deltas) != 1 or deltas[0] != expected:
+            raise FreezeRefsError(
+                f"{label} 的 {TIMESTAMP_COLUMN} 必须是严格 {STEP_MINUTES} 分钟网格"
+            )
+
+
+def _require_aligned_chain(
+    canonical: pd.DataFrame, exogenous: pd.DataFrame
+) -> None:
+    """`iloc` 切片**之前**的严格校验：长度、时间轴、逐行时间戳、列与有限性。
+
+    任一不符即 `FreezeRefsError`（`ValueError` 子类），**不泄漏**内建异常。
+    """
+    if len(canonical) != len(exogenous):
+        raise FreezeRefsError(
+            f"canonical 与 exogenous 行数不同：{len(canonical)} != {len(exogenous)}"
+        )
+    canonical_stamps = _require_datetime_index(canonical, label="canonical")
+    exogenous_stamps = _require_datetime_index(exogenous, label="exogenous")
+    _require_strict_timeline(canonical_stamps, label="canonical")
+    _require_strict_timeline(exogenous_stamps, label="exogenous")
+    if not canonical_stamps.equals(exogenous_stamps):
+        raise FreezeRefsError(
+            "canonical 与 exogenous 的 timestamp 必须**逐行完全相等**"
+        )
+
+    for name, spec in TRAIN_DERIVED_REFS.items():
+        column = spec[0]
+        source = canonical if column in canonical.columns else exogenous
+        if column not in source.columns:
+            raise FreezeRefsError(f"{name} 的列 {column!r} 既不在 canonical 也不在 exogenous")
+        values = np.asarray(source[column].to_numpy(), dtype=float)
+        if values.size == 0:
+            raise FreezeRefsError(f"{name} 的列为空")
+        if not np.isfinite(values).all():
+            raise FreezeRefsError(f"{name} 的列含非有限值（NaN/±Inf）")
 
 
 def _train_derived_value(
@@ -513,15 +610,29 @@ def materialize_frozen_refs(
     *,
     out_path: Path | str = OUT_PATH,
     replace_declared_v1: bool = False,
-    **build_kwargs: Any,
+    canonical_parquet_path: Path | str = CANONICAL_PARQUET,
+    canonical_manifest_path: Path | str = CANONICAL_MANIFEST,
+    split_manifest_path: Path | str = SPLIT_MANIFEST,
+    exogenous_manifest_path: Path | str = EXOGENOUS_MANIFEST,
+    exogenous_source_manifest_path: Path | str = EXOGENOUS_SOURCE,
+    exogenous_parquet_path: Path | str = EXOGENOUS_PARQUET,
 ) -> dict:
-    """生成 / 校验 `configs/frozen_refs/refs.json`（原子、幂等、受控首替）。"""
+    """生成 / 校验 `configs/frozen_refs/refs_v3.json`（原子、幂等、受控首替）。
+
+    **公开签名只接受文件路径**——没有 `**kwargs`，因此不存在把未验证对象
+    透传到写盘路径的可能。
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if _generator_is_dirty():
         raise FreezeRefsError(
             "生成器有未提交修改：拒绝用旧 revision 为未提交代码背书（未提交）"
+        )
+
+    if out_path == SUPERSEDED_V2_PATH:
+        raise FreezeRefsError(
+            f"{SUPERSEDED_V2_PATH} 是 {SUPERSEDED_MARK} 的历史产物：只读保留，不得写入"
         )
 
     kind = _existing_kind(out_path)
@@ -536,9 +647,17 @@ def materialize_frozen_refs(
         )
 
     existing_frozen_at = (
-        load_frozen_refs(out_path)["frozen_at_utc"] if kind == "v2" else None
+        load_frozen_refs(out_path)["frozen_at_utc"] if kind == "v2" else _now_utc()
     )
-    candidate = build_frozen_refs(frozen_at_utc=existing_frozen_at, **build_kwargs)
+    candidate = _build_frozen_refs_payload(
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        exogenous_manifest_path=exogenous_manifest_path,
+        exogenous_source_manifest_path=exogenous_source_manifest_path,
+        exogenous_parquet_path=exogenous_parquet_path,
+        frozen_at_utc=existing_frozen_at,
+    )
     text = _canonical_json(candidate)
 
     if kind == "v2":
@@ -568,12 +687,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--verify", action="store_true",
                         help="只校验 / 幂等重跑（不改变既有文件）")
     parser.add_argument("--out-path", default=str(OUT_PATH))
+    for flag, default in (
+        ("--canonical-parquet-path", CANONICAL_PARQUET),
+        ("--canonical-manifest-path", CANONICAL_MANIFEST),
+        ("--split-manifest-path", SPLIT_MANIFEST),
+        ("--exogenous-manifest-path", EXOGENOUS_MANIFEST),
+        ("--exogenous-source-manifest-path", EXOGENOUS_SOURCE),
+        ("--exogenous-parquet-path", EXOGENOUS_PARQUET),
+    ):
+        parser.add_argument(flag, default=str(default))
     args = parser.parse_args(argv)
 
     try:
         result = materialize_frozen_refs(
             out_path=Path(args.out_path),
             replace_declared_v1=args.replace_declared_v1,
+            canonical_parquet_path=Path(args.canonical_parquet_path),
+            canonical_manifest_path=Path(args.canonical_manifest_path),
+            split_manifest_path=Path(args.split_manifest_path),
+            exogenous_manifest_path=Path(args.exogenous_manifest_path),
+            exogenous_source_manifest_path=Path(args.exogenous_source_manifest_path),
+            exogenous_parquet_path=Path(args.exogenous_parquet_path),
         )
     except (FreezeRefsError, OSError, ValueError) as error:
         print(f"freeze_refs: {error}", file=sys.stderr)
