@@ -452,7 +452,12 @@ def test_unknown_reference_value_key_is_rejected():
 def test_all_splits_share_the_same_frozen_refs():
     """三个 split 读的是**同一份** v2 refs —— 不按测试日重算。"""
     module = freeze()
-    baseline = module.build_frozen_refs(**_chain_kwargs())
+    on_disk = module.load_frozen_refs(REFS_PATH)
+    # 复用已冻结的时间戳（与物化器的幂等语义一致），候选必须与磁盘**逐字段相同**
+    rebuilt = module.build_frozen_refs(
+        frozen_at_utc=on_disk["frozen_at_utc"], **_chain_kwargs())
+    assert rebuilt == on_disk
+    # 同一份冻结文件对所有 split 生效：train 推导值不随 split 改变
     for split in ("train", "validation", "test"):
-        assert module.load_frozen_refs(REFS_PATH) == baseline
+        assert on_disk["training_range"]["split"] == "train"
         assert split in ("train", "validation", "test")
