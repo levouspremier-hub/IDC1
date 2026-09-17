@@ -436,10 +436,19 @@ def build_split_manifest(
     return _validate_structure(manifest, expected_split=split)
 
 
-def _now_utc() -> str:
+def utc_now() -> str:
+    """规范 UTC 时间戳（**唯一**来源；物化器与构造器共用）。
+
+    物化 triad 时必须在**外部**采样一次并传给三个 `build_split_manifest`，
+    否则慢速首冻会写出互不相同的时间戳。
+    """
     from datetime import UTC
 
     return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+# 兼容内部旧名
+_now_utc = utc_now
 
 
 def expected_candidate_origins(split: str, split_rows: dict) -> dict[str, int]:

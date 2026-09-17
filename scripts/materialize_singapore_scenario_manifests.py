@@ -45,6 +45,7 @@ from scenario.formal_split_manifests import (
     SplitManifestError,
     build_split_manifest,
     load_verified_split_manifest,
+    utc_now,
 )
 from scenario.splits import SPLIT_NAMES
 
@@ -128,12 +129,15 @@ def materialize_split_manifest_triad(
     paths = {split: out_dir / f"{split}.json" for split in SPLIT_NAMES}
     existing = _existing_payloads(paths)
 
-    existing_frozen_at = (
+    # **R2 修正**：三个 split 必须共享**同一个** `frozen_at_utc`。
+    # 若每个 `build_split_manifest` 各自采样墙钟，慢速首冻会写出**互不相同**
+    # 的时间戳，使随后的幂等 `--verify` 以「语义不同」fail closed（实测 flake）。
+    frozen_at = (
         existing["train"]["frozen_at_utc"] if existing is not None
-        else (frozen_at_utc or None)
+        else (frozen_at_utc or utc_now())
     )
     candidates = {
-        split: build_split_manifest(split, frozen_at_utc=existing_frozen_at)
+        split: build_split_manifest(split, frozen_at_utc=frozen_at)
         for split in SPLIT_NAMES
     }
 

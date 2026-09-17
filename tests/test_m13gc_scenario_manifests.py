@@ -777,3 +777,55 @@ def test_v3_semantics_match_v2():
             assert v3[key] == v2[key], (split, key)
         assert v3["schema"] == SCHEMA
         assert v2["schema"] == "m1.3g-formal-split-manifest-v2"
+
+
+# --- 8. M1.3g-c-R2：triad 必须共享同一个 frozen_at_utc -------------------------
+
+@needs_assets
+def test_v3_triad_shares_one_frozen_at_utc():
+    """三份必须共享**同一个** `frozen_at_utc`（否则幂等 `--verify` 会自相矛盾）。"""
+    stamps = {
+        split: json.loads(TRIAD[split].read_text(encoding="utf-8"))["frozen_at_utc"]
+        for split in TRIAD
+    }
+    assert len(set(stamps.values())) == 1, stamps
+
+
+@needs_assets
+def test_slow_first_freeze_is_still_idempotent(tmp_path, monkeypatch):
+    """R2 回归：把每个 split 的构造**人为拖慢**跨越秒边界，仍必须共享时间戳且幂等。
+
+    改前 `build_split_manifest` 各自采样墙钟 → 三份时间戳互不相同 →
+    第二次 `--verify` 以「语义不同」fail closed（实测 flake）。
+    """
+    module = materializer()
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+
+    # 物化器以 `from ... import build_split_manifest` 绑定，patch 它自己的引用
+    original = module.build_split_manifest
+    ticks = iter(["2026-01-01T00:00:01+00:00", "2026-01-01T00:00:02+00:00",
+                  "2026-01-01T00:00:03+00:00"])
+    seen: list[str] = []
+
+    def _slow_build(split, *, frozen_at_utc=None):
+        # 模拟「构造器自己采样墙钟」：若物化器不传共享值，这里就会各不相同
+        stamped = (original(split, frozen_at_utc=frozen_at_utc)
+                   if frozen_at_utc is not None
+                   else original(split, frozen_at_utc=next(ticks)))
+        seen.append(stamped["frozen_at_utc"])
+        return stamped
+
+    monkeypatch.setattr(module, "build_split_manifest", _slow_build)
+    first = module.materialize_split_manifest_triad(out_dir=tmp_path)
+    assert first["written"] is True
+    assert len(set(seen)) == 1, f"三个 split 未共享时间戳：{seen}"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+    before = {n: (_sha256(p), p.stat().st_mtime_ns)
+              for n, p in first["paths"].items()}
+    second = module.materialize_split_manifest_triad(out_dir=tmp_path)
+    after = {n: (_sha256(p), p.stat().st_mtime_ns)
+             for n, p in second["paths"].items()}
+    assert second["written"] is False
+    assert before == after
