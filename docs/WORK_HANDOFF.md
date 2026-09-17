@@ -25,9 +25,11 @@
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
-> **g-c 第一轮审核不通过，经 R1 返修后执行完成，等待人工复审**（见 §7T–§7W）；
-> **v2 triad（`data/manifest/formal_splits_v2/`）是唯一候选**，
-> v1 标为 `superseded_pre_live_input_binding_fix`；
+> **g-c 经 R1 / R2 两轮返修后执行完成，等待人工复审**（见 §7T–§7X）；
+> **v3 triad（`data/manifest/formal_splits_v3/`）是唯一候选**：
+> v1 = `superseded_pre_live_input_binding_fix`、
+> v2 = `superseded_pre_canonical_path_fix`；
+> `manifest_relative_path()` 是唯一公开路径来源且**只**返回 v3；
 > `g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
@@ -1773,6 +1775,67 @@ git revert <交接提交> <本验收提交> 84f4be0 19983e4 0edb145 02a23ed 4bf7
 ```
 
 **g-c-R1 通过复审之前**：`g-e / g-f` 均不得开始；
+**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7X. M1.3g-c-R2：修复唯一路径来源并版本化最终候选（**执行完成，等待复审**）
+
+**M1.3g-c-R1 审核不通过**，起点 `d303ecb`，实现终点 `2d1f345`
+（详见卡片 §w–§x）。
+
+**已复现的缺陷**：`manifest_relative_path()` 是**声明的唯一公开路径来源**，
+却返回 superseded 的 **v1** 路径：
+
+```python
+manifest_relative_path("train") == "data/manifest/train.json"   # <-- v1
+```
+
+**修正**：
+
+1. `manifest_relative_path(split)` 现在精确返回
+   `data/manifest/formal_splits_v3/<split>.json`；`FORMAL_SPLIT_DIR` 同指 v3；
+   **没有**任何公开 helper 或常量再返回 v1/v2（有回归遍历模块公开属性断言）。
+2. verified loader 对落在 **v1 或 v2 目录**内的路径 **fail closed**——
+   即使把合法的 v3 **内容**放到那些位置也拒绝（**无 fallback**）。
+3. schema 升 **`m1.3g-formal-split-manifest-v3`**；语义输入与 v2
+   **逐字段相同**（有回归）。
+4. **本轮同时发现并修复的第二处真实缺陷**：首冻时**每个**
+   `build_split_manifest` 各自采样墙钟，跨秒边界会让三份得到**互不相同**的
+   `frozen_at_utc`，随后幂等 `--verify` 就以「语义不同」fail closed。
+   实测 `-k idempotent_and_preserves` 连跑 5 次 **1 次失败**。
+   现在物化器**采样一次** `utc_now()` 传给三个构造；新增回归
+   `test_slow_first_freeze_is_still_idempotent`，修复后 **8/8 通过**。
+
+**三层版本**：
+
+| 版本 | 状态 |
+|---|---|
+| **v1** `data/manifest/{train,validation,test}.json` | **`superseded_pre_live_input_binding_fix`**（逐字节不变） |
+| **v2** `data/manifest/formal_splits_v2/…` | **`superseded_pre_canonical_path_fix`**（逐字节不变） |
+| **v3（唯一候选）** `data/manifest/formal_splits_v3/…` | `0ee774e4…` / `3ac19480…` / `62b91d0a…`，revision `2d1f345` |
+
+> **如实登记**：v3 曾于 `c5160f3` 首次物化；随后 `2d1f345` 改动了
+> **materializer**，使旧 v3 的 `materializer_revision` 变成**陈旧证据**。
+> 按**证据必须晚于最后一次代码改动**的既有惯例，在最终实现提交之后
+> 重新生成并提交为 `fe3ed7e`。**v2 全程未被覆盖或重写。**
+
+> **必须如实登记的范围外修改（`.gitignore`，单独提交）**：新增两行
+> **只**放行 `data/manifest/formal_splits_v3/`（与 R1 处理 v2 目录同构）。
+
+**先红实测**（`7071972`）：含
+`AssertionError: manifest_relative_path('train') 仍返回 superseded 的 v1 路径`。
+**转绿**：focused **81**、`m12/m13/contracts` **1278**、
+`make check` **exit 0**、`make smoke` **exit 0**、`make train` **exit 2**
+（原因仍为 `manifest 缺少字段 'source'`；不回退 synthetic、无 checkpoint）；
+连续 3 次 `--verify` bytes/hash/`mtime_ns` 全不变、0 临时文件。
+**v1 / v2 与全部上游 hash 逐字节未变。**
+
+**回滚（由新到旧，含全部提交）**：
+
+```bash
+git revert <交接提交> <本验收提交> fe3ed7e 2d1f345 c5160f3 d525be4 b06fc38 7071972 333a333
+```
+
+**g-c-R2 通过复审之前**：`g-e / g-f` 均不得开始；
 **正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
