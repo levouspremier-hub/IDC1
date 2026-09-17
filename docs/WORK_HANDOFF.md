@@ -1605,13 +1605,39 @@ checkpoint **0**、三个保留名**未创建**。**范围外修改：无。**
 
 **后续 g-c 只能引用 `refs_v3.json`。**
 
-**回滚（由新到旧）**：
+**账本（稳定写法）**：截至父提交 `ed0bf2f`，`e89c15c..ed0bf2f` 共 **7 个**提交；
+包含本次账本提交后为 **8 个**：
 
-```bash
-git revert <交接提交> f47e14f 3058b59 1f26407 95d7383 5559acd
+```text
+5559acd docs(card): start M1.3g-d-R1 trust-boundary repair for the refs freeze
+95d7383 test: add failing M1.3g-d-R1 frame-injection and chain-alignment regressions
+1f26407 fix(refs): remove the unverified frame injection and harden the chain alignment (M1.3g-d-R1)
+3058b59 feat(refs): freeze refs_v3.json as the R1 candidate evidence (M1.3g-d-R1)
+f47e14f docs(card): record the M1.3g-d-R1 trust-boundary repair evidence
+3979d4a docs(handoff): record the M1.3g-d-R1 trust-boundary repair
+ed0bf2f test: make the R1 temp chains genuinely self-consistent (M1.3g-d-R1)
 ```
 
-回滚后删除 `refs_v3.json`；v2 `refs.json` 字节不变。
+> 最后一笔 `ed0bf2f` 是**测试修正**（mutation helper 改为 `.loc` 写单元格、
+> 并在 train mutation 时用同一实现重算 train-only 统计），使临时链**真正自洽**，
+> **不是**事后补丁。
+
+**回滚（由新到旧；已在临时 detached worktree 中只读验证，零冲突）**：
+
+```bash
+git revert ed0bf2f 3979d4a f47e14f 3058b59 1f26407 95d7383 5559acd
+```
+
+```text
+e89c15c 的树            = fb03ca926fac82d80b9b5dc37283691d6ba95c76
+revert 链后 HEAD^{tree} = fb03ca926fac82d80b9b5dc37283691d6ba95c76
+→ ✅ 逐树一致（主分支指针未移动）
+```
+
+回滚后：`configs/frozen_refs/refs_v3.json` **消失**；
+`configs/frozen_refs/refs.json` **保持 v2 原字节**
+（`aae5a03e9f09239c4f490b735e4a9ab21d872783a547e7ac6fa9264bafc66827`）。
+**回滚必须由新到旧**（M1.3d §13.12 实测得到的操作约束）。
 
 **g-d-R1 通过复审之前**：`g-c / g-e / g-f` 均不得开始；
 正式训练、评估与 **M6 仍未开始**。
