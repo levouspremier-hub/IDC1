@@ -175,3 +175,52 @@ def test_proposal_and_result_roundtrip():
     )
     assert p.model_validate_json(p.model_dump_json()) == p
     assert r.model_validate_json(r.model_dump_json()) == r
+
+
+# --- M1.3g-0：contract-v9 与 carbon 的 human-approved source_kind -----------
+
+CARBON_KIND = "human_approved_external_low_resolution"
+NON_CARBON_FIELDS = tuple(
+    f for f in BUNDLE_FORECAST_FIELDS if f != "carbon_forecast"
+)
+
+
+def _formal_provenance_kwargs(*, carbon_kind: str = CARBON_KIND) -> dict:
+    provenance = {
+        field: _series_provenance(field) for field in BUNDLE_FORECAST_FIELDS
+    }
+    for field in BUNDLE_FORECAST_FIELDS:
+        provenance[field]["source_kind"] = "persistence"
+    provenance["carbon_forecast"]["source_kind"] = carbon_kind
+    return dict(
+        split="train", start="2026-01-01T00:00:00+08:00", horizon=24,
+        forecast_cutoff=4,
+        **{f: [0.0] * 4 for f in BUNDLE_FORECAST_FIELDS},
+        mode="formal",
+        generated_at="2026-01-01T00:00:00+08:00",
+        forecast_provenance=provenance,
+    )
+
+
+def test_contract_v9_accepts_the_human_approved_kind_for_formal_carbon():
+    """D1：只有 formal 的 `carbon_forecast` 可以使用该 source_kind。"""
+    bundle = ScenarioBundle(**_formal_provenance_kwargs())
+    assert bundle.mode == "formal"
+    assert bundle.forecast_provenance.carbon_forecast.source_kind == CARBON_KIND
+
+
+@pytest.mark.parametrize("field", NON_CARBON_FIELDS)
+def test_contract_v9_rejects_the_human_approved_kind_elsewhere(field):
+    """D1：该 kind **只**绑定 `carbon_forecast`，六个非 carbon 序列一律拒绝。"""
+    kwargs = _formal_provenance_kwargs()
+    kwargs["forecast_provenance"][field]["source_kind"] = CARBON_KIND
+    with pytest.raises((ValidationError, ValueError)):
+        ScenarioBundle(**kwargs)
+
+
+def test_contract_v9_still_rejects_unavailable_in_a_formal_bundle():
+    """D1 不放松既有规则：`unavailable` 仍不得进入任何完整 bundle。"""
+    kwargs = _formal_provenance_kwargs()
+    kwargs["forecast_provenance"]["pv_forecast"]["source_kind"] = "unavailable"
+    with pytest.raises((ValidationError, ValueError)):
+        ScenarioBundle(**kwargs)

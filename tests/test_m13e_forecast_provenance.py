@@ -52,7 +52,7 @@ UNAVAILABLE = ("local_pv_kw", "wind_generation_kw", "carbon_intensity", "arrival
 FORECAST_MODULE = "scenario.forecast"
 POLICY_MATERIALIZER = "scripts.materialize_singapore_forecast_policy"
 SPLIT_MATERIALIZER = "scripts.materialize_singapore_splits"
-POLICY_SCHEMA = "m1.3e-singapore-2024-forecast-policy-v1"
+POLICY_SCHEMA = "m1.3g0-singapore-2024-forecast-policy-v2"
 FROZEN_AT = "2026-09-16T00:00:00+00:00"
 
 
@@ -123,7 +123,7 @@ def build_frozen_chain(root: pathlib.Path, frame: pd.DataFrame | None = None) ->
         split_manifest_path=split_manifest,
         frozen_at_utc=FROZEN_AT,
     )
-    policy_manifest = root / "singapore_2024_forecast_policy.json"
+    policy_manifest = root / "singapore_2024_forecast_policy_v2.json"
     policy_module._atomic_write_text(
         policy_manifest, policy_module._canonical_json(policy_payload)
     )
@@ -155,7 +155,7 @@ def chain(tmp_path, base_chain) -> dict:
         "parquet": root / "half_hour.parquet",
         "canonical_manifest": root / "singapore_2024_half_hour.json",
         "split_manifest": root / "singapore_2024_splits.json",
-        "policy_manifest": root / "singapore_2024_forecast_policy.json",
+        "policy_manifest": root / "singapore_2024_forecast_policy_v2.json",
     }
 
 
@@ -264,7 +264,7 @@ def materialize_policy(chain, out, **over):
         canonical_parquet_path=chain["parquet"],
         canonical_manifest_path=chain["canonical_manifest"],
         split_manifest_path=chain["split_manifest"],
-        manifest_path=out / "singapore_2024_forecast_policy.json",
+        manifest_path=out / "singapore_2024_forecast_policy_v2.json",
         frozen_at_utc=FROZEN_AT,
     )
     kwargs.update(over)
@@ -1394,7 +1394,7 @@ def test_real_upstream_policy_materialization(tmp_path):
     canonical_parquet = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
     canonical_manifest = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
     split_manifest = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
-    policy_manifest = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy.json"
+    policy_manifest = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy_v2.json"
     if not all(p.exists() for p in (canonical_parquet, canonical_manifest,
                                     split_manifest, policy_manifest)):
         pytest.skip("真实上游资产不在本机")
@@ -1945,3 +1945,221 @@ def test_r3_type_strictness_does_not_change_normal_artifact(chain):
             frame[driver].to_numpy(), origin=200, forecast_cutoff=4)
         assert tuple(first.series[driver]) == expected
         assert all(type(v) is float for v in first.series[driver])
+
+
+# --- 14. M1.3g-0：contract-v9 与 carbon 的 human-approved source_kind ---------
+#
+# D1 裁决：新增 source_kind `human_approved_external_low_resolution`，升级 contract-v9。
+# 它**只**可用于 `mode="formal"` 的 `carbon_forecast`；六个非 carbon 序列、
+# synthetic 与 oracle_debug 一律拒绝；`unavailable` 仍不得进入任何完整 bundle。
+
+CONTRACT_V9 = "contract-v9"
+CARBON_SOURCE_KIND = "human_approved_external_low_resolution"
+# carbon 之外的六个序列（**不得**使用上面这个 kind）
+NON_CARBON_FIELDS = tuple(
+    field for field in BUNDLE_FORECAST_FIELDS if field != "carbon_forecast"
+)
+POLICY_V2_SCHEMA = POLICY_SCHEMA
+POLICY_V2_REL = "data/manifest/singapore_2024_forecast_policy_v2.json"
+POLICY_V1_REL = "data/manifest/singapore_2024_forecast_policy.json"
+# 冻结的 v1 政策产物（contract-v8 历史证据，**不得**被本卡改写）
+POLICY_V1_FROZEN_SHA256 = (
+    "0bf31f80ff0c9acd67dad5082e08eee7364397a2dbfa429e4a34c3d87a702923"
+)
+
+
+def _formal_bundle_with(*, carbon_kind=CARBON_SOURCE_KIND, field=None, kind=None):
+    """构造 formal bundle；可把**某一个**字段的来源类别替换成 `kind`。"""
+    kwargs = make_bundle_kwargs(mode="formal")
+    kwargs["forecast_provenance"]["carbon_forecast"] = make_series_provenance(
+        series_name="carbon_forecast", source_kind=carbon_kind
+    )
+    if field is not None:
+        kwargs["forecast_provenance"][field] = make_series_provenance(
+            series_name=field, source_kind=kind
+        )
+    return build_bundle(mode="formal", **kwargs)
+
+
+def test_contract_version_is_v9():
+    """D1：全仓唯一版本源升到 contract-v9。"""
+    from contracts import CONTRACT_VERSION_ID
+
+    assert CONTRACT_VERSION_ID == CONTRACT_V9
+
+
+@pytest.mark.parametrize("bad", (
+    CONTRACT_V8, CONTRACT_V7, "contract-v6", "", "contract-v9 ", "CONTRACT-V9",
+    True, 9, 9.0, ["contract-v9"], {"schema_version": CONTRACT_V9}, None,
+))
+def test_contract_base_rejects_every_other_version(bad):
+    """A.2：只有 contract-v9 被接受；contract-v8 等旧版本一律明确拒绝。"""
+    from contracts.models import ArtifactDigest
+
+    with pytest.raises((ValueError, TypeError, KeyError)):
+        ArtifactDigest(role="r", logical_path="p", sha256="a" * 64,
+                       schema_version=bad)
+
+
+def test_human_approved_kind_is_accepted_for_formal_carbon():
+    """D1：formal 的 carbon_forecast **可以**声明该 kind。"""
+    bundle = _formal_bundle_with()
+    assert bundle.mode == "formal"
+    assert bundle.forecast_provenance.carbon_forecast.source_kind == (
+        CARBON_SOURCE_KIND
+    )
+
+
+@pytest.mark.parametrize("field", NON_CARBON_FIELDS)
+def test_human_approved_kind_is_rejected_for_the_other_six_series(field):
+    """D1：该 kind **只能**用于 carbon_forecast，六个非 carbon 序列一律拒绝。"""
+    with pytest.raises((ValueError, TypeError)):
+        _formal_bundle_with(field=field, kind=CARBON_SOURCE_KIND)
+
+
+@pytest.mark.parametrize("mode", ("synthetic", "oracle_debug"))
+def test_human_approved_kind_is_rejected_outside_formal(mode):
+    """D1：synthetic / oracle_debug 仍只能使用各自**精确**的 source_kind。"""
+    kwargs = make_bundle_kwargs(mode=mode)
+    kwargs["forecast_provenance"]["carbon_forecast"] = make_series_provenance(
+        series_name="carbon_forecast", source_kind=CARBON_SOURCE_KIND
+    )
+    with pytest.raises((ValueError, TypeError)):
+        build_bundle(mode=mode, **kwargs)
+
+
+def test_formal_bundle_still_rejects_unavailable():
+    """D1 不放松任何既有规则：formal bundle 仍不得携带 `unavailable`。"""
+    with pytest.raises((ValueError, TypeError)):
+        _formal_bundle_with(field="pv_forecast", kind="unavailable")
+    with pytest.raises((ValueError, TypeError)):
+        _formal_bundle_with(carbon_kind="unavailable")
+
+
+def test_policy_v2_schema_and_contract_version():
+    """D1：新 policy schema 为 v2，且 contract_version 为 contract-v9。"""
+    module = importlib.import_module(FORECAST_MODULE)
+
+    assert module.POLICY_SCHEMA == POLICY_V2_SCHEMA
+    assert POLICY_SCHEMA == POLICY_V2_SCHEMA  # 本文件紧随唯一 schema 源
+
+
+def test_policy_v2_default_path_is_the_new_file():
+    """要求 5：provider/materializer 的**默认**正式 policy 路径切到 v2。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    materializer = _policy_module()
+
+    assert module.DEFAULT_POLICY_MANIFEST_PATH == POLICY_V2_REL
+    assert materializer.DEFAULT_POLICY_MANIFEST_PATH == POLICY_V2_REL
+    assert POLICY_V2_REL != POLICY_V1_REL
+
+
+def test_policy_v1_is_rejected_by_the_v9_provider(chain):
+    """要求 5：contract-v8 的 policy 必须 fail closed，不做迁移或静默升级。"""
+    module = importlib.import_module(FORECAST_MODULE)
+    payload = _policy_json(chain["policy_manifest"])
+    payload["contract_version"] = CONTRACT_V8
+    _rewrite_json(chain["policy_manifest"], payload)
+
+    with pytest.raises(ValueError):
+        module.read_forecast_policy_manifest(
+            chain["policy_manifest"],
+            canonical_parquet_path=chain["parquet"],
+            canonical_manifest_path=chain["canonical_manifest"],
+            split_manifest_path=chain["split_manifest"],
+            expected_revision="a" * 40,
+        )
+
+
+def test_real_policy_v1_is_frozen_and_still_contract_v8():
+    """要求 6：真实的 v1 policy 产物 bytes 不变，且仍自述 contract-v8。"""
+    path = REPO_ROOT / POLICY_V1_REL
+    assert path.exists(), path
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == POLICY_V1_FROZEN_SHA256
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["contract_version"] == CONTRACT_V8
+    assert payload["schema"] == "m1.3e-singapore-2024-forecast-policy-v1"
+
+
+def test_policy_v2_records_the_v1_supersession():
+    """要求 4：v2 manifest 必须记录 v1 的 path / sha256 / contract-v8 / 被谁取代。"""
+    path = REPO_ROOT / POLICY_V2_REL
+    assert path.exists(), path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema"] == POLICY_V2_SCHEMA
+    assert payload["contract_version"] == CONTRACT_V9
+    supersedes = payload["supersedes"]
+    assert supersedes["policy_manifest_path"] == POLICY_V1_REL
+    assert supersedes["policy_manifest_sha256"] == POLICY_V1_FROZEN_SHA256
+    assert supersedes["policy_manifest_contract_version"] == CONTRACT_V8
+    assert supersedes["superseded_by_contract_version"] == CONTRACT_V9
+
+
+def test_policy_v2_materialization_is_atomic_and_idempotent(tmp_path, monkeypatch):
+    """要求 6：v2 首冻原子；连续两次物化 bytes/hash/mtime_ns 全不变、无临时文件。"""
+    materializer = _policy_module()
+    out = tmp_path / "policy_v2.json"
+    # dirty-generator 门禁是**生成时**的部署策略：测试侧按既有做法 monkeypatch
+    monkeypatch.setattr(materializer, "_generator_is_dirty", lambda: False)
+
+    canonical_parquet = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
+    canonical_manifest = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
+    split_manifest = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
+    if not all(p.exists() for p in (canonical_parquet, canonical_manifest, split_manifest)):
+        pytest.skip("真实上游资产不在本机")
+
+    kwargs = dict(
+        canonical_parquet_path=canonical_parquet,
+        canonical_manifest_path=canonical_manifest,
+        split_manifest_path=split_manifest,
+        manifest_path=out,
+    )
+    first = materializer.materialize_forecast_policy(frozen_at_utc=FROZEN_AT, **kwargs)
+    before = (hashlib.sha256(out.read_bytes()).hexdigest(), out.stat().st_mtime_ns)
+    second = materializer.materialize_forecast_policy(
+        frozen_at_utc=materializer.existing_frozen_at_utc(out) or FROZEN_AT, **kwargs)
+    after = (hashlib.sha256(out.read_bytes()).hexdigest(), out.stat().st_mtime_ns)
+
+    assert first["written"] is True
+    assert second["written"] is False
+    assert before == after
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["policy_v2.json"]
+
+
+def test_policy_v2_first_freeze_failure_leaves_no_partial_file(tmp_path, monkeypatch):
+    """要求 6：首冻失败不留半份 manifest 或临时文件。"""
+    materializer = _policy_module()
+    monkeypatch.setattr(materializer, "_generator_is_dirty", lambda: False)
+
+    def boom(path, text):
+        raise OSError("boom")
+
+    monkeypatch.setattr(materializer, "_atomic_write_text", boom)
+    canonical_parquet = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
+    canonical_manifest = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
+    split_manifest = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
+    if not all(p.exists() for p in (canonical_parquet, canonical_manifest, split_manifest)):
+        pytest.skip("真实上游资产不在本机")
+
+    with pytest.raises(OSError):
+        materializer.materialize_forecast_policy(
+            canonical_parquet_path=canonical_parquet,
+            canonical_manifest_path=canonical_manifest,
+            split_manifest_path=split_manifest,
+            manifest_path=tmp_path / "policy_v2.json",
+            frozen_at_utc=FROZEN_AT,
+        )
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("rel", ("safe_rl_v2/buffer.py", "checkpointing/__init__.py"))
+def test_buffer_and_checkpoint_reject_contract_v8(rel):
+    """要求 1：buffer / checkpoint 中的 contract-v8 必须明确拒绝，不静默升级。"""
+    module = importlib.import_module(
+        "safe_rl_v2.buffer" if "buffer" in rel else "checkpointing"
+    )
+    version = getattr(module, "CONTRACT_VERSION", None) or getattr(
+        module, "CURRENT_CONTRACT_VERSION", None
+    )
+    assert version == CONTRACT_V9, rel
+    assert version != CONTRACT_V8

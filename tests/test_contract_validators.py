@@ -193,3 +193,43 @@ def test_dispatch_result_dimension_mismatch_fails():
     )
     with pytest.raises(ValueError, match="raw/exec"):
         validate_dispatch_result(r)
+
+
+# --- M1.3g-0：contract-v9 purpose gate 与 carbon source_kind -----------------
+
+CARBON_KIND = "human_approved_external_low_resolution"
+
+
+def _formal_provenance(**field_kind: str) -> dict:
+    """七项 provenance；默认全部 `persistence`，carbon 用该 kind。"""
+    provenance = _provenance()
+    for field in BUNDLE_FORECAST_FIELDS:
+        provenance[field]["source_kind"] = "persistence"
+    provenance["carbon_forecast"]["source_kind"] = CARBON_KIND
+    for field, kind in field_kind.items():
+        provenance[field]["source_kind"] = kind
+    return provenance
+
+
+def test_purpose_gate_accepts_formal_with_the_human_approved_carbon_kind():
+    """D1：formal + carbon 使用该 kind 时，training/evaluation 门禁**放行**。"""
+    from contracts.validators import validate_forecast_purpose
+
+    bundle = _scenario(
+        mode="formal", forecast_provenance=_formal_provenance()
+    )
+    validate_forecast_purpose(bundle, purpose="training")
+    validate_forecast_purpose(bundle, purpose="evaluation")
+
+
+def test_purpose_gate_still_rejects_synthetic_and_oracle_debug():
+    """D1 不放松既有门禁：synthetic / oracle_debug 仍被 training 拒绝。"""
+    from contracts.validators import validate_forecast_purpose
+
+    for mode in ("synthetic", "oracle_debug"):
+        provenance = _provenance()
+        for field in BUNDLE_FORECAST_FIELDS:
+            provenance[field]["source_kind"] = mode
+        bundle = _scenario(mode=mode, forecast_provenance=provenance)
+        with pytest.raises(ValueError):
+            validate_forecast_purpose(bundle, purpose="training")
