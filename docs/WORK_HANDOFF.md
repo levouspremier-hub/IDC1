@@ -23,9 +23,9 @@
 > 构造内核）执行完成，等待人工复审**，见 §7Q–§7R。
 > ⚠️ **契约版本为 `contract-v9`**；`SOURCE_KINDS` 含
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
-> ⚠️ **g-b 只做构造内核**：**不**接线 env/train、**不**创建三个正式 split manifest、
-> **不**冻结 refs。`build_scenario(synthetic=False)` 仍因缺 split manifest 而
-> **fail closed**。**D2–D6 仍未实现**；`g-d / g-c / g-e / g-f` **均未开始**；
+> ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
+> **g-d（train-only refs 冻结）执行完成，等待人工复审**，见 §7T；
+> `g-c / g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
 > **env 接线、正式训练、评估与 M6 均未开始**。
@@ -95,7 +95,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d/e/f **已通过**；f-c-R1、g-a/R1、**g-0 均已通过**；**g-b 执行完成待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-d/c/e/f 均未开始**；**D2–D6 未实现**；env 接线与正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2 **均已通过**；**g-d 执行完成待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `frozen-refs-v2`**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-c/e/f 均未开始**；**D2–D6 已实现**（D1=g-0、D3=g-b、D2/D6=g-d；D4/D5 属 g-e/g-c）；env 接线与正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v9`**（M1.3g-0 起；**v8/v7 buffer 与 checkpoint 均明确拒绝**）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -1493,6 +1493,63 @@ git revert <交接提交> 6990da6 47fd095 ac3b0df b556c39 397a4ea
 `build_scenario(synthetic=False)` **仍 fail closed**；
 正式训练、评估与 **M6 仍未开始**。
 
+### 7T. M1.3g-d：train-only normalization refs 冻结（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §o–§p。**起点 `ea097d5`，实现终点 `7c60da5`，
+refs 物化提交 `830c968`。**
+
+`configs/frozen_refs/refs.json` 由声明的 **legacy `frozen-refs-v1`**
+升到 train-only 的 **`frozen-refs-v2`**；SHA-256
+`aae5a03e9f09239c4f490b735e4a9ab21d872783a547e7ac6fa9264bafc66827`
+（legacy v1 = `afa84b86…`）。
+
+| 参考值 | 值 | `source_kind` |
+|---|---|---|
+| `price_ref` | **4.5**（`max(abs(price))`） | `train_derived` |
+| `pv_ref_kw` | **350.9073696124661**（train max） | `train_derived` |
+| `wind_ref_kw` | **262.3178613166015**（train max） | `train_derived` |
+| `carbon_factor_ref` | **0.402**（train max） | `train_derived` |
+| `lambda_ref` / `queue_ref` / `queue_capacity_ref` / `cost_ref` | 2000 / 6000 / 6000 / 60 | `declared_physical_scale` |
+| `carbon_ref` / 三个硬件上限 / `sla_penalty_ref` | 15 / 18 / 10 / 18 / 50 | `declared_physical_scale` |
+
+- **逐值 7 键**：`value`/`unit`/`source_kind`/`method`/`derived_from`/
+  `training_range`/`binding` —— 多键少键**拒绝**，**禁止 null**；
+- 顶层记录 `training_range`（train `[0, 10224)`）与六条 `sources`
+  （path + 实测 SHA-256）；`train_derived` 值的 `binding` 必须指向真实 role；
+- 上游链复用**严格验证**（`load_truth_split` + `load_verified_exogenous`）；
+- **生成器 dirty 时拒绝**；refs 在**最终实现提交之后**生成；
+- **受控首替**：无 `--replace-declared-v1` 不得覆盖 legacy v1；
+  仅当字节 hash 恰等于登记值时允许；替换**原子**；
+  v2 相同则**不改 `mtime_ns`**，不同则拒绝覆盖。
+  实测：连续 2 次 `--verify` bytes/hash/`mtime_ns` 全不变、0 临时文件。
+
+> **如实登记**：`price_ref` 由声明的 `1.5` 变为 train 推导的 **`4.5`**（D6 要求）。
+> preflight 实测 `refs.json` **没有生产消费者**（仅测试读取），
+> **不影响** env 运行时行为；**env 默认值本卡未改**（接线属 g-e）。
+
+**迁移的既有测试（逐个登记）**：`tests/test_m61_freeze_refs.py`（v1 schema 与
+自由字段断言 → v2 逐值 provenance）、
+`tests/test_m310c_frozen_runtime_refs.py`（标量 `references[name]` → `.value`，
+并把冻结 refs 显式传进 env）。两处**均未弱化**原意图。
+
+**先红实测**（`61a7423`）：`26 failed, 1 passed`。
+**转绿**：focused **27**、`m12/m13/contracts` **1179**、
+`make check` **exit 0（2359 passed）**、`make smoke` **exit 0**、
+`make train` **exit 2**（不回退 synthetic）、checkpoint **0**、三个保留名**未创建**。
+**canonical / split / policy-v2 / exogenous v2 / source-v3 / exogenous parquet
+的 hash 全部未变。范围外修改：无。**
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> 9ff83a4 830c968 7a761b4 7c60da5 61a7423 22d7339
+```
+
+回滚后 `refs.json` 恢复为 legacy v1 字节（`afa84b86…`）。
+
+**g-d 通过复审之前**：`g-c / g-e / g-f` 均不得开始；
+正式训练、评估与 **M6 仍未开始**。
+
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
 > ⚠️ **本节的历史说法是历史错误，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
@@ -2124,6 +2181,13 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
 - 不得沿用 `contract-v8` 的 buffer / checkpoint / policy：
   **一律明确拒绝**，不做兼容、迁移、填零或静默升级。
 - 不得把 **M1.3g-0** 说成「D2–D6 已实现」：本卡**只**实施 D1。
+- 不得把 **`configs/frozen_refs/refs.json`** 的旧声明尺度当作当前值：
+  它已是 **`frozen-refs-v2`**（`aae5a03e…`），其中 `price_ref` / `pv_ref_kw` /
+  `wind_ref_kw` / `carbon_factor_ref` 由 **train 行重算**；
+  **不得**按测试日或 validation/test 重算。
+- 不得把 M1.3d 的 `train_only_statistics` 冒充 normalization refs：
+  两者是**不同**的产物（描述统计 vs `frozen-refs-v2`）。
+- 不得在没有 `--replace-declared-v1` 的情况下覆盖 legacy v1 refs。
 - 不得把 **M1.3g-b** 的构造内核说成「正式 `ScenarioBundle` 已就绪」：
   它**未**接线 env/train，`formal_scenario_bundle_ready` 与 `formal_training_ready`
   **仍为 false**；`build_scenario(synthetic=False)` **仍 fail closed**。
