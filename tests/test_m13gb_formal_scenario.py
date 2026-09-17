@@ -308,11 +308,27 @@ def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int):
     payload["split_manifest_sha256"] = _sha256(split_manifest)
     policy.write_text(json.dumps(payload))
 
+    # R1-2：**外生链也必须交叉绑定**——v2 manifest 声明的 canonical / split
+    # 的 path **与** hash 必须等于本次调用实际使用的对象。**保留原仓库的
+    # exogenous manifest 不叫「同步链」**，因此这里把它一并改写进临时链。
+    # （v2 驱动表本身未被 mutation，仍指向仓库里那份已冻结的 parquet。）
+    exogenous = root / "data/manifest/singapore_2024_exogenous_v2.json"
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    payload["canonical_parquet_sha256"] = _sha256(parquet)
+    payload["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+    payload["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    payload["split_manifest_path"] = "<external>/singapore_2024_splits.json"
+    payload["split_manifest_sha256"] = _sha256(split_manifest)
+    exogenous.write_text(json.dumps(payload))
+
     return {
         "canonical_parquet_path": parquet,
         "canonical_manifest_path": canonical_manifest,
         "split_manifest_path": split_manifest,
         "policy_manifest_path": policy,
+        "exogenous_manifest_path": exogenous,
+        "expected_exogenous_manifest_sha256": _sha256(exogenous),
     }
 
 
@@ -437,3 +453,157 @@ def test_synthetic_path_is_untouched():
     bundle = build_scenario("train", start="s", horizon=24, forecast_cutoff=4,
                             synthetic=True)
     assert bundle.mode == "synthetic"
+
+
+# --- 8. M1.3g-b-R1：代码 provenance 覆盖面 ------------------------------------
+
+def test_formal_source_paths_cover_the_formal_implementation():
+    """R1-1：revision 必须覆盖 provider 路径 + formal 内核 + 外生驱动实现。"""
+    module = formal()
+    provider_paths = set(forecast().FORECAST_SOURCE_PATHS)
+    covered = set(module.FORMAL_SOURCE_PATHS)
+    assert provider_paths <= covered, provider_paths - covered
+    for rel in ("scenario/formal_scenario.py", "scenario/exogenous_drivers.py"):
+        assert rel in covered, rel
+
+
+@needs_assets
+def test_code_revision_equals_the_formal_revision():
+    """R1-1：七条 provenance 的 revision 必须是 formal 内核自身的冻结 revision。"""
+    module = formal()
+    expected = module.formal_code_revision()
+    bundle = build()
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert getattr(bundle.forecast_provenance, field).code_revision == expected, field
+
+
+def test_formal_revision_is_stricter_than_the_provider_revision():
+    """formal revision 必须比 provider-only revision 覆盖更多实现文件。"""
+    module = formal()
+    assert set(module.FORMAL_SOURCE_PATHS) > set(forecast().FORECAST_SOURCE_PATHS)
+
+
+@needs_assets
+def test_dirty_formal_source_fails_closed(monkeypatch):
+    """R1-1：formal source 有未提交变更时不得物化（不能用旧提交背书新实现）。"""
+    module = formal()
+    monkeypatch.setattr(module, "formal_generator_is_dirty", lambda: True)
+    with pytest.raises(ValueError, match="未提交"):
+        build()
+
+
+@needs_assets
+def test_dirty_check_covers_the_same_paths():
+    """R1-1：dirty 检查与 revision 使用**同一**集合。"""
+    module = formal()
+    seen: list[tuple[str, ...]] = []
+    original = module._git
+
+    def spy(*args):
+        if args and args[0] == "status":
+            seen.append(tuple(args[-len(module.FORMAL_SOURCE_PATHS):]))
+        return original(*args)
+
+    module._git = spy  # type: ignore[assignment]
+    try:
+        module.formal_generator_is_dirty()
+    finally:
+        module._git = original  # type: ignore[assignment]
+    assert seen, "formal_generator_is_dirty 必须查询 Git"
+    assert set(seen[0]) == set(module.FORMAL_SOURCE_PATHS)
+
+
+# --- 9. M1.3g-b-R1：外生链与本次调用的交叉绑定 --------------------------------
+
+@needs_assets
+def test_exogenous_manifest_binding_must_match_the_actual_objects(tmp_path):
+    """R1-2：v2 manifest 声明的 canonical/split path 与 hash 必须等于**实际提供**的对象。
+
+    这里让 manifest 声明的 canonical hash **故意**与本次调用实际使用的 parquet 不同——
+    两边各自都自洽（manifest 内部一致、parquet 本身合法），仍必须拒绝。
+    """
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["canonical_parquet_sha256"] = "0" * 64
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        build(exogenous_manifest_path=target,
+              expected_exogenous_manifest_sha256=_sha256(target))
+
+
+@needs_assets
+def test_exogenous_manifest_path_binding_must_match(tmp_path):
+    """R1-2：声明的 **path** 也必须等于实际提供的路径。"""
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["split_manifest_path"] = "<external>/somewhere_else.json"
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        build(exogenous_manifest_path=target,
+              expected_exogenous_manifest_sha256=_sha256(target))
+
+
+@needs_assets
+def test_arrival_template_comes_only_from_the_verified_payload():
+    """R1：不得通过未核验的 manifest 单独读取 arrival template。"""
+    module = formal()
+    template = module.exogenous_rate_template(
+        exogenous_manifest_path=ENDOGENOUS_MANIFEST)
+    assert np.allclose(np.asarray(template),
+                       np.asarray(build().arrival_forecast) / ARRIVAL_MEAN)
+
+
+# --- 10. M1.3g-b-R1：sources 必须含外生驱动表 ---------------------------------
+
+@needs_assets
+def test_sources_include_the_exogenous_parquet_digest():
+    """R1-3：`sources` 必须含 `exogenous_drivers_parquet`，path/hash 等于经验证 output。"""
+    bundle = build()
+    for field in BUNDLE_FORECAST_FIELDS:
+        entry = getattr(bundle.forecast_provenance, field)
+        by_role = {d.role: d for d in entry.sources}
+        assert "exogenous_drivers_parquet" in by_role, field
+        digest = by_role["exogenous_drivers_parquet"]
+        assert digest.logical_path == (
+            "data/processed/singapore_2024/exogenous_drivers_v2.parquet")
+        assert digest.sha256 == _sha256(ENDOGENOUS_PARQUET)
+
+
+# --- 11. M1.3g-b-R1：seasonal 序列直接取 artifact ------------------------------
+
+@needs_assets
+def test_seasonal_series_are_the_artifact_series():
+    """R1-4：price / load / temperature 必须**直接**取自 artifact 的 series。"""
+    module = formal()
+    artifact = module.build_available_forecast_only(
+        split="train", origin=_ORIGIN, forecast_cutoff=_CUTOFF,
+        canonical_parquet_path=CANONICAL_PARQUET,
+        canonical_manifest_path=CANONICAL_MANIFEST,
+        split_manifest_path=SPLIT_MANIFEST,
+        policy_manifest_path=POLICY_V2,
+    )
+    bundle = build()
+    for field, driver in (
+        ("price_forecast", "price_sgd_per_kwh"),
+        ("load_forecast", "system_load_mw"),
+        ("temperature_forecast", "temperature_deg_c"),
+    ):
+        assert np.array_equal(np.asarray(getattr(bundle, field)),
+                              np.asarray(artifact.series[driver])), field
+
+
+@needs_assets
+def test_seasonal_series_do_not_recompute_the_provider(monkeypatch):
+    """R1-4：屏蔽 `seasonal_naive_forecast` 后仍能构造 → 没有第二次独立计算。"""
+    module = formal()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("formal 内核不得再次调用 seasonal_naive_forecast")
+
+    monkeypatch.setattr(module, "seasonal_naive_forecast", boom)
+    bundle = build()
+    assert len(bundle.price_forecast) == _CUTOFF
