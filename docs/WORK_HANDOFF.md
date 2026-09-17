@@ -24,9 +24,9 @@
 > ⚠️ **契约版本为 `contract-v9`**；`SOURCE_KINDS` 含
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
-> **g-d / R1（train-only refs 冻结）执行完成，等待人工复审**，见 §7T–§7U；
-> **`refs_v3.json` 是唯一候选 refs 证据**（v2 已标 `superseded_pre_trust_boundary_fix`）；
-> `g-c / g-e / g-f` **均未开始**；
+> **g-d / R1 与 g-c 均已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
+> **g-c（正式 split manifest triad）执行完成，等待人工复审**，见 §7T–§7V；
+> `g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
 > **env 接线、正式训练、评估与 M6 均未开始**。
@@ -1641,6 +1641,75 @@ revert 链后 HEAD^{tree} = fb03ca926fac82d80b9b5dc37283691d6ba95c76
 
 **g-d-R1 通过复审之前**：`g-c / g-e / g-f` 均不得开始；
 正式训练、评估与 **M6 仍未开始**。
+
+### 7V. M1.3g-c：三个正式 split manifest 的严格物化（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §s–§t。**起点 `2e60e95`，实现终点 `31ae6cc`，
+triad 物化提交 `c761de3`。**
+
+新增 `scenario/formal_split_manifests.py`（**唯一** schema / validator）、
+`scripts/materialize_singapore_scenario_manifests.py`（**原子 triad** 物化器）
+与 `data/manifest/{train,validation,test}.json`。
+
+| split | SHA-256 | `split_rows` | `candidate_origins`（split-local） |
+|---|---|---|---|
+| `train.json` | `91b2d7c2efa4e8780d0a0765dbdd4f928cded5340a6c4d4c3c342b604c1f5991` | `[0, 10224)` | **`[48, 10224)`** |
+| `validation.json` | `19f17706fb422315a2432377e0ceaa64d16e70e78155e5656554e39fd22920ca` | `[10224, 13152)` | **`[0, 2928)`** |
+| `test.json` | `a40c595ab7641fcd13de54052c0d8cc601e9d332c67c65844198f53274b106d7` | `[13152, 17568)` | **`[0, 4416)`** |
+
+- 三份**同一** schema（`m1.3g-formal-split-manifest-v1` / `contract-v9` /
+  `30min` / `history_steps=48` / `Asia/Singapore`）；
+- 八个输入角色**逐字**绑定 path + 实测 SHA-256；**唯一 refs 是
+  `configs/frozen_refs/refs_v3.json`（`ab7f5b58…`）**，
+  `refs.json`（v2，`aae5a03e…`）**明确拒绝**；
+- `readiness = {"formal_training_ready": false, "formal_env_ready": false}`；
+- **无** forecast 数组、`origin_index` 单点、未来真值、默认曲线；
+  **不固定** H/C（实际边界仍由 `validate_episode_origin` /
+  `validate_forecast_origin` 在调用时严格执行）。
+
+**物化前实际调用既有严格链（四项）**：`load_frozen_refs` + 与冻结 SHA-256 的
+**逐字节**比对、`read_forecast_policy_manifest`（含 provider revision）、
+`load_truth_split`、`load_verified_exogenous` —— 有 spy 回归证明其**确实发生**。
+
+**triad 原子性**：首次物化任一步写失败 → **三份都不留下**（目录为空）；
+连续 2 次 `--verify` → 三份 bytes/SHA-256/`mtime_ns` **全不变**、0 临时文件；
+部分存在 / 任一不同 / 畸形既有文件 → **全部拒绝覆盖**。
+
+**公开签名只接受路径**：无 `expected_*`、无 revision 覆盖、无 DataFrame 注入、
+**无 `**kwargs`**。
+
+**先红实测**（`d31a074`）：`46 failed`（三份文件不存在）。
+**转绿**：focused **46**、`m12/m13/contracts` **1243**、
+`make check` **exit 0**、`make smoke` **exit 0**、
+`make train` **exit 2**（不回退 synthetic、无 checkpoint）。
+
+> **`make train` 的失败原因已前移**：三份正式 split manifest 现在**存在**，
+> 因此不再抛 `FileNotFoundError`，而是停在
+> `ValueError: manifest 缺少字段 'source'` —— 即**正式接线尚未完成**（g-e/g-f）。
+> 这是**预期**的门禁位置；**未**改 `train.py` 或 `scenario/scenario.py`
+> 去伪造更好的错误。
+
+> **必须如实登记的 7 个范围外测试文件迁移**：卡片允许清单**未枚举**它们，
+> 但验收要求 `m12/m13/contracts` 全绿，而 g-c **按设计**创建了三份此前被断言
+> 「不存在」的保留名。迁移只把「文件不存在」这一**替代表述**换回其本来意图
+> （「**存在 ≠ 就绪**」「正式入口必须 **fail closed**」），
+> **未删除、未弱化**任何断言：
+> `test_m13a_canonical_bundle.py`、`test_m13d_splits.py`、
+> `test_m13e_forecast_provenance.py`、`test_m13f_exogenous_drivers.py`、
+> `test_m13f_public_sources.py`、`test_m13gb_formal_scenario.py`、
+> `test_scenario.py`。
+
+**上游全部未变**（canonical / split / policy-v2 / exogenous v2 / source v3 /
+exogenous parquet / `refs.json` / `refs_v3.json`）。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> <本验收提交> 83a0ac8 88e8c9d c761de3 31ae6cc d31a074 add0703
+```
+
+**g-c 通过复审之前**：`g-e / g-f` 均不得开始；
+**正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
