@@ -224,7 +224,7 @@ def test_updates_counter_and_log_per_constraint():
 def test_contract_version_is_the_current_single_source():
     from contracts import CONTRACT_VERSION_ID
 
-    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID == "contract-v9"
     assert CONTRACT_VERSION_ID != "contract-v7"
     assert lag_mod.CONTRACT_VERSION == CONTRACT_VERSION_ID
 

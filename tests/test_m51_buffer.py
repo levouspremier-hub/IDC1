@@ -1,7 +1,7 @@
 """M5.1 测试（M5.1a 迁移）：buffer 同存 raw/exec、21 维、严格序列化往返。
 
 M5.1a 起 `Transition` 新增 next_observation / terminated / truncated / electricity_cost_sgd；
-**M1.3e 起**全仓唯一契约版本为 `contract-v8`（本文件只把版本断言随之迁移，
+**M1.3g-0 起**全仓唯一契约版本为 `contract-v9`（本文件只把版本断言随之迁移，
 不自带版本字面量）；严格契约细节由 `tests/test_m51a_rollout_contract.py` 覆盖。
 """
 

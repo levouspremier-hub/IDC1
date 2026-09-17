@@ -2,7 +2,7 @@
 
 M5.3c **不提升** contract 版本：state_dict() 的 schema 完全不变，
 只是补上状态内部自洽性的强制拒绝（此前会被静默接受）。
-**M1.3e 迁移**：全仓唯一契约版本升至 `contract-v8`，本文件只把版本断言随之迁移。
+**M1.3g-0 迁移**：全仓唯一契约版本升至 `contract-v9`，本文件只把版本断言随之迁移。
 """
 
 import copy
@@ -67,7 +67,7 @@ def test_contract_version_is_still_the_single_current_version():
     from contracts import CONTRACT_VERSION_ID
     from safe_rl_v2 import lagrangian as lag_mod
 
-    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID == "contract-v9"
     assert CONTRACT_VERSION_ID != "contract-v7"
     assert lag_mod.CONTRACT_VERSION == CONTRACT_VERSION_ID
     assert valid_state()["contract_version"] == CONTRACT_VERSION_ID

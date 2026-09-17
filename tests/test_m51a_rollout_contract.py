@@ -236,7 +236,7 @@ def test_rejects_non_serializable_correction_info():
 # --- 5. 版本与常量 ---
 
 def test_contract_version_is_the_current_single_source():
-    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID == "contract-v9"
     assert CONTRACT_VERSION_ID != "contract-v7"
     assert CONTRACT_VERSION == CONTRACT_VERSION_ID
 

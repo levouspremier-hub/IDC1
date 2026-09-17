@@ -39,7 +39,7 @@ def _env(peak: float, cutoff: int = 4, t: int = 0) -> IDCPriceEnv20D:
 # --- 1. 唯一版本源 ---
 
 def test_contract_version_single_source():
-    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID == "contract-v9"
     assert CONTRACT_VERSION_ID != "contract-v7"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
     assert BUFFER_CONTRACT_VERSION == CONTRACT_VERSION_ID

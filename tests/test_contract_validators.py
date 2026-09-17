@@ -1,6 +1,6 @@
 """M2.2 跨契约校验器测试：每种错误明确失败并指出具体字段。
 
-**M1.3e 迁移**：`ScenarioBundle` 升到 `contract-v8`，`source_hashes` 自由 dict
+**M1.3e 迁移 / M1.3g-0 版本升级**：`ScenarioBundle` 现为 `contract-v9`，`source_hashes` 自由 dict
 退役为结构化 `forecast_provenance`；「缺少来源即失败」的断言**保留**，
 只是来源现在由结构化 provenance 承载，**未弱化**。
 """

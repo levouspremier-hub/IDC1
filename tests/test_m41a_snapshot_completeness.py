@@ -187,7 +187,7 @@ def test_active_task_max_rate_matches_env_definition():
 # --- 6. 契约版本 v3 与旧 checkpoint 拒绝 ---
 
 def test_contract_version_is_the_current_single_source():
-    assert CONTRACT_VERSION_ID == "contract-v8"
+    assert CONTRACT_VERSION_ID == "contract-v9"
     assert CONTRACT_VERSION_ID != "contract-v7"
     assert CURRENT_CONTRACT_VERSION == CONTRACT_VERSION_ID
 

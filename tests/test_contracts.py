@@ -1,6 +1,6 @@
 """M2.1 契约测试：JSON 往返、矩形/非负、单位、hash 键序无关、frozen。
 
-**M1.3e 迁移**：`ScenarioBundle` 升到 `contract-v8`——自由 dict `source_hashes`
+**M1.3e 迁移 / M1.3g-0 版本升级**：`ScenarioBundle` 现为 `contract-v9`——自由 dict `source_hashes`
 退役为结构化 `forecast_provenance`（七个字段一一对应），`synthetic: bool`
 由显式 `mode` 取代。以下 fixture 因此显式提供 v8 provenance，
 **原有断言一条都未弱化**。

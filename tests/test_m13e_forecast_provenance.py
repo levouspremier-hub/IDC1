@@ -1,4 +1,7 @@
-"""M1.3e 测试：contract-v8 与**因果** forecast provenance（含 M1.3e-R1 信任链）。
+"""M1.3e 测试：契约版本与**因果** forecast provenance（含 M1.3e-R1 信任链）。
+
+**M1.3g-0 迁移**：全仓唯一契约版本由 `contract-v8` 升到 **`contract-v9`**，
+本文件只把版本字面量随唯一版本源迁移，**原有断言一条都未弱化**。
 
 改前缺陷（本文件在实现前必须为红）：
 
@@ -175,7 +178,7 @@ def _resync_policy_split_hash(chain: dict) -> None:
     _rewrite_json(chain["policy_manifest"], payload)
 
 
-# --- provenance / bundle 夹具（contract-v8） --------------------------------
+# --- provenance / bundle 夹具（contract-v9） --------------------------------
 
 def make_series_provenance(**over) -> dict:
     base = {
@@ -282,10 +285,11 @@ def _allow_clean_generator(monkeypatch) -> None:
 
 # --- 1. 契约版本（A） ---------------------------------------------------------
 
-def test_contract_version_is_v8():
+def test_contract_version_is_the_current_contract():
+    """M1.3g-0：唯一版本源升到 contract-v9。"""
     from contracts import CONTRACT_VERSION_ID
 
-    assert CONTRACT_VERSION_ID == CONTRACT_V8
+    assert CONTRACT_VERSION_ID == CONTRACT_V9
 
 
 def test_v7_artifacts_are_explicitly_rejected():
@@ -728,7 +732,7 @@ def test_provider_rejects_a_malformed_policy_manifest(chain):
 @pytest.mark.parametrize("field,value", [
     ("schema", "m1.3e-other-schema"),
     ("contract_version", CONTRACT_V7),
-    ("contract_version", "contract-v9"),
+    ("contract_version", CONTRACT_V8),
     ("method", "persistence"),
     ("period_steps", 24),
     ("frequency", "60min"),
@@ -923,7 +927,7 @@ def test_artifact_is_a_frozen_contract(chain):
 
     artifact = forecast_artifact(chain)
     assert isinstance(artifact, AvailableExogenousForecast)
-    assert artifact.schema_version == CONTRACT_V8
+    assert artifact.schema_version == CONTRACT_V9
     with pytest.raises((ValueError, TypeError)):
         artifact.origin = 1  # type: ignore[misc]
 
@@ -1236,7 +1240,7 @@ def test_policy_manifest_records_the_frozen_policy(chain, monkeypatch):
     manifest = _policy_json(result["manifest_path"])
 
     assert manifest["schema"] == POLICY_SCHEMA
-    assert manifest["contract_version"] == CONTRACT_V8
+    assert manifest["contract_version"] == CONTRACT_V9
     assert tuple(manifest["available_drivers"]) == DRIVERS
     assert manifest["method"] == "trailing_seasonal_naive"
     assert manifest["period_steps"] == PERIOD_STEPS
@@ -1978,14 +1982,7 @@ def _formal_bundle_with(*, carbon_kind=CARBON_SOURCE_KIND, field=None, kind=None
         kwargs["forecast_provenance"][field] = make_series_provenance(
             series_name=field, source_kind=kind
         )
-    return build_bundle(mode="formal", **kwargs)
-
-
-def test_contract_version_is_v9():
-    """D1：全仓唯一版本源升到 contract-v9。"""
-    from contracts import CONTRACT_VERSION_ID
-
-    assert CONTRACT_VERSION_ID == CONTRACT_V9
+    return build_bundle(**kwargs)
 
 
 @pytest.mark.parametrize("bad", (

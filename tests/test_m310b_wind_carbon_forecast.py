@@ -178,7 +178,7 @@ def test_out_of_window_wind_carbon_change_ignored(cutoff):
 # --- 4. 契约版本与旧 schema 拒绝 ---
 
 def test_contract_version_bumped():
-    assert CURRENT_CONTRACT_VERSION == "contract-v8"
+    assert CURRENT_CONTRACT_VERSION == "contract-v9"
     assert CURRENT_CONTRACT_VERSION != "contract-v7"
 
 
@@ -253,5 +253,5 @@ def test_scenario_contract_schema_version_bumped():
         generated_at=_FIXTURE_GENERATED_AT,
         forecast_provenance=_fixture_provenance(),
     )
-    assert s.schema_version == "contract-v8"
+    assert s.schema_version == "contract-v9"
     assert s.schema_version != "contract-v7"
