@@ -1449,6 +1449,50 @@ git revert <交接提交> bae3ce4 649eff1 3fd6140 95095a7 e455bbf
 `build_scenario(synthetic=False)` **仍 fail closed**；
 正式训练、评估与 **M6 仍未开始**。
 
+### 7S. M1.3g-b-R2：移除 formal 外生链的调用者可控信任根（**执行完成，等待复审**）
+
+**M1.3g-b-R1 审核不通过**，起点 `b3aef56`，实现终点 `b556c39`（详见卡片 §m–§n）：
+
+- R1 给 `build_formal_scenario` 加了 `expected_exogenous_manifest_sha256` /
+  `_source_manifest_sha256` / `_output_sha256` 三个**可覆盖**参数——等于把外生链的
+  信任根交给调用者。**R2 已全部删除**。
+- `load_verified_exogenous` 同步移除可覆盖参数：三个 hash 直接读**模块级冻结常量**
+  （调用时解析）。**正式路径不存在任何可传入的 hash / revision / trust-root override。**
+- 临时链测试改为 monkeypatch **模块内部**冻结常量（`_patch_frozen_root`）+
+  调用**未带 override** 的公开入口，证明**正式代码路径本身**完成交叉绑定。
+- **R1 内容全部保留**：`FORMAL_SOURCE_PATHS`、dirty gate、formal revision、
+  `exogenous_drivers_parquet` digest、artifact 三序列复用、arrival verified-payload
+  reader。
+
+**实测签名**（无任何 `expected_*`）：
+
+```text
+build_formal_scenario: split, origin, forecast_cutoff, canonical_parquet_path,
+  canonical_manifest_path, split_manifest_path, policy_manifest_path,
+  exogenous_manifest_path, exogenous_source_manifest_path, horizon
+```
+
+**关键证据（自洽篡改 + 调用者知道其 hash → 仍拒绝）**：
+把模块冻结根替换成被篡改 manifest 的**真实** SHA-256 后，拒绝理由是
+**交叉绑定**而非 hash 不符：
+`exogenous.canonical_parquet 的声明 SHA-256 与实际提供的对象不符`。
+
+**先红实测**（`397a4ea`）：`6 failed, 34 passed`。
+**转绿**：focused **40**、`m12/m13/contracts` **1152**、
+`make check` **exit 0（2331 passed）**、`make smoke` **exit 0**、
+`make train` **exit 2**（不回退 synthetic）、checkpoint **0**、
+三个保留名**未创建**、`refs.json` **未变**。**范围外修改：无。**
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> 6990da6 47fd095 ac3b0df b556c39 397a4ea
+```
+
+**g-b-R2 通过复审之前**：`g-d / g-c / g-e / g-f` 均不得开始；
+`build_scenario(synthetic=False)` **仍 fail closed**；
+正式训练、评估与 **M6 仍未开始**。
+
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
 > ⚠️ **本节的历史说法是历史错误，以 7J / R3 为准**：本节（及其引用的 R2 任务卡 §12.11）
