@@ -18,11 +18,13 @@
 > v1 产物标为 `superseded_pre_approval_and_loss_fix`，**v2/v3 才是唯一最终证据**。
 > ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 现为 `true`
 > 只代表驱动表已物化，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
-> **M1.3g-a（formal ScenarioBundle / env / train 接线**只读**前置审计）已完成**，
-> 见 §7O。⚠️ **M1.3g-a 只是审计，未实现任何接线**；
+> **M1.3g-a（formal ScenarioBundle / env / train 接线**只读**前置审计）执行完成，
+> 经 R1 返修后等待人工复审**，见 §7O。⚠️ **M1.3g-a 只是审计，未实现任何接线**；
+> **M1.3g-0 / g-b / g-d / g-c / g-e / g-f 均未开始**；
+> 六项人工裁决 **D1–D6 尚未给出**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
-> **M1.3g 实现与 M6 均未开始**。
+> **M1.3g 实现、正式训练、评估与 M6 均未开始**。
 > 详见 §7K（M1.3e）、§7L（M1.3f-a）、§7M（M1.3f-b）、§7N（M1.3f-c/c-R1）、§7O（M1.3g-a）。
 >
 > 历史记录：原 p4 分支上，M5.4i **第三次返修**实现终点 `2cab5a1`；
@@ -89,7 +91,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d/e/f **已通过**；f-c-R1 **已通过复审**；g-a 只读审计完成待裁决） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e contract-v8 + 因果 seasonal-naive provider + policy manifest**；**M1.3f 四类外生驱动 v2/v3 已冻结**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；六项人工裁决 D1–D6 未完成；正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f **已通过**；f-c-R1 **已通过复审**；g-a 只读审计经 R1 返修后**等待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e contract-v8 + 因果 seasonal-naive provider + policy manifest**；**M1.3f 四类外生驱动 v2/v3 已冻结**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**M1.3g-0/b/d/c/e/f 均未开始**；六项人工裁决 D1–D6 未给出；正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v8`**（M1.3e 起；v7 buffer/checkpoint 明确拒绝）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -1159,7 +1161,7 @@ materializer_revision                     bd7be9dd04e47b9db77198c3fdc3e1da2ae088
 > 本行已更正；提交 `4519a29` 的提交信息保留原错误表述（Git 历史不重写）。
 > 以 `docs/task_cards/M1.3f.md` §11.2 为准。
 
-### 7O. M1.3g-a：formal ScenarioBundle / env / train 接线前置审计（**只读，已完成，等待人工裁决**）
+### 7O. M1.3g-a：formal ScenarioBundle / env / train 接线前置审计（**只读；R1 返修后等待人工复审**）
 
 `docs/task_cards/M1.3g.md`。**纯只读审计卡**：只新增/修改三份 markdown，
 未触碰任何代码、测试、配置、raw、processed、manifest 或 `runs/`。
@@ -1203,17 +1205,74 @@ materializer_revision                     bd7be9dd04e47b9db77198c3fdc3e1da2ae088
 
 **六项人工裁决 D1–D6**（卡片 §c.7）：carbon source_kind、env/refs 差异、
 arrival RNG 口径、env 步长、split manifest 的 origin 集合、
-`refs.json` 哪些值由 train 推导。**D1–D6 全部裁决前，M1.3g-b..f 均不得开工。**
+`refs.json` 哪些值由 train 推导。**所有决定可一次性批准**（D1–D6 互不冲突），
+**但 D1–D6 全部裁决前，M1.3g-0 / g-b / g-d / g-c / g-e / g-f 均不得开工。**
+
+**D1–D6 → 子卡依赖矩阵**：
+
+| 裁决 | 约束卡 |
+|---|---|
+| **D1** carbon `source_kind` | **g-0**（仅当选「新增 source_kind」时）/ **g-b** |
+| **D2** env 默认 vs `refs.json` 差异 | **g-d**（落地冻结）；其对 env 注入口径的后果在 **g-e** 明示 |
+| **D3** arrival forecast RNG 口径 | **g-b** |
+| **D4** env 步长（0.5 h 或经批准的聚合规则） | **g-e** |
+| **D5** split manifest 的 origin 集合 | **g-c** |
+| **D6** `refs.json` 哪些值由 train 推导 | **g-d** |
 
 **建议的下一张实现卡**：**M1.3g-b（formal causal `ScenarioBundle` 构造器）**，
-前置条件为 **D1–D6 全部裁决**。分卡序列 g-b → g-c（三份正式 split manifest）
-→ g-d（train-only refs）→ g-e（env 注入与步长对齐）→ g-f（train 入口门禁）。
+前置条件为 **D1–D6 全部裁决**（若 D1 选「新增 source_kind」，则先开 **M1.3g-0** 契约升级）。
+
+**强制分卡顺序（M1.3g-a-R1 修正）**：
+
+```text
+D1–D6 一次性裁决
+   ├─ (仅当 D1 选「新增 carbon source_kind」) → g-0 契约版本升级
+   ↓
+  g-b  formal causal ScenarioBundle 构造器
+   ↓
+  g-d  train-only normalization refs 冻结
+   ↓
+  g-c  三个正式 split manifest
+   ↓
+  g-e  env 真实数据注入与步长对齐
+   ↓
+  g-f  train 入口正式路径 + purpose gate + 完整性门
+```
+
+> **`g-d` 必须早于 `g-c`**：`g-c` 的三份 manifest 要**逐字绑定** `g-d` 冻结后的
+> `refs.json` SHA-256。若 `g-c` 先跑，只能写占位 hash / `null` / 事后补写 ——
+> **三者全部禁止**。
 
 **只读验收**：`make check` exit 0（**2248 passed**）、`make smoke` exit 0、
 `make train` exit 2（不回退 synthetic）、checkpoint **0**、三个保留名**不存在**、
 上游全部资产 SHA-256 **逐字节未变**、`git diff --check` 与 `git status --short` 为空。
 
-**M1.3g-a 只是只读审计**：formal `ScenarioBundle`、训练、评估与 **M6 仍未开始**。
+**M1.3g-a 只是只读审计，且尚待人工复审**：**M1.3g-0 / g-b / g-d / g-c / g-e / g-f
+均未开始**；formal `ScenarioBundle`、正式训练、评估与 **M6 仍未开始**。
+
+### 7O.1 M1.3g-a-R1：第一轮审核返修（**纯文档，执行完成，等待复审**）
+
+**M1.3g-a 第一轮审核不通过**，起点 `6f54c11`；三项修正（详见卡片 §f）：
+
+1. **状态**由「执行中」改为 **「执行完成，等待人工复审」**；**未**宣称 M1.3g 实现通过。
+2. **分卡顺序修正（本轮核心）**：原写 `g-b → g-c → g-d → …` **是错的**；
+   现为 **`g-b → g-d → g-c → g-e → g-f`**（若 D1 选「新增 source_kind」则先加 `g-0`）。
+   理由：`g-c` 的三份 manifest 必须**逐字绑定** `g-d` 冻结后的 `refs.json` SHA-256；
+   先跑 `g-c` 只能写**占位 hash / `null` / 事后补写**，三者**全部禁止**。
+3. **D1–D6 依赖矩阵**新增到卡片 §c.7 与本节；明确**所有决定可一次性批准**，
+   但**不得**把与某卡无关的决定伪装成该卡的技术前置。
+   新增**条件卡 M1.3g-0**（仅当 D1 选③「新增 carbon source_kind」时开启，
+   含契约版本升级与「既有 buffer/checkpoint 全部失效」的预期代价登记）。
+
+**本卡未做**：未开始任何实现卡；未创建任何 manifest / refs / data；
+未改代码、测试、配置或锁文件；**未裁决 D1–D6 中的任何一项**。
+
+**验收**：`make check` exit 0（**2248 passed**）、`make smoke` exit 0、
+`make train` exit 2（不回退 synthetic）、checkpoint **0**、三个保留名不存在、
+`git diff --name-only 6f54c11..HEAD` 仅为 `docs/task_cards/M1.3g.md` 与
+`docs/WORK_HANDOFF.md`。
+
+**回滚（由新到旧）**：`git revert <交接提交> <本卡结论提交>`（纯文档，无副作用）。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
@@ -1832,7 +1891,11 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
   `scenario/scenario.py:_build_synthetic` 的 synthetic 场景接进正式训练。
 - 不得把 `configs/frozen_refs/refs.json` 的**声明尺度**当作已由 train 冻结的
   normalization refs（其 `training_range` 与 `data_hash` 仍为 `null`）。
-- 不得在 **D1–D6 六项人工裁决完成之前**开工 M1.3g-b..f。
+- 不得在 **D1–D6 六项人工裁决完成之前**开工 **M1.3g-0 / g-b / g-d / g-c / g-e / g-f**；
+  **分卡顺序固定为** `g-b → g-d → g-c → g-e → g-f`（D1 选「新增 source_kind」时先加 `g-0`），
+  **不得**把 `g-c` 排在 `g-d` 之前。
+- 不得让 `g-c` 的三份 split manifest 使用**占位 hash / `null` / 事后补写**的 refs 绑定：
+  必须逐字等于 `g-d` 冻结后 `refs.json` 的实测 SHA-256。
 
 ## 11. 当前可安全执行的命令
 
