@@ -94,6 +94,17 @@ needs_assets = pytest.mark.skipif(
 )
 
 
+_CHAIN_PATH_KEYS = (
+    "canonical_parquet_path", "canonical_manifest_path", "split_manifest_path",
+    "policy_manifest_path", "exogenous_manifest_path",
+)
+
+
+def chain_kwargs(chain: dict) -> dict:
+    """只取**路径**键，供公开 `build_formal_scenario` 使用（hash 键不进签名）。"""
+    return {key: chain[key] for key in _CHAIN_PATH_KEYS}
+
+
 def build(**over):
     """用**真实**冻结资产构造 formal bundle（默认 origin/cutoff 固定）。"""
     kwargs = dict(
@@ -347,15 +358,16 @@ def _validation_build(**over):
 
 
 @needs_assets
-def test_future_truth_mutation_does_not_change_any_forecast(tmp_path):
+def test_future_truth_mutation_does_not_change_any_forecast(tmp_path, monkeypatch):
     """`[i, i+C)` 的 canonical 真值变化**不得**改变七条 forecast 中的任何一条。"""
+    baseline = _validation_build()          # 仓库冻结根
     mutated = _mutated_chain(
         tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN,
         mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF)
     _patch_frozen_root(monkeypatch,
                        manifest_sha=mutated["exogenous_manifest_sha256"])
-    baseline = _validation_build()
-    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
+    after = build(split="validation", origin=_VALIDATION_ORIGIN,
+                  **chain_kwargs(mutated))
     for field in BUNDLE_FORECAST_FIELDS:
         assert np.array_equal(
             np.asarray(getattr(baseline, field)),
@@ -371,13 +383,14 @@ def test_history_mutation_changes_the_derived_forecasts(tmp_path, monkeypatch):
     由它们推导的三条：温度、PV、风电。（price / load / carbon / arrival
     的输入没有被改动，**不应**变化——这里不断言它们。）
     """
+    baseline = _validation_build()          # 仓库冻结根
     mutated = _mutated_chain(
         tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN - PERIOD_STEPS,
         mutate_to=_GLOBAL_VALIDATION_ORIGIN)
     _patch_frozen_root(monkeypatch,
                        manifest_sha=mutated["exogenous_manifest_sha256"])
-    baseline = _validation_build()
-    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
+    after = build(split="validation", origin=_VALIDATION_ORIGIN,
+                  **chain_kwargs(mutated))
     for field in ("temperature_forecast", "pv_forecast", "wind_forecast"):
         assert not np.array_equal(
             np.asarray(getattr(baseline, field)),
@@ -721,14 +734,14 @@ def _patch_frozen_root(monkeypatch, *, manifest_sha, source_sha=None, output_sha
 @needs_assets
 def test_fully_synced_temp_chain_still_hides_the_future(tmp_path, monkeypatch):
     """R2-3/4：临时链在替换模块冻结根后，公开入口仍证明七条 forecast 不读未来。"""
+    baseline = _validation_build()          # 仓库冻结根
     mutated = _mutated_chain(
         tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN,
         mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF)
     _patch_frozen_root(monkeypatch,
                        manifest_sha=_sha256(mutated["exogenous_manifest_path"]))
-
-    baseline = _validation_build()
-    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
+    after = build(split="validation", origin=_VALIDATION_ORIGIN,
+                  **chain_kwargs(mutated))
     for field in BUNDLE_FORECAST_FIELDS:
         assert np.array_equal(
             np.asarray(getattr(baseline, field)),
@@ -739,12 +752,12 @@ def test_fully_synced_temp_chain_still_hides_the_future(tmp_path, monkeypatch):
 @needs_assets
 def test_fully_synced_temp_chain_matches_the_repo_forecasts(tmp_path, monkeypatch):
     """R2-3：临时链（同步后）与仓库链在**未 mutation** 时给出同一组 forecast。"""
+    baseline = _validation_build()          # 仓库冻结根
     synced = _mutated_chain(tmp_path, mutate_from=TRAIN_ROWS, mutate_to=TRAIN_ROWS)
     _patch_frozen_root(monkeypatch,
                        manifest_sha=_sha256(synced["exogenous_manifest_path"]))
-
-    baseline = _validation_build()
-    after = build(split="validation", origin=_VALIDATION_ORIGIN, **synced)
+    after = build(split="validation", origin=_VALIDATION_ORIGIN,
+                  **chain_kwargs(synced))
     for field in BUNDLE_FORECAST_FIELDS:
         assert np.array_equal(
             np.asarray(getattr(baseline, field)),
