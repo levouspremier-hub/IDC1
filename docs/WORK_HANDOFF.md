@@ -24,7 +24,8 @@
 > ⚠️ **契约版本为 `contract-v9`**；`SOURCE_KINDS` 含
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
-> **g-d（train-only refs 冻结）执行完成，等待人工复审**，见 §7T；
+> **g-d / R1（train-only refs 冻结）执行完成，等待人工复审**，见 §7T–§7U；
+> **`refs_v3.json` 是唯一候选 refs 证据**（v2 已标 `superseded_pre_trust_boundary_fix`）；
 > `g-c / g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
@@ -1548,6 +1549,71 @@ git revert <交接提交> 9ff83a4 830c968 7a761b4 7c60da5 61a7423 22d7339
 回滚后 `refs.json` 恢复为 legacy v1 字节（`afa84b86…`）。
 
 **g-d 通过复审之前**：`g-c / g-e / g-f` 均不得开始；
+正式训练、评估与 **M6 仍未开始**。
+
+### 7U. M1.3g-d-R1：移除 refs 冻结的 frame 注入信任边界漏洞（**执行完成，等待复审**）
+
+**M1.3g-d 审核不通过**，起点 `e89c15c`，实现终点 `1f26407`（详见卡片 §q–§r）：
+
+**已复现的缺陷（审核方与本卡各自实测）**：公开入口
+`build_frozen_refs(canonical_frame=...)` 可以注入一份**未经 manifest / hash
+验证**的 DataFrame，且 `materialize_frozen_refs(..., **build_kwargs)` 把它
+**透传到写盘路径**：
+
+```python
+frame.loc[frame.index[0], "price_sgd_per_kwh"] = 99.0
+materialize_frozen_refs(out_path=<tmp>/"refs.json", canonical_frame=frame)
+→ written: True ; price_ref == 99.0
+```
+
+因此 **v2 refs 不能作为后续正式证据**。
+
+**修正**：
+
+1. `build_frozen_refs` / `materialize_frozen_refs` 的公开签名**只接受文件路径**
+   —— 删除 `canonical_frame`，并以显式路径参数取代 `**kwargs`；
+   传 `canonical_frame=` 或任意 kwarg → **`TypeError`**。
+2. 纯计算函数降为**私有**（`_build_frozen_refs_payload` /
+   `_train_derived_value`），其输入帧必须先经公开入口的**完整校验**。
+3. **`iloc` 切片之前**严格校验 canonical 与 exogenous：行数相同、两侧
+   tz-aware `timestamp`、无重复、严格递增、严格 30 分钟网格、
+   **逐行 timestamp 完全相等**、必要列存在、数值有限。
+   任一失败只抛 `ValueError`/`SplitError`，**不泄漏**内建异常。
+4. train-only 验证走「**完整临时冻结信任链 + 公开文件路径入口**」；
+   冻结根通过 monkeypatch **模块内部常量**指向该链（与已通过的
+   **M1.3g-b-R2 同款机制**），**不存在**测试专用开关。
+
+**v2 保留、v3 生成**：
+
+| 项 | 值 |
+|---|---|
+| **v2** `configs/frozen_refs/refs.json` | `aae5a03e9f09239c4f490b735e4a9ab21d872783a547e7ac6fa9264bafc66827` |
+| v2 状态 | **`superseded_pre_trust_boundary_fix`**（逐字节不变，只读保留） |
+| **v3** `configs/frozen_refs/refs_v3.json` | `ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f` |
+| v3 `materializer_revision` | `1f264071222e…`（R1 实现） |
+| v2 vs v3 | **仅** `frozen_at_utc` 与 `materializer_revision` 不同；`references` / `sources` / `training_range` **完全相同** |
+
+对 v2 路径物化 → **拒绝**；v3 首冻**原子**、**幂等**（2 次 `--verify`：
+bytes/hash/`mtime_ns` 全不变、0 临时文件）、不同内容**拒绝覆盖**。
+
+**先红实测**（`95d7383`）：`38 failed, 7 passed`（含
+`Failed: DID NOT RAISE TypeError`）。
+**转绿**：focused **45**、`m12/m13/contracts` **1197**、
+`make check` **exit 0（2377 passed）**、`make smoke` **exit 0**、
+`make train` **exit 2**（原因**仅**为缺 `train.json`，不回退 synthetic）、
+checkpoint **0**、三个保留名**未创建**。**范围外修改：无。**
+
+**后续 g-c 只能引用 `refs_v3.json`。**
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> f47e14f 3058b59 1f26407 95d7383 5559acd
+```
+
+回滚后删除 `refs_v3.json`；v2 `refs.json` 字节不变。
+
+**g-d-R1 通过复审之前**：`g-c / g-e / g-f` 均不得开始；
 正式训练、评估与 **M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
