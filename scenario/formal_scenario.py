@@ -1,0 +1,518 @@
+"""M1.3g-b：formal causal `ScenarioBundle` 的**构造内核**。
+
+本模块把**已冻结**的四层资产变换成 `mode="formal"` 的七序列
+`contracts.ScenarioBundle`：
+
+```text
+canonical parquet + canonical manifest + split manifest
+        + forecast policy manifest（v2 / contract-v9）
+        + exogenous v2 manifest + exogenous source v3 manifest
+```
+
+## 因果性（本模块的**唯一**合法性来源）
+
+对全局 origin = `i`、cutoff = `C`，七条序列只用 `[i−48, i)` 的历史：
+
+| 序列 | 构造 | `source_kind` |
+|---|---|---|
+| `price` / `load` / `temperature` | M1.3e `seasonal_naive_forecast`（`[i−48, i)`） | `seasonal_naive` |
+| `pv` | **forecast** 的 GHI / 温度 / 10 m 风速 + **target 日历时刻**过 `local_pv_kw` | `modeled_scenario` |
+| `wind` | **forecast** 的 10 m 风速过 `wind_generation_kw` | `modeled_scenario` |
+| `carbon` | 经核验的 v2 **B1 常数** `0.402` | `human_approved_external_low_resolution` |
+| `arrival` | **D3：期望值** `rate_template[hour*2 + minute//30] × 1000` | `modeled_scenario` |
+
+**PV / 风电是五个 driver forecast 的逐点确定性变换**，因此因果性由构造继承：
+`local_pv_kw` / `wind_generation_kw` 是逐点纯函数，其全部输入都来自 `[i−48, i)`。
+`target` 的**日历时刻**是已知的未来日历，不是未来真值。
+
+**arrival 明确不使用 Poisson 抽样**：formal forecast 是模板的**期望**
+`λ(slot) = rate_template[slot] × 1000`；v2 驱动表里的 Poisson 列（`generate_arrival`）
+只是**模拟场景的实际 arrival**，**不得**当作未来已知 forecast（D3）。
+
+## 物理实现只有一份
+
+PV / 风电**复用** `scenario/exogenous_drivers.py` 的既有函数
+（`local_pv_kw` / `wind_generation_kw` / `load_wind_power_curve`），
+本模块**不**复制任何物理规则，因此「真值物化」与「formal forecast」走的是
+**同一份**代码。
+
+## fail closed
+
+七层来源逐层校验（policy → split → canonical manifest → parquet，
+外加 exogenous 的两份 manifest 与 v2 output hash）；任一不符即拒绝。
+**本模块不写任何文件、不构造 env、不接线训练。**
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timedelta
+from pathlib import Path
+import pandas as pd
+
+from contracts.models import (
+    ArtifactDigest,
+    ForecastSeriesProvenance,
+    ScenarioBundle,
+    ScenarioForecastProvenance,
+)
+from scenario.exogenous_drivers import (
+    ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR,
+    ARRIVAL_TEMPLATE_SLOTS,
+    B5_ARRIVAL_APPROVAL,
+    B5_PV_APPROVAL,
+    CARBON_KG_PER_KWH,
+    arrival_template_slot,
+    local_pv_kw,
+    wind_generation_kw,
+)
+from scenario.forecast import (
+    FORECAST_PERIOD_STEPS,
+    build_available_exogenous_forecast,
+    seasonal_naive_forecast,
+)
+from scenario.splits import (
+    SplitName,
+    load_truth_split,
+    logical_repo_path,
+    validate_canonical_timeline,
+    validate_forecast_origin,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+STEP_MINUTES = 30
+
+# 七条序列的 `source_kind`（**精确**，不得漂移）
+FORMAL_SOURCE_KINDS: dict[str, str] = {
+    "price_forecast": "seasonal_naive",
+    "load_forecast": "seasonal_naive",
+    "temperature_forecast": "seasonal_naive",
+    "pv_forecast": "modeled_scenario",
+    "wind_forecast": "modeled_scenario",
+    "carbon_forecast": "human_approved_external_low_resolution",
+    "arrival_forecast": "modeled_scenario",
+}
+CARBON_SOURCE_KIND = FORMAL_SOURCE_KINDS["carbon_forecast"]
+
+# canonical 列 ↔ bundle 字段（季节朴素 driver）
+SEASONAL_DRIVER_COLUMNS: dict[str, str] = {
+    "price_forecast": "price_sgd_per_kwh",
+    "load_forecast": "system_load_mw",
+    "temperature_forecast": "temperature_deg_c",
+}
+# PV / 风电的输入 driver 列
+GHI_COLUMN = "ghi_w_per_m2"
+WIND_SPEED_COLUMN = "wind_speed_10m_mps"
+PV_TEMPERATURE_COLUMN = "temperature_deg_c"
+
+# 正式 exogenous 资产的**冻结**身份（M1.3f-c-R1 的 v2/v3，逐字节绑定）
+EXOGENOUS_SCHEMA = "m1.3c-singapore-2024-exogenous-v1"
+EXOGENOUS_MANIFEST_SHA256 = (
+    "640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9"
+)
+EXOGENOUS_SOURCE_MANIFEST_SHA256 = (
+    "4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6"
+)
+EXOGENOUS_OUTPUT_SHA256 = (
+    "11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf"
+)
+EXOGENOUS_OUTPUT_LOGICAL_PATH = (
+    "data/processed/singapore_2024/exogenous_drivers_v2.parquet"
+)
+# v1（M1.3f-c）产物：**不得**作为正式链证据
+SUPERSEDED_EXOGENOUS_SHA256 = (
+    "0c5e65d8fdc25ed8ced228e8087f13eb0605d0146d7e258caf54a552a246287c"
+)
+
+MODEL_NAME = "formal_scenario_kernel"
+MODEL_VERSION = "v1"
+
+
+class FormalScenarioError(ValueError):
+    """formal 场景构造的**明确失败**。"""
+
+
+def _sha256_file(path: Path) -> str:
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as error:
+        raise FormalScenarioError(f"冻结资产不可读：{path}：{error}") from error
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise FormalScenarioError(message)
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise FormalScenarioError(f"{path} 不可读或不是合法 JSON：{error}") from error
+    _require(isinstance(payload, dict), f"{path} 的顶层必须是 object")
+    return payload
+
+
+# --- exogenous v2 / source v3 的核验 -----------------------------------------
+
+def load_verified_exogenous(
+    exogenous_manifest_path: Path | str,
+    exogenous_source_manifest_path: Path | str,
+    *,
+    exogenous_parquet_path: Path | str,
+) -> dict:
+    """核验并返回 M1.3f-c-R1 的 v2 外生驱动声明。
+
+    逐项校验：
+
+    1. 两份 manifest 的**字节** SHA-256 等于冻结登记值（逐字节绑定）；
+    2. v2 manifest 的 schema、B1（carbon）与 B5（PV / arrival）声明完整；
+    3. 声明的 v2 output hash 等于 parquet 的**实测**字节 hash；
+    4. v1 产物**不得**被当作正式证据。
+    """
+    exogenous_manifest_path = Path(exogenous_manifest_path)
+    exogenous_source_manifest_path = Path(exogenous_source_manifest_path)
+    exogenous_parquet_path = Path(exogenous_parquet_path)
+
+    actual = _sha256_file(exogenous_manifest_path)
+    if actual == SUPERSEDED_EXOGENOUS_SHA256:
+        raise FormalScenarioError(
+            "传入的是 M1.3f-c 的 **v1** 外生驱动 manifest："
+            "它标为 superseded_pre_approval_and_loss_fix，不得作为正式链证据"
+        )
+    _require(
+        actual == EXOGENOUS_MANIFEST_SHA256,
+        f"exogenous v2 manifest 的 SHA-256 与冻结登记不符："
+        f"期望 {EXOGENOUS_MANIFEST_SHA256} 实际 {actual}",
+    )
+    _require(
+        _sha256_file(exogenous_source_manifest_path) == EXOGENOUS_SOURCE_MANIFEST_SHA256,
+        "exogenous source v3 manifest 的 SHA-256 与冻结登记不符",
+    )
+
+    payload = _load_json(exogenous_manifest_path)
+    _require(
+        payload.get("schema") == EXOGENOUS_SCHEMA,
+        f"exogenous v2 manifest 的 schema 必须是 {EXOGENOUS_SCHEMA!r}，"
+        f"实际 {payload.get('schema')!r}",
+    )
+
+    columns = payload.get("columns")
+    _require(isinstance(columns, dict), "exogenous v2 manifest 缺少 columns")
+    carbon = columns.get("carbon_intensity")
+    _require(isinstance(carbon, dict), "exogenous v2 manifest 缺少 carbon_intensity")
+    _require(
+        carbon.get("classification") == CARBON_SOURCE_KIND,
+        "carbon_intensity 的 classification 必须是 "
+        f"{CARBON_SOURCE_KIND!r}，实际 {carbon.get('classification')!r}"
+        "（不得写成 modeled_scenario）",
+    )
+    _require(
+        carbon.get("value") == CARBON_KG_PER_KWH,
+        f"carbon_intensity 的 B1 常数必须是 {CARBON_KG_PER_KWH}，"
+        f"实际 {carbon.get('value')!r}",
+    )
+    decision = carbon.get("human_decision")
+    _require(
+        isinstance(decision, dict) and decision.get("decision_id") == "B1",
+        f"carbon_intensity 缺少 B1 人工批准声明，实际 {decision!r}",
+    )
+
+    pv_approval = (columns.get("local_pv_kw") or {}).get("b5_pv_approval")
+    _require(
+        isinstance(pv_approval, dict)
+        and pv_approval.get("decision_id") == B5_PV_APPROVAL["decision_id"],
+        f"local_pv_kw 缺少 B5-PV 人工批准声明，实际 {pv_approval!r}",
+    )
+    for name, expected in B5_PV_APPROVAL.items():
+        _require(
+            pv_approval.get(name) == expected,
+            f"local_pv_kw 的 B5-PV 声明 {name} 与冻结值不符："
+            f"期望 {expected!r} 实际 {pv_approval.get(name)!r}",
+        )
+
+    arrival = columns.get("arrival")
+    _require(isinstance(arrival, dict), "exogenous v2 manifest 缺少 arrival")
+    arrival_approval = arrival.get("b5_approval")
+    _require(
+        isinstance(arrival_approval, dict)
+        and arrival_approval.get("decision_id") == B5_ARRIVAL_APPROVAL["decision_id"],
+        f"arrival 缺少 B5-ARRIVAL 人工批准声明，实际 {arrival_approval!r}",
+    )
+    for name, expected in B5_ARRIVAL_APPROVAL.items():
+        _require(
+            arrival_approval.get(name) == expected,
+            f"arrival 的 B5-ARRIVAL 声明 {name} 与冻结值不符："
+            f"期望 {expected!r} 实际 {arrival_approval.get(name)!r}",
+        )
+    _require(
+        arrival_approval.get("uses_archive_dates") is False,
+        "arrival 的 B5-ARRIVAL 必须声明 uses_archive_dates=False",
+    )
+    _require(
+        arrival.get("uses_archive_dates") is False,
+        "arrival 不得声明使用 archive 的日期/星期/时区",
+    )
+
+    declared_output = payload.get("output")
+    _require(isinstance(declared_output, dict), "exogenous v2 manifest 缺少 output")
+    _require(
+        declared_output.get("path") == EXOGENOUS_OUTPUT_LOGICAL_PATH,
+        f"exogenous v2 manifest 的 output.path 必须是 "
+        f"{EXOGENOUS_OUTPUT_LOGICAL_PATH!r}，实际 {declared_output.get('path')!r}",
+    )
+    _require(
+        declared_output.get("sha256") == EXOGENOUS_OUTPUT_SHA256,
+        "exogenous v2 manifest 声明的 output.sha256 与冻结登记不符",
+    )
+    measured = _sha256_file(exogenous_parquet_path)
+    _require(
+        measured == declared_output.get("sha256"),
+        f"v2 外生驱动表的实测 SHA-256 与 manifest 声明不符："
+        f"声明={declared_output.get('sha256')} 实测={measured}",
+    )
+    return payload
+
+
+def exogenous_rate_template(
+    exogenous_manifest_path: Path | str = (
+        "data/manifest/singapore_2024_exogenous_v2.json"
+    ),
+) -> list[float]:
+    """从**已核验**的 v2 manifest 读 48 槽 rate template（期望值口径的模板）。"""
+    payload = _load_json(Path(exogenous_manifest_path))
+    template = (payload.get("columns") or {}).get("arrival", {}).get("rate_template")
+    _require(
+        isinstance(template, list) and len(template) == ARRIVAL_TEMPLATE_SLOTS,
+        f"arrival rate_template 必须是 {ARRIVAL_TEMPLATE_SLOTS} 项的 list",
+    )
+    return template
+
+
+# --- PV / 风电：对 forecast 的逐点确定性变换 ---------------------------------
+
+def pv_forecast(
+    target_timestamps: pd.DatetimeIndex,
+    ghi_w_per_m2,
+    temp_air_deg_c,
+    wind_speed_10m_mps,
+) -> tuple[float, ...]:
+    """由 **forecast** 的 GHI / 温度 / 10 m 风速构造 PV forecast（逐点）。
+
+    **复用** `scenario.exogenous_drivers.local_pv_kw`——与真值物化是同一份物理实现。
+    """
+    _require(len(target_timestamps) > 0, "PV forecast 的 target 不得为空")
+    values = local_pv_kw(
+        pd.DatetimeIndex(target_timestamps), ghi_w_per_m2, temp_air_deg_c,
+        wind_speed_10m_mps,
+    )
+    return tuple(float(v) for v in values)
+
+
+def wind_forecast(wind_speed_10m_mps) -> tuple[float, ...]:
+    """由 **forecast** 的 10 m 风速构造风电 forecast（逐点）。
+
+    **复用** `scenario.exogenous_drivers.wind_generation_kw`。
+    """
+    values = wind_generation_kw(wind_speed_10m_mps)
+    return tuple(float(v) for v in values)
+
+
+def arrival_forecast(
+    target_timestamps: pd.DatetimeIndex, rate_template
+) -> tuple[float, ...]:
+    """**D3**：arrival forecast 是模板的**期望** `λ(slot) × 1000`。
+
+    **不**调用 `generate_arrival`、**不**使用 Poisson seed——
+    v2 驱动表的 Poisson 列只是**模拟场景的实际 arrival**，不是未来已知 forecast。
+    """
+    template = tuple(float(v) for v in rate_template)
+    _require(
+        len(template) == ARRIVAL_TEMPLATE_SLOTS,
+        f"rate_template 必须有 {ARRIVAL_TEMPLATE_SLOTS} 项，实际 {len(template)}",
+    )
+    slots = arrival_template_slot(pd.DatetimeIndex(target_timestamps))
+    return tuple(
+        template[int(slot)] * ARRIVAL_MEAN_WORK_UNITS_PER_HALF_HOUR for slot in slots
+    )
+
+
+# --- 组装 ---------------------------------------------------------------------
+
+def build_formal_scenario(
+    split: SplitName,
+    *,
+    origin: int,
+    forecast_cutoff: int,
+    canonical_parquet_path: Path | str,
+    canonical_manifest_path: Path | str,
+    split_manifest_path: Path | str,
+    policy_manifest_path: Path | str,
+    exogenous_manifest_path: Path | str,
+    exogenous_source_manifest_path: Path | str,
+    horizon: int | None = None,
+) -> ScenarioBundle:
+    """构造 `mode="formal"` 的七序列 `ScenarioBundle`（**纯构造**，不写文件）。
+
+    `origin` 是 split-**本地** half-hour step。历史窗口取**全局** `[i−48, i)`，
+    因此 validation / test 的起点可以使用其**之前已经发生**的 canonical 历史。
+
+    信任链：policy-v2 → split → canonical manifest → canonical parquet，
+    外加 exogenous v2 manifest / source v3 manifest / v2 output hash，
+    逐层校验，任一不符即 fail closed。
+    """
+    if isinstance(origin, bool) or not isinstance(origin, int):
+        raise FormalScenarioError(f"origin 必须是整数，实际 {origin!r}")
+    if isinstance(forecast_cutoff, bool) or not isinstance(forecast_cutoff, int):
+        raise FormalScenarioError(f"forecast_cutoff 必须是整数，实际 {forecast_cutoff!r}")
+
+    global_origin = validate_forecast_origin(split, origin, forecast_cutoff)
+    history_start = global_origin - FORECAST_PERIOD_STEPS
+    _require(
+        history_start >= 0,
+        f"{split} 内 origin={origin}（全局 {global_origin}）不足 "
+        f"{FORECAST_PERIOD_STEPS} 步历史；fail closed",
+    )
+
+    # 1) 五类 driver forecast：**复用** M1.3e 的完整信任链与因果 provider
+    artifact = build_available_exogenous_forecast(
+        split,
+        origin=origin,
+        forecast_cutoff=forecast_cutoff,
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        policy_manifest_path=policy_manifest_path,
+    )
+    generated_at = artifact.generated_at
+    target_timestamps = tuple(artifact.target_timestamps)
+
+    # 2) canonical：再验一次时间轴（artifact 已验，此处供 PV 的日历时刻与历史窗口）
+    canonical_parquet_path = Path(canonical_parquet_path)
+    frame = pd.read_parquet(canonical_parquet_path)
+    validate_canonical_timeline(frame, label="canonical")
+    stamps = pd.DatetimeIndex(frame["timestamp"])
+
+    # 3) exogenous v2 / source v3 的逐字节核验（含 v2 output hash）
+    exogenous_parquet_path = REPO_ROOT / EXOGENOUS_OUTPUT_LOGICAL_PATH
+    exogenous = load_verified_exogenous(
+        exogenous_manifest_path,
+        exogenous_source_manifest_path,
+        exogenous_parquet_path=exogenous_parquet_path,
+    )
+
+    # 4) 七条序列：全部只用 `[i−48, i)`
+    series: dict[str, tuple[float, ...]] = {}
+    for field, column in SEASONAL_DRIVER_COLUMNS.items():
+        series[field] = seasonal_naive_forecast(
+            frame[column].to_numpy(), origin=global_origin,
+            forecast_cutoff=forecast_cutoff,
+        )
+    drv = artifact.series.as_dict()
+    ghi_f = drv[GHI_COLUMN]
+    temp_f = drv[PV_TEMPERATURE_COLUMN]
+    v10_f = drv[WIND_SPEED_COLUMN]
+    series["pv_forecast"] = pv_forecast(
+        pd.DatetimeIndex(target_timestamps), ghi_f, temp_f, v10_f)
+    series["wind_forecast"] = wind_forecast(v10_f)
+    series["carbon_forecast"] = (CARBON_KG_PER_KWH,) * forecast_cutoff
+    series["arrival_forecast"] = arrival_forecast(
+        pd.DatetimeIndex(target_timestamps),
+        exogenous["columns"]["arrival"]["rate_template"],
+    )
+
+    # 5) provenance：七项 `generated_at` 恒等，时间顺序自洽
+    target_end_exclusive = (
+        datetime.fromisoformat(target_timestamps[-1]) + timedelta(minutes=STEP_MINUTES)
+    ).isoformat()
+    lookback_start = pd.Timestamp(stamps[history_start]).isoformat()
+
+    sources = _formal_sources(
+        canonical_parquet_path=canonical_parquet_path,
+        canonical_manifest_path=canonical_manifest_path,
+        split_manifest_path=split_manifest_path,
+        policy_manifest_path=policy_manifest_path,
+        exogenous_manifest_path=exogenous_manifest_path,
+        exogenous_source_manifest_path=exogenous_source_manifest_path,
+        code_revision=artifact.code_revision,
+    )
+
+    provenance = {
+        field: ForecastSeriesProvenance(
+            series_name=field,
+            source_kind=FORMAL_SOURCE_KINDS[field],
+            method=_method_for(field),
+            generated_at=generated_at,
+            information_cutoff_exclusive=generated_at,
+            target_start=generated_at,
+            target_end_exclusive=target_end_exclusive,
+            lookback_start=lookback_start,
+            lookback_end_exclusive=generated_at,
+            model_name=MODEL_NAME,
+            model_version=MODEL_VERSION,
+            code_revision=artifact.code_revision,
+            seed=None,
+            sources=sources,
+        )
+        for field in FORMAL_SOURCE_KINDS
+    }
+
+    bundle = ScenarioBundle(
+        split=split,
+        start=str(origin),
+        horizon=forecast_cutoff if horizon is None else horizon,
+        forecast_cutoff=forecast_cutoff,
+        mode="formal",
+        generated_at=generated_at,
+        forecast_provenance=ScenarioForecastProvenance(**provenance),
+        **series,
+    )
+    # 自证：formal bundle 必须能通过训练 purpose gate
+    from contracts.validators import validate_forecast_purpose
+
+    validate_forecast_purpose(bundle, purpose="training")
+    return bundle
+
+
+def _method_for(field: str) -> str:
+    if field in SEASONAL_DRIVER_COLUMNS:
+        return "trailing_seasonal_naive"
+    if field == "pv_forecast":
+        return "pvlib_v0.15.2_chain_from_causal_driver_forecasts"
+    if field == "wind_forecast":
+        return "shear_law_and_frozen_power_curve_from_causal_wind_forecast"
+    if field == "carbon_forecast":
+        return "annual_constant_from_verified_v2_manifest"
+    return "expected_rate_template_from_frozen_benchmark_calibration"
+
+
+def _formal_sources(
+    *,
+    canonical_parquet_path: Path,
+    canonical_manifest_path: Path,
+    split_manifest_path: Path,
+    policy_manifest_path: Path,
+    exogenous_manifest_path: Path,
+    exogenous_source_manifest_path: Path,
+    code_revision: str,
+) -> tuple[ArtifactDigest, ...]:
+    """六条上游制品的 digest（角色、逻辑路径、实测 SHA-256）。"""
+    entries = (
+        ("canonical_parquet", canonical_parquet_path),
+        ("canonical_manifest", canonical_manifest_path),
+        ("split_manifest", split_manifest_path),
+        ("forecast_policy_manifest", policy_manifest_path),
+        ("exogenous_drivers_manifest", exogenous_manifest_path),
+        ("exogenous_source_manifest", exogenous_source_manifest_path),
+    )
+    return tuple(
+        ArtifactDigest(
+            role=role,
+            logical_path=logical_repo_path(path),
+            sha256=_sha256_file(path),
+        )
+        for role, path in entries
+    )
+

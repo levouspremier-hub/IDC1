@@ -50,6 +50,7 @@ DEV_PROVENANCE_NOTE = "非物理 dev 锚点：synthetic / oracle_debug 路径没
 
 # 生成器自身（用于 provenance 的 code_revision 与其代码 hash）。
 GENERATOR_LOGICAL_PATH = "scenario/scenario.py"
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 __all__ = [
     "DEV_PROVENANCE_ANCHOR",
@@ -278,9 +279,32 @@ def _build_from_manifest(
     for field in _REQUIRED_MANIFEST_FIELDS:
         if field not in manifest:
             raise ValueError(f"manifest 缺少字段 {field!r}（需单位/来源/hash）")
-    # 正式 `ScenarioBundle` 接线（canonical split + causal forecast + 四项缺口口径）
-    # 属 M1.3f/M1.3g；本卡只建立契约、因果 provider 与 policy manifest。
-    raise NotImplementedError(
-        "正式 ScenarioBundle 接线属 M1.3g（M1.2 raw freeze 已完成；"
-        "M1.3 正式数据集/split/forecast provider 尚未接线）"
+    # M1.3g-b：正式路径交给 `scenario.formal_scenario` 的 causal 内核。
+    # **只有**在正式 split manifest 存在时才会走到这里（缺失已在上面 fail closed）。
+    from scenario.formal_scenario import build_formal_scenario
+
+    required = (
+        "origin_index", "horizon", "forecast_cutoff",
+        "canonical_parquet_path", "canonical_manifest_path",
+        "policy_manifest_path", "exogenous_manifest_path",
+        "exogenous_source_manifest_path",
+    )
+    missing = [field for field in required if field not in manifest]
+    if missing:
+        raise ValueError(
+            f"正式 split manifest 缺少字段 {missing}（M1.3g-c 负责生成完整 schema）"
+        )
+    return build_formal_scenario(
+        split,
+        origin=int(manifest["origin_index"]),
+        forecast_cutoff=int(manifest["forecast_cutoff"]),
+        horizon=int(manifest["horizon"]),
+        canonical_parquet_path=REPO_ROOT / manifest["canonical_parquet_path"],
+        canonical_manifest_path=REPO_ROOT / manifest["canonical_manifest_path"],
+        split_manifest_path=manifest_path,
+        policy_manifest_path=REPO_ROOT / manifest["policy_manifest_path"],
+        exogenous_manifest_path=REPO_ROOT / manifest["exogenous_manifest_path"],
+        exogenous_source_manifest_path=(
+            REPO_ROOT / manifest["exogenous_source_manifest_path"]
+        ),
     )
