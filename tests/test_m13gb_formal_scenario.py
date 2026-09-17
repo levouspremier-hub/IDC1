@@ -335,7 +335,7 @@ def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int):
         "split_manifest_path": split_manifest,
         "policy_manifest_path": policy,
         "exogenous_manifest_path": exogenous,
-        "expected_exogenous_manifest_sha256": _sha256(exogenous),
+        "exogenous_manifest_sha256": _sha256(exogenous),
     }
 
 
@@ -349,33 +349,39 @@ def _validation_build(**over):
 @needs_assets
 def test_future_truth_mutation_does_not_change_any_forecast(tmp_path):
     """`[i, i+C)` 的 canonical 真值变化**不得**改变七条 forecast 中的任何一条。"""
-    baseline = _validation_build()
-    mutated = _validation_build(**_mutated_chain(
+    mutated = _mutated_chain(
         tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN,
-        mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF))
+        mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF)
+    _patch_frozen_root(monkeypatch,
+                       manifest_sha=mutated["exogenous_manifest_sha256"])
+    baseline = _validation_build()
+    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
     for field in BUNDLE_FORECAST_FIELDS:
         assert np.array_equal(
             np.asarray(getattr(baseline, field)),
-            np.asarray(getattr(mutated, field)),
+            np.asarray(getattr(after, field)),
         ), field
 
 
 @needs_assets
-def test_history_mutation_changes_the_derived_forecasts(tmp_path):
+def test_history_mutation_changes_the_derived_forecasts(tmp_path, monkeypatch):
     """`[i−48, i)` 的 driver 真值变化**必须**体现在 forecast 上。
 
     mutation 只改**天气三列**（温度 / GHI / 10 m 风速），因此断言的是
     由它们推导的三条：温度、PV、风电。（price / load / carbon / arrival
     的输入没有被改动，**不应**变化——这里不断言它们。）
     """
-    baseline = _validation_build()
-    mutated = _validation_build(**_mutated_chain(
+    mutated = _mutated_chain(
         tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN - PERIOD_STEPS,
-        mutate_to=_GLOBAL_VALIDATION_ORIGIN))
+        mutate_to=_GLOBAL_VALIDATION_ORIGIN)
+    _patch_frozen_root(monkeypatch,
+                       manifest_sha=mutated["exogenous_manifest_sha256"])
+    baseline = _validation_build()
+    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
     for field in ("temperature_forecast", "pv_forecast", "wind_forecast"):
         assert not np.array_equal(
             np.asarray(getattr(baseline, field)),
-            np.asarray(getattr(mutated, field)),
+            np.asarray(getattr(after, field)),
         ), field
 
 
@@ -523,7 +529,7 @@ def test_dirty_check_covers_the_same_paths():
 # --- 9. M1.3g-b-R1：外生链与本次调用的交叉绑定 --------------------------------
 
 @needs_assets
-def test_exogenous_manifest_binding_must_match_the_actual_objects(tmp_path):
+def test_exogenous_manifest_binding_must_match_the_actual_objects(tmp_path, monkeypatch):
     """R1-2：v2 manifest 声明的 canonical/split path 与 hash 必须等于**实际提供**的对象。
 
     这里让 manifest 声明的 canonical hash **故意**与本次调用实际使用的 parquet 不同——
@@ -535,13 +541,13 @@ def test_exogenous_manifest_binding_must_match_the_actual_objects(tmp_path):
     payload["canonical_parquet_sha256"] = "0" * 64
     target = root / "exogenous_v2.json"
     target.write_text(json.dumps(payload))
+    _patch_frozen_root(monkeypatch, manifest_sha=_sha256(target))
     with pytest.raises(ValueError):
-        build(exogenous_manifest_path=target,
-              expected_exogenous_manifest_sha256=_sha256(target))
+        build(exogenous_manifest_path=target)
 
 
 @needs_assets
-def test_exogenous_manifest_path_binding_must_match(tmp_path):
+def test_exogenous_manifest_path_binding_must_match(tmp_path, monkeypatch):
     """R1-2：声明的 **path** 也必须等于实际提供的路径。"""
     root = tmp_path / "manifests"
     root.mkdir()
@@ -549,9 +555,9 @@ def test_exogenous_manifest_path_binding_must_match(tmp_path):
     payload["split_manifest_path"] = "<external>/somewhere_else.json"
     target = root / "exogenous_v2.json"
     target.write_text(json.dumps(payload))
+    _patch_frozen_root(monkeypatch, manifest_sha=_sha256(target))
     with pytest.raises(ValueError):
-        build(exogenous_manifest_path=target,
-              expected_exogenous_manifest_sha256=_sha256(target))
+        build(exogenous_manifest_path=target)
 
 
 @needs_assets
@@ -628,3 +634,119 @@ def test_seasonal_series_do_not_recompute_the_provider(monkeypatch):
     monkeypatch.setattr(module, "seasonal_naive_forecast", boom)
     bundle = build()
     assert len(bundle.price_forecast) == _CUTOFF
+
+
+# --- 12. M1.3g-b-R2：信任根不得由调用者覆盖 -----------------------------------
+#
+# 正式入口**只能**使用模块冻结常量。调用者**不得**通过公开 API 传入
+# hash / revision / trust-root 覆盖。临时链测试只能 monkeypatch **模块内部**
+# 冻结常量，并调用**未带 override** 的公开 `build_formal_scenario`。
+
+TRUST_ROOT_OVERRIDE_KWARGS = (
+    "expected_exogenous_manifest_sha256",
+    "expected_exogenous_source_manifest_sha256",
+    "expected_exogenous_output_sha256",
+)
+
+
+def test_public_signature_has_no_trust_root_override():
+    """R2-1/2：公开签名里不得出现任何 expected_* / trust-root 覆盖参数。"""
+    import inspect
+
+    for fn in (formal().build_formal_scenario, formal().load_verified_exogenous):
+        params = set(inspect.signature(fn).parameters)
+        leaked = params & set(TRUST_ROOT_OVERRIDE_KWARGS)
+        assert not leaked, f"{fn.__name__} 暴露了信任根覆盖参数：{sorted(leaked)}"
+        assert not any("expected" in name for name in params), fn.__name__
+
+
+@needs_assets
+def test_passing_a_trust_root_override_is_a_type_error():
+    """R2-1：显式传 expected_* 必须 `TypeError`（不是被静默忽略）。"""
+    for kwarg in TRUST_ROOT_OVERRIDE_KWARGS:
+        with pytest.raises(TypeError):
+            build(**{kwarg: "0" * 64})
+
+
+@needs_assets
+def test_a_self_consistent_tampered_manifest_cannot_be_admitted(tmp_path, monkeypatch):
+    """R2-4：自洽篡改的 exogenous manifest，**即使调用者知道它的 hash**，也不得放行。
+
+    这里把模块冻结根 monkeypatch 成被篡改 manifest 的**真实** hash
+    （模拟「调用者知道 hash」），交叉绑定仍然必须拒绝——因为声明的 canonical
+    对象与本次调用实际提供的对象不符。
+    """
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["canonical_parquet_sha256"] = "0" * 64
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    _patch_frozen_root(monkeypatch, manifest_sha=_sha256(target))
+
+    with pytest.raises(ValueError):
+        build(exogenous_manifest_path=target)
+
+
+@needs_assets
+def test_production_path_only_accepts_the_frozen_hashes(tmp_path):
+    """R2-4：生产 v2/v3 路径只接受**冻结** hash——任何改写都被拒绝。"""
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["readiness"]["formal_training_ready"] = True
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        build(exogenous_manifest_path=target)
+
+    # v1 与「看起来像 v2 但字节不同」的都必须拒绝
+    with pytest.raises(ValueError):
+        build(exogenous_manifest_path=(
+            REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"))
+
+
+def _patch_frozen_root(monkeypatch, *, manifest_sha, source_sha=None, output_sha=None):
+    """把**模块内部**的冻结信任根替换成临时链的值（测试夹具，非公开 API）。"""
+    module = formal()
+    monkeypatch.setattr(module, "EXOGENOUS_MANIFEST_SHA256", manifest_sha)
+    if source_sha is not None:
+        monkeypatch.setattr(module, "EXOGENOUS_SOURCE_MANIFEST_SHA256", source_sha)
+    if output_sha is not None:
+        monkeypatch.setattr(module, "EXOGENOUS_OUTPUT_SHA256", output_sha)
+
+
+# --- 13. M1.3g-b-R2：完全同步的临时链仍然隐藏未来 -----------------------------
+
+@needs_assets
+def test_fully_synced_temp_chain_still_hides_the_future(tmp_path, monkeypatch):
+    """R2-3/4：临时链在替换模块冻结根后，公开入口仍证明七条 forecast 不读未来。"""
+    mutated = _mutated_chain(
+        tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN,
+        mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF)
+    _patch_frozen_root(monkeypatch,
+                       manifest_sha=_sha256(mutated["exogenous_manifest_path"]))
+
+    baseline = _validation_build()
+    after = build(split="validation", origin=_VALIDATION_ORIGIN, **mutated)
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert np.array_equal(
+            np.asarray(getattr(baseline, field)),
+            np.asarray(getattr(after, field)),
+        ), field
+
+
+@needs_assets
+def test_fully_synced_temp_chain_matches_the_repo_forecasts(tmp_path, monkeypatch):
+    """R2-3：临时链（同步后）与仓库链在**未 mutation** 时给出同一组 forecast。"""
+    synced = _mutated_chain(tmp_path, mutate_from=TRAIN_ROWS, mutate_to=TRAIN_ROWS)
+    _patch_frozen_root(monkeypatch,
+                       manifest_sha=_sha256(synced["exogenous_manifest_path"]))
+
+    baseline = _validation_build()
+    after = build(split="validation", origin=_VALIDATION_ORIGIN, **synced)
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert np.array_equal(
+            np.asarray(getattr(baseline, field)),
+            np.asarray(getattr(after, field)),
+        ), field
