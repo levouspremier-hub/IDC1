@@ -96,7 +96,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2 **均已通过**；**g-d 执行完成待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `frozen-refs-v2`**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-c/e/f 均未开始**；**D2–D6 已实现**（D1=g-0、D3=g-b、D2/D6=g-d；D4/D5 属 g-e/g-c）；env 接线与正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2、g-d/R1 **均已通过**；**g-c 执行完成待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `refs_v3`**；**M1.3g-c 正式 split manifest triad**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-e/f 均未开始**；**D1–D6 均已实现**（D1=g-0、D3=g-b、D2/D6=g-d、D5=g-c；D4 属 g-e）；env 接线与正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v9`**（M1.3g-0 起；**v8/v7 buffer 与 checkpoint 均明确拒绝**）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -2346,6 +2346,13 @@ no-load / hogs4 / hogs8 三种负载各 3 个独立批次，共 **9 个生产默
   它已是 **`frozen-refs-v2`**（`aae5a03e…`），其中 `price_ref` / `pv_ref_kw` /
   `wind_ref_kw` / `carbon_factor_ref` 由 **train 行重算**；
   **不得**按测试日或 validation/test 重算。
+- 不得把 **`data/manifest/{train,validation,test}.json` 存在**说成「正式训练就绪」：
+  三份 manifest **明确**声明 `formal_training_ready=false` / `formal_env_ready=false`；
+  「**存在 ≠ 就绪**」。
+- 不得在正式 split manifest 中内置 forecast 数组、未来真值、默认曲线或
+  **单点 `origin_index`**；`candidate_origins` 是 D5 的**完整**合法集合。
+- 不得把正式链绑到 `configs/frozen_refs/refs.json`（v2）：**唯一** refs 是
+  `refs_v3.json`；v2 一律拒绝。
 - 不得把 M1.3d 的 `train_only_statistics` 冒充 normalization refs：
   两者是**不同**的产物（描述统计 vs `frozen-refs-v2`）。
 - 不得在没有 `--replace-declared-v1` 的情况下覆盖 legacy v1 refs。
