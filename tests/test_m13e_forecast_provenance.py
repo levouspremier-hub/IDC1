@@ -306,6 +306,47 @@ def test_v7_artifacts_are_explicitly_rejected():
         RolloutBuffer.from_dict(payload)
 
 
+def test_v8_buffer_is_explicitly_rejected():
+    """要求 1：contract-v8 的 buffer 必须明确拒绝——不迁移、不填零、不静默升级。"""
+    from safe_rl_v2.buffer import RolloutBuffer
+
+    payload = RolloutBuffer().to_dict()
+    payload["contract_version"] = CONTRACT_V8
+    payload["transitions"] = []
+    with pytest.raises((ValueError, KeyError, TypeError)):
+        RolloutBuffer.from_dict(payload)
+
+
+def test_v8_checkpoint_is_explicitly_rejected(tmp_path):
+    """要求 1：contract-v8 的 checkpoint 同样必须明确拒绝。"""
+    import torch
+
+    from checkpointing import CURRENT_ACTION_DIM
+    from checkpointing.versioned import CheckpointVersionError, VersionedCheckpoint
+
+    path = tmp_path / "ckpt.pt"
+    torch.save(
+        {
+            "metadata": {
+                "contract_version_id": CONTRACT_V8,
+                "action_dim": CURRENT_ACTION_DIM,
+                "obs_dim": 128,
+                "schema_hash": "schema-x",
+                "code_revision": "test-rev",
+            },
+            "state": {},
+        },
+        path,
+    )
+    with pytest.raises(CheckpointVersionError):
+        VersionedCheckpoint.load(
+            path,
+            expected_action_dim=CURRENT_ACTION_DIM,
+            expected_obs_dim=128,
+            expected_schema_hash="schema-x",
+        )
+
+
 def test_no_second_hardcoded_version_source():
     """版本只能来自 `contracts.CONTRACT_VERSION_ID`，不得新增硬编码源。"""
     from contracts import CONTRACT_VERSION_ID
