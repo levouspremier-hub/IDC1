@@ -1,13 +1,18 @@
-"""M1.3g-c / R1：正式 split manifest 的**实时输入绑定**校验与物化。
+"""M1.3g-c / R1 / R2：正式 split manifest 的路径来源、实时输入绑定与物化。
 
-**R1 改前缺陷（本文件在实现前必须为红）**：
+**R2 改前缺陷（本文件在实现前必须为红）**：
 
-- 公开 validator 只检查 `path` / `sha256` 的**语法**，**不**解析实际资产：
-  实测把 `inputs.frozen_refs` 改成
-  `{"path": "configs/frozen_refs/refs.json", "sha256": "0"*64}`
-  后 **仍被接受** —— 于是 triad 可以把 refs 指向被取代的 v2 而不被发现；
-- 没有「验证并加载」的唯一公开入口；没有固定角色路径 / 固定 `refs_v3` hash；
-- 物化前的严格上游链调用**可以被绕过**（只有 `build_*` 走，reader 不走）。
+- `manifest_relative_path(split)` 是**声明的唯一公开路径来源**，却返回
+  `data/manifest/<split>.json` —— **superseded 的 v1** 路径。
+  按文档使用它的新代码（正是 g-e/g-f 会做的事）会读到 v1。
+
+**R1 已修复（保留）**：公开 validator 曾只检查 `path` / `sha256` 的**语法**；
+实测把 `inputs.frozen_refs` 改成
+`{"path": "configs/frozen_refs/refs.json", "sha256": "0"*64}` 后**仍被接受**。
+现在 `load_verified_split_manifest()` 是**唯一**的「验证并加载」入口。
+
+**版本层次**：v1 = `superseded_pre_live_input_binding_fix`；
+v2 = `superseded_pre_canonical_path_fix`；**v3 = 唯一候选**。
 
 **本卡只物化 triad**：不保存 forecast 数值、不启动 env 或训练、
 不固定 H/C、不抽样 origin。"""
@@ -36,8 +41,20 @@ V1_SHA256 = {
     "validation": "19f17706fb422315a2432377e0ceaa64d16e70e78155e5656554e39fd22920ca",
     "test": "a40c595ab7641fcd13de54052c0d8cc601e9d332c67c65844198f53274b106d7",
 }
-# **v2**：唯一候选证据
-FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v2"
+# **v2**：已被取代（superseded_pre_canonical_path_fix），逐字节保留
+V2_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v2"
+V2_TRIAD = {
+    "train": V2_SPLIT_DIR / "train.json",
+    "validation": V2_SPLIT_DIR / "validation.json",
+    "test": V2_SPLIT_DIR / "test.json",
+}
+V2_SHA256 = {
+    "train": "e0084a66830aaee8d46c59d43acad586cdffb10c5d4c07d8fb6a5d77f9e77f76",
+    "validation": "1f539fccefb2f2aff02b1a3f142741cc979c042fc0426d7f9e739a7825d46384",
+    "test": "0b4009b87e5408b88060b25449145bc3a603ddb972cacea94db68ad6ee4a40cf",
+}
+# **v3**：唯一候选证据
+FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v3"
 TRIAD = {
     "train": FORMAL_SPLIT_DIR / "train.json",
     "validation": FORMAL_SPLIT_DIR / "validation.json",
@@ -56,7 +73,7 @@ EXOGENOUS_PARQUET = (
 REFS_V3 = REPO_ROOT / "configs/frozen_refs/refs_v3.json"
 REFS_V2 = REPO_ROOT / "configs/frozen_refs/refs.json"
 
-SCHEMA = "m1.3g-formal-split-manifest-v2"
+SCHEMA = "m1.3g-formal-split-manifest-v3"
 CONTRACT_VERSION = "contract-v9"
 REFS_V3_SHA256 = (
     "ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f"
@@ -646,3 +663,117 @@ def test_revision_is_resolvable_from_git():
     assert revision == module._git(
         "log", "-1", "--format=%H", "--", *module.MATERIALIZER_SOURCE_PATHS
     ).strip()
+
+
+# --- 7. M1.3g-c-R2：唯一路径来源必须是 v3 --------------------------------------
+
+@needs_assets
+def test_v1_triad_path_is_now_superseded_and_helper_must_not_return_it():
+    """R2-1 的直接复现：helper 曾返回 **v1** 路径。
+
+    本测试**先断言错误行为仍在**（改前为红），实现后改断 v3。
+    """
+    module = manifests()
+    legacy = {
+        "train": "data/manifest/train.json",
+        "validation": "data/manifest/validation.json",
+        "test": "data/manifest/test.json",
+    }
+    for split in ("train", "validation", "test"):
+        got = module.manifest_relative_path(split)
+        assert got != legacy[split], (
+            f"manifest_relative_path({split!r}) 仍返回 superseded 的 v1 路径 {got!r}"
+        )
+
+
+@needs_assets
+def test_manifest_relative_path_is_exactly_the_v3_candidate_path():
+    """R2-1：三个 split 的 helper 都必须返回 **v3** 路径。"""
+    module = manifests()
+    for split in ("train", "validation", "test"):
+        assert module.manifest_relative_path(split) == (
+            f"data/manifest/formal_splits_v3/{split}.json"), split
+
+
+@needs_assets
+def test_no_public_helper_or_constant_points_at_v1_or_v2():
+    """R2-1：**不得**保留任何返回 v1/v2 的公开 helper、常量或 fallback。"""
+    module = manifests()
+    legacy_dirs = ("data/manifest/formal_splits_v2",)
+    for name in dir(module):
+        if name.startswith("_"):
+            continue
+        value = getattr(module, name)
+        if isinstance(value, str) and "formal_splits" in value:
+            assert "formal_splits_v3" in value, (name, value)
+        if isinstance(value, pathlib.Path) and "formal_splits" in str(value):
+            assert "formal_splits_v3" in str(value), (name, value)
+    # 任何以 `_DIR` / `relative_path` 结尾的公开常量都必须指向 v3
+    for name in ("FORMAL_SPLIT_DIR",):
+        assert "formal_splits_v3" in str(getattr(module, name)), name
+    for legacy in legacy_dirs:
+        assert legacy not in str(module.FORMAL_SPLIT_DIR)
+
+
+@needs_assets
+def test_the_production_entry_uses_the_v3_path():
+    """物化器的默认输出目录必须是 v3。"""
+    assert "formal_splits_v3" in str(materializer().FORMAL_SPLIT_DIR)
+    params = inspect.signature(
+        materializer().materialize_split_manifest_triad).parameters
+    assert "formal_splits_v3" in str(params["out_dir"].default)
+
+
+@needs_assets
+@pytest.mark.parametrize("legacy", ("v1", "v2"))
+@pytest.mark.parametrize("split", ("train", "validation", "test"))
+def test_verified_loader_rejects_superseded_locations(tmp_path, legacy, split):
+    """R2-5：v1 / v2 路径传入 verified loader 必须 **fail closed**。
+
+    即使把 v3 的**内容**放到 v1/v2 的位置，也必须在**位置**上被拒绝。
+    """
+    module = manifests()
+    source = TRIAD[split]
+    if not source.exists():
+        pytest.skip("v3 triad 尚未物化")
+    legacy_dir = (MANIFEST_DIR if legacy == "v1" else V2_SPLIT_DIR)
+    target = legacy_dir / f"__probe_{split}.json"
+    target.write_text(source.read_text(encoding="utf-8"))
+    try:
+        with pytest.raises(ValueError):
+            module.load_verified_split_manifest(target, expected_split=split)
+    finally:
+        target.unlink(missing_ok=True)
+
+
+@needs_assets
+@pytest.mark.parametrize("split", ("train", "validation", "test"))
+def test_v2_and_v1_manifests_are_rejected_by_the_loader(split):
+    """R2-3/5：v1 与 v2 的**真实文件**都必须被拒绝（schema 不同 + 位置已取代）。"""
+    module = manifests()
+    for path in (V1_TRIAD[split], V2_TRIAD[split]):
+        with pytest.raises(ValueError):
+            module.load_verified_split_manifest(path, expected_split=split)
+
+
+@needs_assets
+def test_v2_triad_is_preserved_byte_for_byte():
+    """R2-2：v2 三份**逐字节不变**。"""
+    for split, path in V2_TRIAD.items():
+        assert _sha256(path) == V2_SHA256[split], split
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload["schema"] == "m1.3g-formal-split-manifest-v2", split
+
+
+@needs_assets
+def test_v3_semantics_match_v2():
+    """R2-3：v3 的语义输入必须与 v2 **相同**（只有 schema 与位置变）。"""
+    for split in TRIAD:
+        v2 = json.loads(V2_TRIAD[split].read_text(encoding="utf-8"))
+        v3 = json.loads(TRIAD[split].read_text(encoding="utf-8"))
+        for key in ("contract_version", "split", "split_rows", "time_range",
+                    "frequency", "history_steps", "candidate_origins", "inputs",
+                    "readiness"):
+            assert v3[key] == v2[key], (split, key)
+        assert v3["schema"] == SCHEMA
+        assert v2["schema"] == "m1.3g-formal-split-manifest-v2"
