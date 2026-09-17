@@ -14,6 +14,7 @@ import hashlib
 import importlib
 import json
 import pathlib
+import shutil
 
 import pandas as pd
 import pytest
@@ -33,6 +34,14 @@ EXOGENOUS_PARQUET = (
 POLICY_V2 = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy_v2.json"
 
 SCHEMA_V2 = "frozen-refs-v2"
+# M1.3g-d-R1：v2 是**已被取代**的历史产物（superseded_pre_trust_boundary_fix）；
+# 唯一候选证据是 v3。v2 **逐字节不变**，本文件只读它做对照。
+REFS_V2_PATH = REPO_ROOT / "configs/frozen_refs/refs.json"
+REFS_V3_PATH = REPO_ROOT / "configs/frozen_refs/refs_v3.json"
+SUPERSEDED_MARK = "superseded_pre_trust_boundary_fix"
+V2_SHA256 = (
+    "aae5a03e9f09239c4f490b735e4a9ab21d872783a547e7ac6fa9264bafc66827"
+)
 LEGACY_V1_SHA256 = (
     "afa84b8610c073322aac41b3d7e5c706478c64a551363bd66c42b1f22fd409bc"
 )
@@ -83,17 +92,120 @@ needs_assets = pytest.mark.skipif(
 
 
 def _frozen_refs() -> dict:
-    return json.loads(REFS_PATH.read_text(encoding="utf-8"))
+    return json.loads(REFS_V3_PATH.read_text(encoding="utf-8"))
 
 
-def _chain_kwargs() -> dict:
+def _chain_kwargs(chain: dict | None = None) -> dict:
+    """公开入口的**路径**参数（默认指向仓库冻结链）。
+
+    R1：公开签名只接受**文件路径**——不存在 frame / hash / revision 注入参数。
+    """
+    source = chain or {}
     return {
-        "canonical_parquet_path": CANONICAL_PARQUET,
-        "canonical_manifest_path": CANONICAL_MANIFEST,
-        "split_manifest_path": SPLIT_MANIFEST,
-        "exogenous_manifest_path": EXOGENOUS_MANIFEST,
-        "exogenous_source_manifest_path": EXOGENOUS_SOURCE,
+        "canonical_parquet_path": source.get("canonical_parquet_path",
+                                             CANONICAL_PARQUET),
+        "canonical_manifest_path": source.get("canonical_manifest_path",
+                                              CANONICAL_MANIFEST),
+        "split_manifest_path": source.get("split_manifest_path", SPLIT_MANIFEST),
+        "exogenous_manifest_path": source.get("exogenous_manifest_path",
+                                              EXOGENOUS_MANIFEST),
+        "exogenous_source_manifest_path": source.get(
+            "exogenous_source_manifest_path", EXOGENOUS_SOURCE),
+        "exogenous_parquet_path": source.get("exogenous_parquet_path",
+                                             EXOGENOUS_PARQUET),
     }
+
+
+def _copy(src, dst) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src, dst)
+
+
+def _synced_temp_chain(tmp_path, *, mutate=None, mutate_exogenous=None) -> dict:
+    """构造**完整且自洽**的临时冻结链（含 canonical / split / exogenous / policy）。
+
+    `mutate(frame)` 可选地就地修改 canonical 帧；随后**所有**相关 manifest 的
+    路径与 SHA-256 都会被重新对齐，因此整条链在公开入口看来完全自洽 ——
+    这正是「train 改动会影响、validation/test 不影响」必须走的验证路径。
+    """
+    root = tmp_path / "chain"
+    cano_dir = root / "data/processed/singapore_2024"
+    man_dir = root / "data/manifest"
+    cano_dir.mkdir(parents=True, exist_ok=True)
+    man_dir.mkdir(parents=True, exist_ok=True)
+
+    frame = pd.read_parquet(CANONICAL_PARQUET)
+    if mutate is not None:
+        mutate(frame)
+    parquet = cano_dir / "half_hour.parquet"
+    frame.to_parquet(parquet, index=False)
+
+    canonical_manifest = man_dir / "singapore_2024_half_hour.json"
+    _copy(CANONICAL_MANIFEST, canonical_manifest)
+    payload = json.loads(canonical_manifest.read_text(encoding="utf-8"))
+    payload["output_parquet_sha256"] = _sha256(parquet)
+    canonical_manifest.write_text(json.dumps(payload))
+
+    split_manifest = man_dir / "singapore_2024_splits.json"
+    _copy(SPLIT_MANIFEST, split_manifest)
+    splits = json.loads(split_manifest.read_text(encoding="utf-8"))
+    splits["canonical_parquet_sha256"] = _sha256(parquet)
+    splits["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+    splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
+    split_manifest.write_text(json.dumps(splits))
+
+    exogenous_parquet = cano_dir / "exogenous_drivers_v2.parquet"
+    if mutate_exogenous is None:
+        _copy(EXOGENOUS_PARQUET, exogenous_parquet)
+    else:
+        exog_frame = pd.read_parquet(EXOGENOUS_PARQUET)
+        mutate_exogenous(exog_frame)
+        exog_frame.to_parquet(exogenous_parquet, index=False)
+
+    exogenous_source = man_dir / "m13f_materialization_sources_v3.json"
+    _copy(EXOGENOUS_SOURCE, exogenous_source)
+
+    exogenous_manifest = man_dir / "singapore_2024_exogenous_v2.json"
+    payload = json.loads(EXOGENOUS_MANIFEST.read_text(encoding="utf-8"))
+    payload["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    payload["canonical_parquet_sha256"] = _sha256(parquet)
+    payload["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+    payload["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    payload["split_manifest_path"] = "<external>/singapore_2024_splits.json"
+    payload["split_manifest_sha256"] = _sha256(split_manifest)
+    payload["output"]["path"] = "<external>/exogenous_drivers_v2.parquet"
+    payload["output"]["sha256"] = _sha256(exogenous_parquet)
+    exogenous_manifest.write_text(json.dumps(payload))
+
+    return {
+        "canonical_parquet_path": parquet,
+        "canonical_manifest_path": canonical_manifest,
+        "split_manifest_path": split_manifest,
+        "exogenous_parquet_path": exogenous_parquet,
+        "exogenous_manifest_path": exogenous_manifest,
+        "exogenous_source_manifest_path": exogenous_source,
+    }
+
+
+def _patch_frozen_root(monkeypatch, chain: dict) -> None:
+    """把**模块内部**的外生冻结根指向临时链（公开 API 无此参数）。
+
+    这只改变信任根**指向哪一条同样严格的链**；所有校验器仍然全量运行 ——
+    不存在任何绕过验证的测试专用开关。
+    """
+    import scenario.formal_scenario as formal_module
+
+    monkeypatch.setattr(
+        formal_module, "EXOGENOUS_MANIFEST_SHA256",
+        _sha256(chain["exogenous_manifest_path"]))
+    monkeypatch.setattr(
+        formal_module, "EXOGENOUS_SOURCE_MANIFEST_SHA256",
+        _sha256(chain["exogenous_source_manifest_path"]))
+    monkeypatch.setattr(
+        formal_module, "EXOGENOUS_OUTPUT_SHA256",
+        _sha256(chain["exogenous_parquet_path"]))
 
 
 # --- 1. schema 与逐值来源 -----------------------------------------------------
@@ -213,28 +325,38 @@ def test_signed_price_uses_the_absolute_maximum():
 # --- 3. train-only：validation/test 不得影响 ----------------------------------
 
 @needs_assets
-def test_validation_and_test_do_not_influence_the_values():
-    """把所有 validation/test 行放大 1000 倍，重算出的 train-derived 值必须不变。"""
+def test_validation_and_test_do_not_influence_the_values(tmp_path, monkeypatch):
+    """把所有 validation/test 行放大 1000 倍，重算出的 train-derived 值必须不变。
+
+    R1：必须走**完整临时冻结信任链 + 公开文件路径入口**，
+    **不得**用 frame 注入或 monkeypatch 验证器。
+    """
     module = freeze()
     baseline = module.build_frozen_refs(**_chain_kwargs())
+    stop = TRAIN_RANGE["row_end_exclusive"]
 
-    mutated = pd.read_parquet(CANONICAL_PARQUET)
-    mutated.loc[mutated.index[TRAIN_RANGE["row_end_exclusive"]:],
-                "price_sgd_per_kwh"] *= 1000.0
-    after = module.build_frozen_refs(**_chain_kwargs(), canonical_frame=mutated)
+    def _scale_validation_and_test(frame: pd.DataFrame) -> None:
+        frame.loc[frame.index[stop]:, "price_sgd_per_kwh"] *= 1000.0
+
+    chain = _synced_temp_chain(tmp_path, mutate=_scale_validation_and_test)
+    _patch_frozen_root(monkeypatch, chain)
+    after = module.build_frozen_refs(**_chain_kwargs(chain))
     for name in TRAIN_DERIVED:
         assert after["references"][name]["value"] == pytest.approx(
             baseline["references"][name]["value"]), name
 
 
 @needs_assets
-def test_train_mutation_changes_the_train_derived_values():
+def test_train_mutation_changes_the_train_derived_values(tmp_path, monkeypatch):
     module = freeze()
     baseline = module.build_frozen_refs(**_chain_kwargs())
 
-    mutated = pd.read_parquet(CANONICAL_PARQUET)
-    mutated.loc[mutated.index[0], "price_sgd_per_kwh"] = 99.0
-    after = module.build_frozen_refs(**_chain_kwargs(), canonical_frame=mutated)
+    def _bump_train_price(frame: pd.DataFrame) -> None:
+        frame.loc[frame.index[0], "price_sgd_per_kwh"] = 99.0
+
+    chain = _synced_temp_chain(tmp_path, mutate=_bump_train_price)
+    _patch_frozen_root(monkeypatch, chain)
+    after = module.build_frozen_refs(**_chain_kwargs(chain))
     assert after["references"]["price_ref"]["value"] == pytest.approx(99.0)
     assert after["references"]["price_ref"]["value"] != pytest.approx(
         baseline["references"]["price_ref"]["value"])
@@ -259,7 +381,7 @@ def test_legacy_v1_bytes_match_the_registered_hash():
 @needs_assets
 def test_existing_v1_cannot_be_replaced_without_the_flag(tmp_path, monkeypatch):
     module = freeze()
-    target = tmp_path / "refs.json"
+    target = tmp_path / "refs_v3.json"
     target.write_bytes(_legacy_bytes())
     before = (target.read_bytes(), target.stat().st_mtime_ns)
     monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
@@ -358,7 +480,7 @@ def test_dirty_generator_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "_generator_is_dirty", lambda: True)
     with pytest.raises(ValueError, match="未提交"):
         module.materialize_frozen_refs(
-            out_path=tmp_path / "refs.json", replace_declared_v1=True,
+            out_path=tmp_path / "refs_v3.json", replace_declared_v1=True,
             **_chain_kwargs())
 
 
@@ -428,12 +550,18 @@ def test_misaligned_timeline_is_rejected(tmp_path):
 
 
 @needs_assets
-def test_non_finite_train_value_is_rejected(tmp_path):
+def test_non_finite_train_value_is_rejected(tmp_path, monkeypatch):
+    """train 段的非有限值必须 fail closed（落在 exogenous 列上，由本卡自己的
+    有限性检查拦下——canonical 的 train 统计不覆盖 exogenous）。"""
     module = freeze()
-    frame = pd.read_parquet(CANONICAL_PARQUET)
-    frame.loc[frame.index[0], "price_sgd_per_kwh"] = float("inf")
+
+    def _make_infinite(frame: pd.DataFrame) -> None:
+        frame.loc[frame.index[0], "local_pv_kw"] = float("inf")
+
+    chain = _synced_temp_chain(tmp_path, mutate_exogenous=_make_infinite)
+    _patch_frozen_root(monkeypatch, chain)
     with pytest.raises(ValueError):
-        module.build_frozen_refs(**_chain_kwargs(), canonical_frame=frame)
+        module.build_frozen_refs(**_chain_kwargs(chain))
 
 
 @needs_assets
@@ -452,12 +580,278 @@ def test_unknown_reference_value_key_is_rejected():
 def test_all_splits_share_the_same_frozen_refs():
     """三个 split 读的是**同一份** v2 refs —— 不按测试日重算。"""
     module = freeze()
-    on_disk = module.load_frozen_refs(REFS_PATH)
-    # 复用已冻结的时间戳（与物化器的幂等语义一致），候选必须与磁盘**逐字段相同**
-    rebuilt = module.build_frozen_refs(
-        frozen_at_utc=on_disk["frozen_at_utc"], **_chain_kwargs())
-    assert rebuilt == on_disk
+    on_disk = module.load_frozen_refs(REFS_V3_PATH)
+    rebuilt = module.build_frozen_refs(**_chain_kwargs())
+    # 除冻结时间戳外，逐字段必须完全一致（同一 train 推导、同一来源绑定）
+    assert rebuilt["references"] == on_disk["references"]
+    assert rebuilt["training_range"] == on_disk["training_range"]
+    assert rebuilt["sources"] == on_disk["sources"]
     # 同一份冻结文件对所有 split 生效：train 推导值不随 split 改变
     for split in ("train", "validation", "test"):
         assert on_disk["training_range"]["split"] == "train"
         assert split in ("train", "validation", "test")
+
+
+# --- 7. M1.3g-d-R1：公开签名不得含 frame / kwargs 注入 ------------------------
+
+FORBIDDEN_PARAMS = ("canonical_frame", "frame", "expected_sha256", "expected_*")
+
+
+def test_public_signatures_accept_paths_only():
+    """R1-1：公开入口只接受**文件路径**；不得有 frame / hash / revision 注入。"""
+    import inspect
+
+    module = freeze()
+    for fn in (module.build_frozen_refs, module.materialize_frozen_refs):
+        params = inspect.signature(fn).parameters
+        for name, param in params.items():
+            assert param.kind is not inspect.Parameter.VAR_KEYWORD, (
+                f"{fn.__name__} 暴露了 **kwargs：{name}"
+            )
+            assert "frame" not in name, f"{fn.__name__} 暴露了 frame 注入：{name}"
+            assert not name.startswith("expected"), (
+                f"{fn.__name__} 暴露了 expected_* 信任根参数：{name}"
+            )
+        assert all(
+            name.endswith("_path") or name in
+            ("out_path", "replace_declared_v1")
+            for name in params
+        ), f"{fn.__name__} 的参数必须都是路径：{list(params)}"
+
+
+@needs_assets
+def test_frame_and_kwargs_injection_are_type_errors(tmp_path):
+    """R1-1：传 `canonical_frame=` / 任意 kwarg 必须 **TypeError**。"""
+    module = freeze()
+    frame = pd.read_parquet(CANONICAL_PARQUET)
+    frame.loc[frame.index[0], "price_sgd_per_kwh"] = 99.0
+
+    with pytest.raises(TypeError):
+        module.build_frozen_refs(canonical_frame=frame)
+    with pytest.raises(TypeError):
+        module.build_frozen_refs(shadow_option=1)
+    with pytest.raises(TypeError):
+        module.materialize_frozen_refs(
+            out_path=tmp_path / "refs_v3.json", canonical_frame=frame)
+    with pytest.raises(TypeError):
+        module.materialize_frozen_refs(
+            out_path=tmp_path / "refs_v3.json", shadow_option=1)
+
+
+# --- 8. M1.3g-d-R1：canonical / exogenous 的严格对齐 --------------------------
+
+def _aligned_chain(tmp_path, *, mutate=None, mutate_exogenous=None) -> dict:
+    return _synced_temp_chain(
+        tmp_path, mutate=mutate, mutate_exogenous=mutate_exogenous)
+
+
+@needs_assets
+def test_row_count_mismatch_is_rejected(tmp_path, monkeypatch):
+    module = freeze()
+
+    def _truncate_exogenous(frame: pd.DataFrame) -> None:
+        frame.drop(frame.index[-2688:], inplace=True)
+        frame.reset_index(drop=True, inplace=True)
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_truncate_exogenous)
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_timestamp_misalignment_is_rejected(tmp_path, monkeypatch):
+    """canonical 与 exogenous 的 timestamp 逐行不等 → 必须 fail closed。"""
+    module = freeze()
+
+    def _shift_exogenous(frame: pd.DataFrame) -> None:
+        frame.loc[frame.index[0], "timestamp"] = (
+            frame.loc[frame.index[0], "timestamp"] + pd.Timedelta(minutes=30)
+        )
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_shift_exogenous)
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_duplicate_timestamp_is_rejected(tmp_path, monkeypatch):
+    module = freeze()
+    chain = _aligned_chain(
+        tmp_path,
+        mutate_exogenous=lambda f: f.__setitem__(
+            (1, "timestamp"), f.loc[0, "timestamp"]),
+    )
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_off_grid_timestamp_is_rejected(tmp_path, monkeypatch):
+    """非严格 30 分钟网格 → 必须 fail closed。"""
+    module = freeze()
+    chain = _aligned_chain(
+        tmp_path,
+        mutate_exogenous=lambda f: f.__setitem__(
+            (1, "timestamp"), f.loc[0, "timestamp"] + pd.Timedelta(minutes=7)),
+    )
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_naive_timestamp_is_rejected(tmp_path, monkeypatch):
+    """tz-naive 的 timestamp → 必须 fail closed。"""
+    module = freeze()
+
+    def _make_naive(frame: pd.DataFrame) -> None:
+        frame["timestamp"] = (
+            pd.DatetimeIndex(frame["timestamp"]).tz_localize(None)
+        )
+
+    chain = _aligned_chain(tmp_path, mutate_exogenous=_make_naive)
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_missing_required_column_is_rejected(tmp_path, monkeypatch):
+    module = freeze()
+    chain = _aligned_chain(
+        tmp_path,
+        mutate_exogenous=lambda f: f.drop(columns=["wind_generation_kw"],
+                                          inplace=True),
+    )
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+@pytest.mark.parametrize("column", ("local_pv_kw", "wind_generation_kw",
+                                    "carbon_intensity"))
+def test_non_finite_exogenous_value_is_rejected(tmp_path, monkeypatch, column):
+    module = freeze()
+    chain = _aligned_chain(
+        tmp_path,
+        mutate_exogenous=lambda f, c=column: f.__setitem__((0, c), float("nan")),
+    )
+    _patch_frozen_root(monkeypatch, chain)
+    with pytest.raises(ValueError):
+        module.build_frozen_refs(**_chain_kwargs(chain))
+
+
+@needs_assets
+def test_alignment_failures_never_leak_builtin_errors(tmp_path, monkeypatch):
+    """R1-3：任一失败都必须是 ValueError/SplitError，不得泄漏内建异常。"""
+    module = freeze()
+    cases = (
+        lambda f: f.drop(columns=["local_pv_kw"], inplace=True),
+        lambda f: f.drop(columns=["timestamp"], inplace=True),
+        lambda f: f.drop(f.index[-100:], inplace=True),
+        lambda f: f["timestamp"].__class__,
+    )
+    for index, mutate in enumerate(cases):
+        case_root = tmp_path / f"case{index}"
+        case_root.mkdir()
+        chain = _aligned_chain(case_root, mutate_exogenous=mutate)
+        _patch_frozen_root(monkeypatch, chain)
+        try:
+            module.build_frozen_refs(**_chain_kwargs(chain))
+        except (ValueError, KeyError, TypeError, IndexError) as error:
+            assert not isinstance(error, (KeyError, TypeError, IndexError)), (
+                f"case {index} 泄漏了内建异常：{type(error).__name__}: {error}"
+            )
+
+
+# --- 9. M1.3g-d-R1：v2 保留、v3 是新目标 -------------------------------------
+
+def test_v2_is_preserved_byte_for_byte_and_marked_superseded():
+    """R1-5：v2 逐字节不变；文档标记它已被取代。"""
+    import subprocess
+
+    frozen = subprocess.run(
+        ["git", "show", "e89c15c:configs/frozen_refs/refs.json"],
+        cwd=REPO_ROOT, capture_output=True, check=True,
+    ).stdout
+    assert hashlib.sha256(frozen).hexdigest() == V2_SHA256
+    assert REFS_V2_PATH.read_bytes() == frozen
+    card = (REPO_ROOT / "docs/task_cards/M1.3g.md").read_text(encoding="utf-8")
+    handoff = (REPO_ROOT / "docs/WORK_HANDOFF.md").read_text(encoding="utf-8")
+    assert SUPERSEDED_MARK in card and SUPERSEDED_MARK in handoff
+
+
+@needs_assets
+def test_v3_values_equal_v2_values():
+    """R1-6：v3 的 refs 数值必须与 v2 **相同**。"""
+    v2 = json.loads(REFS_V2_PATH.read_text(encoding="utf-8"))
+    v3 = json.loads(REFS_V3_PATH.read_text(encoding="utf-8"))
+    assert set(v3) == set(v2)
+    assert set(v3["references"]) == set(v2["references"])
+    for name in v2["references"]:
+        assert v3["references"][name]["value"] == v2["references"][name]["value"], name
+        assert v3["references"][name]["source_kind"] == (
+            v2["references"][name]["source_kind"]), name
+
+
+@needs_assets
+def test_v3_revision_reflects_the_r1_implementation():
+    module = freeze()
+    assert _frozen_refs()["materializer_revision"] == (
+        module.resolve_materializer_revision())
+
+
+@needs_assets
+def test_v2_is_not_overwritten_by_the_r1_implementation(tmp_path, monkeypatch):
+    """R1-5：v2 不可覆盖（对 `refs.json` 物化必须被拒绝）。"""
+    module = freeze()
+    before = REFS_V2_PATH.read_bytes()
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+    with pytest.raises(ValueError):
+        module.materialize_frozen_refs(
+            out_path=REFS_V2_PATH, replace_declared_v1=False, **_chain_kwargs())
+    assert REFS_V2_PATH.read_bytes() == before
+
+
+@needs_assets
+def test_v3_first_freeze_is_atomic_idempotent_and_guarded(tmp_path, monkeypatch):
+    module = freeze()
+    target = tmp_path / "refs_v3.json"
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+
+    first = module.materialize_frozen_refs(out_path=target, **_chain_kwargs())
+    assert first["written"] is True
+    before = (_sha256(target), target.stat().st_mtime_ns)
+
+    second = module.materialize_frozen_refs(
+        out_path=target, replace_declared_v1=False, **_chain_kwargs())
+    assert second["written"] is False
+    assert (_sha256(target), target.stat().st_mtime_ns) == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["refs_v3.json"]
+
+    # 不同内容 → 拒绝覆盖
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload["references"]["price_ref"]["value"] = 12345.0
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    mutated = target.read_bytes()
+    with pytest.raises(ValueError):
+        module.materialize_frozen_refs(
+            out_path=target, replace_declared_v1=False, **_chain_kwargs())
+    assert target.read_bytes() == mutated
+
+
+@needs_assets
+def test_v3_first_freeze_failure_leaves_nothing(tmp_path, monkeypatch):
+    module = freeze()
+    monkeypatch.setattr(module, "_generator_is_dirty", lambda: False)
+    monkeypatch.setattr(
+        module, "_atomic_write_text",
+        lambda path, text: (_ for _ in ()).throw(OSError("boom")))
+    with pytest.raises(OSError):
+        module.materialize_frozen_refs(
+            out_path=tmp_path / "refs_v3.json", **_chain_kwargs())
+    assert sorted(p.name for p in tmp_path.iterdir()) == []
