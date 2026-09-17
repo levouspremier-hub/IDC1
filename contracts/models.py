@@ -1,4 +1,4 @@
-"""M2.1 六个不可变（frozen）Pydantic 契约（**contract-v8**）。
+"""M2.1 六个不可变（frozen）Pydantic 契约（**contract-v9**）。
 
 - 所有模型 frozen（不可变），禁止 extra 字段。
 - 功率/能量/货币/碳字段单位在各类 `UNITS` 中声明。
@@ -39,11 +39,16 @@ class ContractBase(BaseModel):
         return value
 
 
-# --- M1.3e：contract-v8 结构化 forecast provenance -------------------------
+# --- M1.3e：结构化 forecast provenance（v8 引入；M1.3g-0 起为 contract-v9） --
 
 SOURCE_KINDS: tuple[str, ...] = (
     "external_forecast", "seasonal_naive", "persistence", "modeled_scenario",
     "synthetic", "oracle_debug", "unavailable",
+    # M1.3g-0（contract-v9）：人工批准的外部**低分辨率**来源。
+    # 语义：值来自人工批准的官方外部来源，但**时间分辨率低于**场景步长
+    # （例如 2024 年度常数碳强度 0.402 kgCO2/kWh）。
+    # **不得**把它描述为半小时实测，也**不得**与 `modeled_scenario` 混同。
+    "human_approved_external_low_resolution",
 )
 SCENARIO_MODES: tuple[str, ...] = ("formal", "synthetic", "oracle_debug")
 FORECAST_PURPOSES: tuple[str, ...] = ("training", "evaluation", "debug")
@@ -62,9 +67,20 @@ NON_FORMAL_SOURCE_KINDS: tuple[str, ...] = ("synthetic", "oracle_debug", "unavai
 MODE_ALLOWED_SOURCE_KINDS: dict[str, tuple[str, ...]] = {
     "formal": (
         "external_forecast", "seasonal_naive", "persistence", "modeled_scenario",
+        # M1.3g-0：仅在 formal 且仅在 `carbon_forecast`（见 SOURCE_KIND_ALLOWED_SERIES）
+        "human_approved_external_low_resolution",
     ),
     "synthetic": ("synthetic",),
     "oracle_debug": ("oracle_debug",),
+}
+
+# 某些来源类别**只允许**用于**指定序列**（M1.3g-0 / contract-v9）。
+# `human_approved_external_low_resolution` 是**低时间分辨率**的人工批准外部值，
+# 只有 carbon 强度在本项目中以「年度常数」形式获批；把它用到 price / load / pv /
+# wind / temperature / arrival 上都等于用低分辨率值冒充高频序列，因此拒绝。
+# 未列出的来源类别不受序列限制（沿用 v8 语义）。
+SOURCE_KIND_ALLOWED_SERIES: dict[str, tuple[str, ...]] = {
+    "human_approved_external_low_resolution": ("carbon_forecast",),
 }
 
 # 这两个 mode 要求**七条逐项**等于唯一的来源类别（不是「允许集合」）
@@ -348,12 +364,19 @@ def validate_bundle_forecast_provenance(bundle: ScenarioBundle) -> None:
     exact_kind = MODE_EXACT_SOURCE_KINDS.get(mode)
     allowed = MODE_ALLOWED_SOURCE_KINDS[mode]
     rejected: list[tuple[str, str]] = []
+    wrong_series: list[tuple[str, str, tuple[str, ...]]] = []
     mismatched_generated_at: list[tuple[str, str]] = []
     for name in BUNDLE_FORECAST_FIELDS:
         entry = getattr(provenance, name)
         if not isinstance(entry, ForecastSeriesProvenance):
             raise ValueError(f"forecast_provenance.{name} 必须是 ForecastSeriesProvenance")
         validate_forecast_series_provenance(entry, expected_series_name=name)
+        # M1.3g-0：**序列绑定**先于 mode 判定——它是对**任何** mode 都成立的规则
+        # （`synthetic` / `oracle_debug` 仍由下面的 exact_kind 分支各自收紧）。
+        series_bound = SOURCE_KIND_ALLOWED_SERIES.get(entry.source_kind)
+        if series_bound is not None and name not in series_bound:
+            wrong_series.append((name, entry.source_kind, series_bound))
+            continue
         if entry.source_kind in forbidden:
             rejected.append((name, entry.source_kind))
             continue
@@ -365,6 +388,11 @@ def validate_bundle_forecast_provenance(bundle: ScenarioBundle) -> None:
             rejected.append((name, entry.source_kind))
         if entry.generated_at != bundle.generated_at:
             mismatched_generated_at.append((name, entry.generated_at))
+    if wrong_series:
+        raise ValueError(
+            "以下来源类别被绑定到**特定序列**，不得用于其它字段："
+            f"{wrong_series}（来源类别只允许用于其绑定的序列）"
+        )
     if rejected:
         expectation = (
             f"该 mode 要求七条逐项为 {exact_kind!r}"
@@ -383,7 +411,7 @@ def validate_bundle_forecast_provenance(bundle: ScenarioBundle) -> None:
 
 
 class ScenarioBundle(ContractBase):
-    """可见预测场景切片（**contract-v8**）。
+    """可见预测场景切片（**contract-v9**）。
 
     M1.3e 起用明确的 `mode` 取代含糊的 `synthetic: bool`，并加入**结构化、
     不可伪造**的 `forecast_provenance`；无 schema 的自由 dict `source_hashes` **已退役**。
@@ -534,7 +562,7 @@ class AvailableDriverProvenance(BaseModel):
 
 
 class AvailableExogenousForecast(ContractBase):
-    """**严格冻结**的 driver forecast artifact（contract-v8）。
+    """**严格冻结**的 driver forecast artifact（contract-v9）。
 
     与 `ScenarioBundle` 的区别是**结构性**的：这里只有五个 driver，没有
     PV / 风电发电量 / 碳强度 / arrival；因此它带**三条上游 logical path** 与四个

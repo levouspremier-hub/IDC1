@@ -34,6 +34,11 @@ policy manifest → split manifest → canonical manifest → canonical parquet
 本模块**不**生成 PV / 风电发电量 / 碳强度 / arrival 的 forecast，
 也**不**构造正式 `ScenarioBundle` —— 它只产出严格冻结的
 `contracts.AvailableExogenousForecast` artifact。
+
+**M1.3g-0（contract-v9）**：policy schema 升到 **v2**，默认路径为
+`DEFAULT_POLICY_MANIFEST_PATH`；v2 manifest 的 `supersedes` 逐字段登记被取代的
+**contract-v8** v1 产物（其文件**字节不变**）。任何 `contract-v8` 的 policy
+（含 v1）在本模块一律 **fail closed**，不做迁移或静默升级。
 """
 
 from __future__ import annotations
@@ -106,8 +111,30 @@ FORECAST_SOURCE_PATHS: tuple[str, ...] = (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --- forecast policy manifest 的冻结 schema（provider 与物化器共用） ---------
+#
+# **M1.3g-0（contract-v9）**：schema 由 `…-v1` 升到 `…-v2`，并新增 `supersedes`
+# 键记录被取代的 v1 产物。v1 文件**保持字节不变**，是 contract-v8 的历史证据；
+# provider 对 contract-v8 的 policy 一律 fail closed（见 §contract_version 校验）。
 
-POLICY_SCHEMA = "m1.3e-singapore-2024-forecast-policy-v1"
+POLICY_SCHEMA = "m1.3g0-singapore-2024-forecast-policy-v2"
+# 正式入口的**默认** policy 路径（provider 与物化器共用同一常量，避免两处漂移）
+DEFAULT_POLICY_MANIFEST_PATH = (
+    "data/manifest/singapore_2024_forecast_policy_v2.json"
+)
+# 被本 schema 取代的 contract-v8 政策产物（**不得**删除、覆盖或改写）
+SUPERSEDES_POLICY_V1: dict[str, Any] = {
+    "policy_manifest_path": "data/manifest/singapore_2024_forecast_policy.json",
+    "policy_manifest_sha256": (
+        "0bf31f80ff0c9acd67dad5082e08eee7364397a2dbfa429e4a34c3d87a702923"
+    ),
+    "policy_manifest_contract_version": "contract-v8",
+    "superseded_by_contract_version": CONTRACT_VERSION_ID,
+    "reason": (
+        "contract-v9 新增 source_kind human_approved_external_low_resolution；"
+        "v1 是 contract-v8 的历史产物，保留不可覆盖，仅登记取代关系"
+    ),
+}
+SUPERSEDES_POLICY_V1_KEYS: tuple[str, ...] = tuple(SUPERSEDES_POLICY_V1)
 INFORMATION_POLICY = "closed_open_[origin-48, origin)"
 TARGET_POLICY = "half_open_[origin, origin+C)"
 SEED_POLICY = None
@@ -137,6 +164,8 @@ POLICY_MANIFEST_KEYS: tuple[str, ...] = (
     "unavailable_not_materialized",
     "readiness",
     "frozen_at_utc",
+    # M1.3g-0：v2 schema 新增；被取代的 v1 产物的 path / sha256 / 契约版本
+    "supersedes",
 )
 
 
@@ -297,6 +326,17 @@ def read_forecast_policy_manifest(
         raise ForecastError(
             f"policy manifest readiness 必须严格等于 {POLICY_READINESS}，实际 {readiness!r}"
         )
+    # M1.3g-0：`supersedes` 必须**逐字段恒等**于冻结的取代登记（含 v1 的 path 与 sha256）
+    supersedes = _require_dict(manifest.get("supersedes"), field="supersedes")
+    _require_exact_keys(
+        supersedes, field="supersedes", expected=SUPERSEDES_POLICY_V1_KEYS
+    )
+    for name, expected in SUPERSEDES_POLICY_V1.items():
+        if supersedes.get(name) != expected:
+            raise ForecastError(
+                f"policy manifest supersedes.{name} 与冻结登记不符："
+                f"期望 {expected!r}，实际 {supersedes.get(name)!r}"
+            )
     _require_canonical_utc(manifest.get("frozen_at_utc"), field="frozen_at_utc")
     _require_git_sha40(manifest.get("materializer_revision"),
                        field="materializer_revision")

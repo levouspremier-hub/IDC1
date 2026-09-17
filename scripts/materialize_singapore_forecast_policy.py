@@ -43,6 +43,7 @@ if __package__ in (None, ""):
 from contracts import CONTRACT_VERSION_ID
 from scenario.forecast import (
     AVAILABLE_DRIVERS,
+    DEFAULT_POLICY_MANIFEST_PATH,
     FORECAST_PERIOD_STEPS,
     FORECAST_SOURCE_PATHS,
     FREQUENCY,
@@ -52,6 +53,7 @@ from scenario.forecast import (
     POLICY_READINESS,
     POLICY_SCHEMA,
     SEED_POLICY,
+    SUPERSEDES_POLICY_V1,
     TARGET_POLICY,
     UNAVAILABLE_NOT_MATERIALIZED,
     provider_code_revision,
@@ -102,6 +104,53 @@ def _generator_is_dirty() -> bool:
     """生成实现是否有未提交修改（含未跟踪的新文件）。"""
     status = _git("status", "--porcelain", "--", *FORECAST_SOURCE_PATHS)
     return bool(status.strip())
+
+
+def existing_frozen_at_utc(manifest_path: Path | str) -> str | None:
+    """已存在且含规范 `frozen_at_utc` 的 manifest 的时间戳；否则 `None`。
+
+    重复物化必须**复用**它，否则正式 manifest 会随墙钟漂移（M1.3g-0）。
+    """
+    manifest_path = Path(manifest_path)
+    if not manifest_path.is_file():
+        return None
+    try:
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))["frozen_at_utc"]
+        _require_canonical_utc(value, field="frozen_at_utc")
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        return None
+    return str(value)
+
+
+def verify_superseded_policy_v1(v1_path: Path | str = Path(
+    SUPERSEDES_POLICY_V1["policy_manifest_path"]
+)) -> str:
+    """核验被取代的 v1 政策产物**确为冻结的那一份**（M1.3g-0）。
+
+    取代登记里的 path 与 SHA-256 必须是**事实**：文件缺失、字节被改写、
+    或自述的契约版本不是 `contract-v8`，一律 fail closed。
+    """
+    v1_path = Path(v1_path)
+    if not v1_path.is_file():
+        raise ForecastPolicyError(
+            f"缺少被取代的 v1 政策产物 {v1_path}：取代登记不得凭空声明"
+        )
+    actual = hashlib.sha256(v1_path.read_bytes()).hexdigest()
+    expected = SUPERSEDES_POLICY_V1["policy_manifest_sha256"]
+    if actual != expected:
+        raise ForecastPolicyError(
+            f"v1 政策产物字节已改变：期望 {expected} 实际 {actual}"
+            "（v1 是 contract-v8 的历史证据，不得改写）"
+        )
+    payload = json.loads(v1_path.read_text(encoding="utf-8"))
+    declared = payload.get("contract_version")
+    if declared != SUPERSEDES_POLICY_V1["policy_manifest_contract_version"]:
+        raise ForecastPolicyError(
+            f"v1 政策产物的 contract_version 必须是 "
+            f"{SUPERSEDES_POLICY_V1['policy_manifest_contract_version']!r}，"
+            f"实际 {declared!r}"
+        )
+    return actual
 
 
 # --- 原子安装 ----------------------------------------------------------------
@@ -201,6 +250,8 @@ def build_forecast_policy_manifest(
         "unavailable_not_materialized": list(UNAVAILABLE_NOT_MATERIALIZED),
         "readiness": dict(READINESS),
         "frozen_at_utc": frozen_at_utc,
+        # M1.3g-0：v2 schema 的取代登记（逐字段恒等于冻结常量）
+        "supersedes": dict(SUPERSEDES_POLICY_V1),
     }
     return _require_exact_keys(manifest, field="forecast policy manifest")
 
@@ -215,7 +266,7 @@ def materialize_forecast_policy(
     manifest_path: Path | str,
     frozen_at_utc: str,
 ) -> dict:
-    """生成 / 校验 `data/manifest/singapore_2024_forecast_policy.json`。"""
+    """生成 / 校验 `data/manifest/singapore_2024_forecast_policy_v2.json`。"""
     manifest_path = Path(manifest_path)
     # 目标目录**先**建立：这样「首次写入失败」的现场是「空目录」，而不是「目录不存在」。
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -224,6 +275,10 @@ def materialize_forecast_policy(
         raise ForecastPolicyError(
             "生成器有未提交修改：拒绝用旧 revision 为未提交代码背书（未提交）"
         )
+
+    # M1.3g-0：取代登记必须是**事实**——v1 仍在、字节未变、自述 contract-v8
+    if manifest_path.name == Path(DEFAULT_POLICY_MANIFEST_PATH).name:
+        verify_superseded_policy_v1()
 
     candidate = build_forecast_policy_manifest(
         canonical_parquet_path=canonical_parquet_path,
@@ -268,19 +323,25 @@ def main(argv: list[str] | None = None) -> int:
                         default="data/manifest/singapore_2024_half_hour.json")
     parser.add_argument("--split-manifest-path",
                         default="data/manifest/singapore_2024_splits.json")
-    parser.add_argument("--manifest-path",
-                        default="data/manifest/singapore_2024_forecast_policy.json")
-    parser.add_argument("--frozen-at-utc",
-                        default=datetime.now(UTC).replace(microsecond=0).isoformat())
+    parser.add_argument("--manifest-path", default=DEFAULT_POLICY_MANIFEST_PATH)
+    parser.add_argument("--frozen-at-utc", default=None)
     args = parser.parse_args(argv)
+
+    manifest_path = REPO_ROOT / args.manifest_path
+    # 重复物化**复用**已冻结的 `frozen_at_utc`，避免正式 manifest 随墙钟漂移
+    frozen_at_utc = (
+        args.frozen_at_utc
+        or existing_frozen_at_utc(manifest_path)
+        or datetime.now(UTC).replace(microsecond=0).isoformat()
+    )
 
     try:
         result = materialize_forecast_policy(
             canonical_parquet_path=REPO_ROOT / args.canonical_parquet_path,
             canonical_manifest_path=REPO_ROOT / args.canonical_manifest_path,
             split_manifest_path=REPO_ROOT / args.split_manifest_path,
-            manifest_path=REPO_ROOT / args.manifest_path,
-            frozen_at_utc=args.frozen_at_utc,
+            manifest_path=manifest_path,
+            frozen_at_utc=frozen_at_utc,
         )
     except (ForecastPolicyError, SplitError, OSError, ValueError) as error:
         print(f"materialize_singapore_forecast_policy: {error}", file=sys.stderr)

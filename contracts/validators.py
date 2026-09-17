@@ -77,7 +77,7 @@ _FORECAST_FIELDS = (
 
 
 def validate_scenario(scenario: ScenarioBundle) -> None:
-    """时间轴长度一致 + 单位齐备 + **结构化 provenance** 完备（contract-v8）。"""
+    """时间轴长度一致 + 单位齐备 + **结构化 provenance** 完备（contract-v9）。"""
     lengths = {name: len(getattr(scenario, name)) for name in _FORECAST_FIELDS}
     if len(set(lengths.values())) != 1:
         raise ValueError(f"预测时间轴长度不一致: {lengths}")
@@ -198,7 +198,7 @@ def validate_dispatch_result(result: DispatchResult) -> None:
         raise ValueError("cost_sgd 为负")
 
 
-# --- M1.3e：contract-v8 provenance 与 purpose gate --------------------------
+# --- M1.3e：provenance 与 purpose gate（M1.3g-0 起为 contract-v9） ----------
 #
 # 逐序列 / 整体的 provenance 校验实现放在 `contracts.models`：`ScenarioBundle` 与
 # `ForecastSeriesProvenance` 必须在**构造时**就 fail closed，而 `models` 不能反过来
