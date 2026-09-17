@@ -57,8 +57,12 @@ EXPECTED_KINDS = {
     "carbon_forecast": "human_approved_external_low_resolution",
 }
 
-_ORIGIN = TRAIN_ROWS // 2      # 全局 origin，位于 train 内部且历史充足
+_ORIGIN = TRAIN_ROWS // 2      # split 本地 origin（train 内部，历史充足）
 _CUTOFF = 4
+# 因果性用例必须把 mutation 放在 **train 之外**：M1.3d 的 split manifest 会
+# 重算 train-only 统计，改动 train 行会让整条信任链自洽性检查失败（与本卡无关）。
+# 因此这两个用例用 validation 内的 origin，mutation 落在 validation 段。
+_VALIDATION_ORIGIN = 100       # split 本地；全局 = TRAIN_ROWS + 100
 
 
 def formal():
@@ -180,7 +184,7 @@ def test_arrival_is_the_template_expectation_not_a_poisson_draw():
     canonical = pd.read_parquet(CANONICAL_PARQUET)
     stamps = pd.DatetimeIndex(canonical["timestamp"].iloc[_ORIGIN:_ORIGIN + _CUTOFF])
     slots = drivers().arrival_template_slot(stamps)
-    template = module.exogenous_rate_template()
+    template = np.asarray(module.exogenous_rate_template())
     expected = template[slots] * ARRIVAL_MEAN
 
     bundle = build()
@@ -244,8 +248,8 @@ def test_pv_and_wind_respect_the_same_caps_as_truth():
     ghi = canonical["ghi_w_per_m2"].to_numpy()
     temp = canonical["temperature_deg_c"].to_numpy()
     v10 = canonical["wind_speed_10m_mps"].to_numpy()
-    pv = module.pv_forecast(stamps, ghi, temp, v10)
-    wind = module.wind_forecast(v10)
+    pv = np.asarray(module.pv_forecast(stamps, ghi, temp, v10))
+    wind = np.asarray(module.wind_forecast(v10))
 
     assert (pv >= 0.0).all() and (pv <= PV_AC_LIMIT_KW + 1e-9).all()
     night = ghi <= 0.0
@@ -256,7 +260,12 @@ def test_pv_and_wind_respect_the_same_caps_as_truth():
 
 # --- 5. 因果性：未来真值不得进入 forecast ------------------------------------
 
-def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int | None = None):
+def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int):
+    """复制冻结链并篡改 canonical 的 `[mutate_from, mutate_to)` 行，同步所有 hash。
+
+    mutation **必须**落在 train 之外（validation/test），否则 M1.3d 的
+    train-only 统计重算会先失败。
+    """
     """复制冻结链并篡改 canonical 的 `[mutate_from, mutate_to)` 行，同步两个 hash。"""
     root = tmp_path / "chain"
     (root / "data/processed/singapore_2024").mkdir(parents=True)
@@ -264,11 +273,12 @@ def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int | None = None):
     for name in ("singapore_2024_half_hour.json", "singapore_2024_splits.json"):
         shutil.copy(REPO_ROOT / "data/manifest" / name, root / "data/manifest" / name)
 
+    assert mutate_from >= TRAIN_ROWS, "mutation 必须落在 train 之外"
     canonical = pd.read_parquet(CANONICAL_PARQUET)
-    stop = len(canonical) if mutate_to is None else mutate_to
-    canonical.loc[canonical.index[mutate_from:stop], "temperature_deg_c"] += 7.0
-    canonical.loc[canonical.index[mutate_from:stop], "ghi_w_per_m2"] += 11.0
-    canonical.loc[canonical.index[mutate_from:stop], "wind_speed_10m_mps"] += 0.9
+    rows = canonical.index[mutate_from:mutate_to]
+    canonical.loc[rows, "temperature_deg_c"] += 7.0
+    canonical.loc[rows, "ghi_w_per_m2"] += 11.0
+    canonical.loc[rows, "wind_speed_10m_mps"] += 0.9
     parquet = root / "data/processed/singapore_2024/half_hour.parquet"
     canonical.to_parquet(parquet, index=False)
 
@@ -286,19 +296,40 @@ def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int | None = None):
     splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
     split_manifest.write_text(json.dumps(splits))
 
+    # policy-v2 也要随之自洽：它的三条声明路径必须等于**实际提供**的逻辑路径
+    # （tmp 在仓库外 → `<external>/<name>`），两个 hash 必须等于 tmp 里的实测字节。
+    policy = root / "data/manifest/singapore_2024_forecast_policy_v2.json"
+    payload = json.loads(POLICY_V2.read_text(encoding="utf-8"))
+    payload["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    payload["canonical_parquet_sha256"] = _sha256(parquet)
+    payload["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+    payload["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    payload["split_manifest_path"] = "<external>/singapore_2024_splits.json"
+    payload["split_manifest_sha256"] = _sha256(split_manifest)
+    policy.write_text(json.dumps(payload))
+
     return {
         "canonical_parquet_path": parquet,
         "canonical_manifest_path": canonical_manifest,
         "split_manifest_path": split_manifest,
+        "policy_manifest_path": policy,
     }
+
+
+_GLOBAL_VALIDATION_ORIGIN = TRAIN_ROWS + _VALIDATION_ORIGIN
+
+
+def _validation_build(**over):
+    return build(split="validation", origin=_VALIDATION_ORIGIN, **over)
 
 
 @needs_assets
 def test_future_truth_mutation_does_not_change_any_forecast(tmp_path):
     """`[i, i+C)` 的 canonical 真值变化**不得**改变七条 forecast 中的任何一条。"""
-    baseline = build()
-    mutated = build(**_mutated_chain(tmp_path, mutate_from=_ORIGIN,
-                                     mutate_to=_ORIGIN + _CUTOFF))
+    baseline = _validation_build()
+    mutated = _validation_build(**_mutated_chain(
+        tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN,
+        mutate_to=_GLOBAL_VALIDATION_ORIGIN + _CUTOFF))
     for field in BUNDLE_FORECAST_FIELDS:
         assert np.array_equal(
             np.asarray(getattr(baseline, field)),
@@ -308,12 +339,17 @@ def test_future_truth_mutation_does_not_change_any_forecast(tmp_path):
 
 @needs_assets
 def test_history_mutation_changes_the_derived_forecasts(tmp_path):
-    """`[i−48, i)` 的 driver 真值变化**必须**体现在 forecast 上。"""
-    baseline = build()
-    mutated = build(**_mutated_chain(
-        tmp_path, mutate_from=_ORIGIN - PERIOD_STEPS, mutate_to=_ORIGIN))
-    for field in ("price_forecast", "temperature_forecast", "pv_forecast",
-                  "wind_forecast"):
+    """`[i−48, i)` 的 driver 真值变化**必须**体现在 forecast 上。
+
+    mutation 只改**天气三列**（温度 / GHI / 10 m 风速），因此断言的是
+    由它们推导的三条：温度、PV、风电。（price / load / carbon / arrival
+    的输入没有被改动，**不应**变化——这里不断言它们。）
+    """
+    baseline = _validation_build()
+    mutated = _validation_build(**_mutated_chain(
+        tmp_path, mutate_from=_GLOBAL_VALIDATION_ORIGIN - PERIOD_STEPS,
+        mutate_to=_GLOBAL_VALIDATION_ORIGIN))
+    for field in ("temperature_forecast", "pv_forecast", "wind_forecast"):
         assert not np.array_equal(
             np.asarray(getattr(baseline, field)),
             np.asarray(getattr(mutated, field)),
