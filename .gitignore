@@ -90,6 +90,10 @@
 # `!data/manifest/*.json` 只解开**直接子级**，故显式放行该子目录。
 !data/manifest/formal_splits_v2/
 !data/manifest/formal_splits_v2/*.json
+# M1.3g-c-R2：唯一候选 triad 移到 formal_splits_v3/（同一条「只解开直接子级」
+# 限制），同样显式放行该子目录。
+!data/manifest/formal_splits_v3/
+!data/manifest/formal_splits_v3/*.json
 !report_tools/
 !report_tools/*.py
 !legacy/
