@@ -449,6 +449,13 @@ FORBIDDEN_KWARGS = ("inputs", "materializer_revision", "frozen_at_utc_override",
                     "frame", "trust_root", "shadow_option")
 
 
+# 只有 `expected_split`（**语义选择器**，与 `expected_series_name` 同类）
+# 是允许的；任何可能覆盖信任根的 `expected_*` 都不允许。
+ALLOWED_EXPECTED_PARAMS = ("expected_split",)
+TRUST_BOUNDARY_TOKENS = ("sha", "hash", "revision", "root", "trust", "frame",
+                         "inputs")
+
+
 def test_public_signatures_expose_no_trust_boundary_parameters():
     module = manifests()
     for fn in (module.build_split_manifest, module.load_verified_split_manifest):
@@ -456,10 +463,13 @@ def test_public_signatures_expose_no_trust_boundary_parameters():
         for name, param in params.items():
             assert param.kind is not inspect.Parameter.VAR_KEYWORD, (
                 f"{fn.__name__} 暴露了 **kwargs：{name}")
-            assert name != "inputs", fn.__name__
-            assert "frame" not in name, fn.__name__
-            assert not name.startswith("expected"), fn.__name__
-            assert name != "materializer_revision", fn.__name__
+            assert name not in ALLOWED_EXPECTED_PARAMS or name == "expected_split"
+            if name.startswith("expected"):
+                assert name in ALLOWED_EXPECTED_PARAMS, (
+                    f"{fn.__name__} 暴露了 expected_* 信任根参数：{name}")
+                continue
+            for token in TRUST_BOUNDARY_TOKENS:
+                assert token not in name, f"{fn.__name__} 暴露了 {token}：{name}"
 
 
 @needs_assets

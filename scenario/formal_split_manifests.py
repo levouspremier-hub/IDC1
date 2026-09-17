@@ -14,10 +14,11 @@ policy-v2 / exogenous v2 manifest / source v3 manifest / exogenous v2 parquet /
 **`refs_v3.json`**）各记 `path` + **实测** SHA-256。
 `configs/frozen_refs/refs.json`（v2）**明确拒绝**，不得作为备选或回退。
 
-## 单一 validator
+## 单一「验证并加载」入口
 
-本模块是**唯一**的严格校验实现；物化器与未来 reader **都必须**复用它，
-避免两个较弱的实现漂移。
+`load_verified_split_manifest()` 是本模块**唯一**的公开 reader——
+它做**结构校验 + 实时输入绑定 + 既有严格链调用**，物化器与未来 reader
+**都必须**复用它，避免较弱的实现漂移。
 
 ## 物化前**实际**调用既有严格链
 
@@ -35,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
-from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 
@@ -52,12 +52,14 @@ from scenario.splits import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v1"
+MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v2"
 CONTRACT_VERSION = "contract-v9"
 TIMEZONE = "Asia/Singapore"
 HISTORY_STEPS = 48
 
 MANIFEST_DIR = REPO_ROOT / "data/manifest"
+# 正式 triad 的**唯一**输出目录（R1：未来 g-e/g-f 只能读取这里）
+FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v2"
 CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
 CANONICAL_MANIFEST = MANIFEST_DIR / "singapore_2024_half_hour.json"
 TRUTH_SPLIT_MANIFEST = MANIFEST_DIR / "singapore_2024_splits.json"
@@ -253,7 +255,7 @@ def _require_git_sha40(value: object, *, field: str) -> str:
 # --- 构造 ---------------------------------------------------------------------
 
 def default_inputs() -> dict[str, Path]:
-    """正式链的**唯一**冻结输入（生产路径使用）。"""
+    """正式链的**唯一**冻结输入（生产路径使用；**不可由调用者覆盖**）。"""
     return {
         "canonical_parquet": CANONICAL_PARQUET,
         "canonical_manifest": CANONICAL_MANIFEST,
@@ -266,22 +268,42 @@ def default_inputs() -> dict[str, Path]:
     }
 
 
-def _require_inputs(inputs: object) -> dict[str, Path]:
-    if not isinstance(inputs, Mapping):
-        raise SplitManifestError("inputs 必须是 object")
-    if set(inputs) != set(INPUT_ROLES):
-        raise SplitManifestError(
-            f"inputs 的角色集合必须精确等于 {list(INPUT_ROLES)}；"
-            f"多出={sorted(set(inputs) - set(INPUT_ROLES))} "
-            f"缺少={sorted(set(INPUT_ROLES) - set(inputs))}"
-        )
-    resolved: dict[str, Path] = {}
-    for role, value in inputs.items():
-        try:
-            resolved[role] = Path(value)  # type: ignore[arg-type]
-        except TypeError as error:
-            raise SplitManifestError(f"inputs.{role} 必须是路径，实际 {value!r}") from error
-    return resolved
+def production_logical_paths() -> dict[str, str]:
+    """八个角色的**固定生产 logical path**（声明必须精确等于它们）。"""
+    return {
+        role: logical_repo_path(path) for role, path in default_inputs().items()
+    }
+
+
+def _require_live_binding(declared: object) -> None:
+    """**R1 核心**：声明的八个角色必须与**实际生产资产**逐项相符。
+
+    - role 集合精确；
+    - 每条 `path` 精确等于**固定生产 logical path**（拒绝外部/被取代路径）；
+    - 每条 `sha256` 等于该实际文件的**实测字节** hash。
+    """
+    entries = _require_exact_keys(
+        declared, field="inputs", expected=INPUT_ROLES)
+    production = default_inputs()
+    production_paths = production_logical_paths()
+    for role in INPUT_ROLES:
+        entry = _require_exact_keys(
+            entries[role], field=f"inputs.{role}", expected=INPUT_ENTRY_KEYS)
+        declared_path = _require_canonical_logical_path(
+            entry["path"], field=f"inputs.{role}.path")
+        if declared_path != production_paths[role]:
+            raise SplitManifestError(
+                f"inputs.{role}.path 必须精确等于固定生产 logical path "
+                f"{production_paths[role]!r}，实际 {declared_path!r}"
+            )
+        declared_sha = _require_hex64(
+            entry["sha256"], field=f"inputs.{role}.sha256")
+        measured = sha256_file(production[role])
+        if declared_sha != measured:
+            raise SplitManifestError(
+                f"inputs.{role}.sha256 与实际资产字节不符："
+                f"声明={declared_sha} 实测={measured}"
+            )
 
 
 def _verify_frozen_chain(inputs: dict[str, Path], split: str) -> None:
@@ -343,18 +365,17 @@ def _verify_frozen_chain(inputs: dict[str, Path], split: str) -> None:
 def build_split_manifest(
     split: str,
     *,
-    inputs: Mapping[str, Path | str] | None = None,
     frozen_at_utc: str | None = None,
-    materializer_revision: str | None = None,
 ) -> dict:
     """构造候选正式 split manifest（**只读**上游，逐层严格校验）。
 
-    **公开签名只接受路径 / 冻结元数据**：不存在 `expected_*` 信任根参数、
-    DataFrame 注入或 `**kwargs`。
+    **公开签名只接受 `split` 与冻结时间戳**：输入路径由本模块**固定**，
+    不存在 `inputs` mapping、`materializer_revision`、`expected_*` 信任根参数、
+    DataFrame 注入或 `**kwargs`（未知参数一律 `TypeError`）。
     """
     if split not in SPLIT_NAMES:
         raise SplitManifestError(f"未知 split：{split!r}，必须属于 {list(SPLIT_NAMES)}")
-    resolved = _require_inputs(default_inputs() if inputs is None else inputs)
+    resolved = default_inputs()
     _verify_frozen_chain(resolved, split)
 
     split_payload = json.loads(
@@ -389,13 +410,10 @@ def build_split_manifest(
             for role, path in resolved.items()
         },
         "readiness": dict(READINESS),
-        "materializer_revision": (
-            resolve_materializer_revision() if materializer_revision is None
-            else materializer_revision
-        ),
+        "materializer_revision": resolve_materializer_revision(),
         "frozen_at_utc": frozen_at_utc or _now_utc(),
     }
-    return validate_split_manifest(manifest, expected_split=split)
+    return _validate_structure(manifest, expected_split=split)
 
 
 def _now_utc() -> str:
@@ -421,8 +439,12 @@ def expected_candidate_origins(split: str, split_rows: dict) -> dict[str, int]:
 
 # --- 唯一严格校验入口 ---------------------------------------------------------
 
-def validate_split_manifest(payload: object, *, expected_split: str) -> dict:
-    """**唯一**的严格校验实现（物化器与未来 reader 共用）。"""
+def _validate_structure(payload: object, *, expected_split: str) -> dict:
+    """**结构**校验（私有）：schema / type / key-set / 边界 / readiness。
+
+    它**不**解析实际资产——实时绑定由 `_require_live_binding` 与
+    `load_verified_split_manifest` 完成。
+    """
     if expected_split not in SPLIT_NAMES:
         raise SplitManifestError(f"未知 split：{expected_split!r}")
     payload = _require_exact_keys(
@@ -483,13 +505,8 @@ def validate_split_manifest(payload: object, *, expected_split: str) -> dict:
         f"实际 {origins}",
     )
 
-    inputs = _require_exact_keys(
-        payload["inputs"], field="inputs", expected=INPUT_ROLES)
-    for role in INPUT_ROLES:
-        entry = _require_exact_keys(
-            inputs[role], field=f"inputs.{role}", expected=INPUT_ENTRY_KEYS)
-        _require_canonical_logical_path(entry["path"], field=f"inputs.{role}.path")
-        _require_hex64(entry["sha256"], field=f"inputs.{role}.sha256")
+    # **实时绑定**：声明的八条角色必须与实际生产资产逐项相符
+    _require_live_binding(payload["inputs"])
 
     readiness = _require_exact_keys(
         payload["readiness"], field="readiness", expected=READINESS_KEYS)
@@ -534,14 +551,37 @@ def _require_steps_are_30min(payload: dict) -> None:
         )
 
 
-def load_split_manifest(path: Path | str, *, expected_split: str) -> dict:
-    """读取并**严格校验**正式 split manifest（畸形输入只抛 `SplitManifestError`）。"""
+def load_verified_split_manifest(path: Path | str, *, expected_split: str) -> dict:
+    """**唯一**的「验证并加载」公开入口（物化器与未来 reader 共用）。
+
+    依次完成：
+
+    1. 读取 + 精确 schema / type / key-set / 边界 / readiness 结构校验；
+    2. **实时输入绑定**：八个角色的 `path` 精确等于**固定生产 logical path**，
+       每条 `sha256` 等于对应**实际文件字节** hash；
+    3. `frozen_refs` **精确**为 `refs_v3.json` 且 hash 等于 `ab7f5b58…`
+       （v2 `refs.json` 一律拒绝）；
+    4. **实际调用**既有严格链：`load_frozen_refs`、`read_forecast_policy_manifest`
+       （含 provider revision）、`load_truth_split`、`load_verified_exogenous`。
+
+    畸形输入**只抛** `SplitManifestError` / `ValueError`，
+    不泄漏 `KeyError` / `TypeError` / `IndexError`。**没有**任何信任边界参数。
+    """
+    if expected_split not in SPLIT_NAMES:
+        raise SplitManifestError(f"未知 split：{expected_split!r}")
     path = Path(path)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise SplitManifestError(f"{path} 不可读或不是合法 JSON：{error}") from error
-    return validate_split_manifest(payload, expected_split=expected_split)
+    try:
+        validated = _validate_structure(payload, expected_split=expected_split)
+    except SplitManifestError:
+        raise
+    except (KeyError, TypeError, IndexError, AttributeError) as error:
+        raise SplitManifestError(f"{path} 结构畸形：{error}") from error
+    _verify_frozen_chain(default_inputs(), expected_split)
+    return validated
 
 
 def manifest_relative_path(split: SplitName) -> str:

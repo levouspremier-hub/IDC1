@@ -41,15 +41,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scenario.formal_split_manifests import (
-    MANIFEST_DIR,
+    FORMAL_SPLIT_DIR,
     SplitManifestError,
     build_split_manifest,
-    default_inputs,
-    load_split_manifest,
+    load_verified_split_manifest,
 )
 from scenario.splits import SPLIT_NAMES
-
-TRUTH_SPLIT_MANIFEST = MANIFEST_DIR / "singapore_2024_splits.json"
 
 
 class ScenarioManifestError(ValueError):
@@ -103,46 +100,25 @@ def _existing_payloads(paths: dict[str, Path]) -> dict[str, dict] | None:
             "拒绝在残缺状态上继续（既不补写也不覆盖）"
         )
     return {
-        split: load_split_manifest(path, expected_split=split)
+        split: load_verified_split_manifest(path, expected_split=split)
         for split, path in paths.items()
     }
 
 
-_DEFAULTS = default_inputs()
-
-
 def materialize_split_manifest_triad(
     *,
-    out_dir: Path | str = MANIFEST_DIR,
+    out_dir: Path | str = FORMAL_SPLIT_DIR,
     frozen_at_utc: str | None = None,
-    canonical_parquet_path: Path | str = _DEFAULTS["canonical_parquet"],
-    canonical_manifest_path: Path | str = _DEFAULTS["canonical_manifest"],
-    split_manifest_path: Path | str = _DEFAULTS["split_manifest"],
-    forecast_policy_manifest_path: Path | str = _DEFAULTS["forecast_policy_manifest"],
-    exogenous_manifest_path: Path | str = _DEFAULTS["exogenous_manifest"],
-    exogenous_source_manifest_path: Path | str = _DEFAULTS["exogenous_source_manifest"],
-    exogenous_parquet_path: Path | str = _DEFAULTS["exogenous_parquet"],
-    frozen_refs_path: Path | str = _DEFAULTS["frozen_refs"],
 ) -> dict:
     """物化 / 校验三份正式 split manifest（**原子 triad**）。
 
-    **签名里没有 `**kwargs`**：八个输入角色各有一个**显式路径**参数，
-    未知关键字会被 Python 直接 `TypeError` 拒绝；不存在 `expected_*`、
-    revision 覆盖或 DataFrame 注入。
+    **签名只有 `out_dir` 与冻结时间戳**：八个输入角色由
+    `scenario.formal_split_manifests` **固定**，调用者**无法**传入
+    `inputs` mapping、路径、`materializer_revision`、`expected_*` 信任根
+    或 DataFrame 注入 —— 未知关键字一律 `TypeError`。
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    inputs = {
-        "canonical_parquet": Path(canonical_parquet_path),
-        "canonical_manifest": Path(canonical_manifest_path),
-        "split_manifest": Path(split_manifest_path),
-        "forecast_policy_manifest": Path(forecast_policy_manifest_path),
-        "exogenous_manifest": Path(exogenous_manifest_path),
-        "exogenous_source_manifest": Path(exogenous_source_manifest_path),
-        "exogenous_parquet": Path(exogenous_parquet_path),
-        "frozen_refs": Path(frozen_refs_path),
-    }
 
     if _generator_is_dirty():
         raise ScenarioManifestError(
@@ -157,7 +133,7 @@ def materialize_split_manifest_triad(
         else (frozen_at_utc or None)
     )
     candidates = {
-        split: build_split_manifest(split, inputs=inputs, frozen_at_utc=existing_frozen_at)
+        split: build_split_manifest(split, frozen_at_utc=existing_frozen_at)
         for split in SPLIT_NAMES
     }
 
@@ -195,19 +171,11 @@ def main(argv: list[str] | None = None) -> int:
         description="物化正式 split manifest triad（M1.3g-c）")
     parser.add_argument("--verify", action="store_true",
                         help="只校验 / 幂等重跑（不改变既有文件）")
-    parser.add_argument("--out-dir", default=str(MANIFEST_DIR))
-    for role in default_inputs():
-        parser.add_argument(f"--{role.replace('_', '-')}-path",
-                            default=str(default_inputs()[role]))
+    parser.add_argument("--out-dir", default=str(FORMAL_SPLIT_DIR))
     args = parser.parse_args(argv)
 
-    kwargs = {
-        f"{role}_path": Path(getattr(args, f"{role}_path"))
-        for role in default_inputs()
-    }
     try:
-        result = materialize_split_manifest_triad(
-            out_dir=Path(args.out_dir), **kwargs)  # type: ignore[arg-type]
+        result = materialize_split_manifest_triad(out_dir=Path(args.out_dir))
     except (ScenarioManifestError, SplitManifestError, OSError, ValueError) as error:
         print(f"materialize_singapore_scenario_manifests: {error}", file=sys.stderr)
         return 1
