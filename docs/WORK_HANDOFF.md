@@ -1123,11 +1123,13 @@ revision                                  bd7be9dd04e47b9db77198c3fdc3e1da2ae088
 `mtime_ns` 全不变、0 临时文件；**上游十一项（含 v1 三产物与 v1 source manifest）
 hash 全部未变**；范围外修改**无**。
 
-**回滚（由新到旧）**：
+**回滚（由新到旧；已只读验证零冲突，revert 后 `HEAD^{tree}` == `a883b78^{tree}`）**：
 
 ```bash
-git revert d96fcd8 bd7be9d c1d6a3e 094047c 9aedf74 30ebd70 896edf7
+git revert 56b75e1 d96fcd8 bd7be9d 9850b9a c1d6a3e 094047c 9aedf74 30ebd70 896edf7
 ```
+
+> 记录本回滚的文档提交无法在记录中列全；若其后还有文档提交，一并按由新到旧 revert。
 
 **M1.3g 未开始**：**不得**称 Azure trace 有经证实的真实日期映射；
 四项 ready 只表示驱动表已物化，**不代表已接入训练**。
