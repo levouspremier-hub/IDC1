@@ -373,9 +373,17 @@ def test_no_readiness_flag_is_prematurely_true():
         assert readiness[key] is False, key
 
 
-def test_reserved_split_names_are_not_created():
+def test_reserved_split_names_never_claim_readiness():
+    """M1.3g-c 迁移：三份正式 split manifest 现在**存在**（g-c 的产物），
+    但「存在 ≠ 就绪」——它们必须显式声明尚未就绪。"""
     for name in ("train.json", "validation.json", "test.json"):
-        assert not (REPO_ROOT / "data/manifest" / name).exists(), name
+        path = REPO_ROOT / "data/manifest" / name
+        if not path.exists():
+            continue
+        readiness = json.loads(path.read_text(encoding="utf-8"))["readiness"]
+        assert readiness == {
+            "formal_training_ready": False, "formal_env_ready": False,
+        }, name
 
 
 # --- 6. slow：真实网络（可选，不进入 make check） -----------------------------

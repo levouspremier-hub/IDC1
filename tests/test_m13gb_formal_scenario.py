@@ -463,13 +463,14 @@ def test_wrong_output_hash_is_rejected(tmp_path):
 
 # --- 7. 公开入口仍 fail closed ----------------------------------------------
 
-def test_build_scenario_formal_path_still_requires_the_split_manifest():
-    """g-c 之前：三个正式 split manifest 不存在 → 必须 FileNotFoundError。"""
+def test_build_scenario_formal_path_still_fails_closed():
+    """**M1.3g-c 迁移**：三份正式 split manifest 现在存在（g-c 的产物），
+    但正式接线（g-e/g-f）尚未完成 —— 公开入口仍必须**显式失败**，
+    **绝不**返回 bundle、**绝不**回退合成。
+    """
     from scenario.scenario import build_scenario
 
-    for name in ("train.json", "validation.json", "test.json"):
-        assert not (REPO_ROOT / "data/manifest" / name).exists(), name
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises((FileNotFoundError, ValueError, NotImplementedError)):
         build_scenario("train", start="2024-01-01", horizon=24, forecast_cutoff=4)
 
 

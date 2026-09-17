@@ -89,8 +89,13 @@ def test_same_input_same_hash():
     assert b1.model_dump() == b2.model_dump()
 
 
-def test_formal_mode_without_data_raises():
-    with pytest.raises(FileNotFoundError):
+def test_formal_mode_without_wiring_raises():
+    """正式模式在接线完成前必须**显式失败**，不得回退到合成。
+
+    M1.3g-c 迁移：三份正式 split manifest 现在存在（g-c 产物），
+    失败点从「缺 manifest」前移到「正式接线尚未完成」，因此接受两种类型。
+    """
+    with pytest.raises((FileNotFoundError, ValueError, NotImplementedError)):
         build_scenario("train", "s", 24, 4, synthetic=False, manifest_dir="data/manifest")
 
 

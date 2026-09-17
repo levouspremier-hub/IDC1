@@ -455,9 +455,10 @@ def test_no_forecast_scenario_bundle_or_train_manifest_is_created(tmp_path):
     _materialize(fixture, out)
     created = sorted(p.name for p in out.iterdir())
     assert created == ["singapore_2024_splits.json"], created
+    # M1.3g-c 迁移：正式 split manifest 现在由 **g-c 的物化器**产生；
+    # 本卡的 split 物化器**仍然**不得创建它们（职责分离不变）。
     for forbidden in ("train.json", "validation.json", "test.json"):
         assert not (out / forbidden).exists()
-        assert not (REPO_ROOT / "data/manifest" / forbidden).exists()
 
 
 # --- 5. 物化的 revision / 幂等 / 原子性 --------------------------------------

@@ -190,6 +190,9 @@ def test_provider_and_snapshot_share_cutoff_semantics():
 def test_synthetic_flagged_and_real_mode_blocked():
     b = build_scenario("train", "s", 24, 4, synthetic=True, seed=9)
     assert b.mode == "synthetic"
-    # 正式模式（无 M1.3 split/forecast）必须显式失败，不得回退到合成
-    with pytest.raises(FileNotFoundError):
+    # 正式模式必须**显式失败**，不得回退到合成。
+    # M1.3g-c 迁移：三份正式 split manifest 现在存在（g-c 产物），因此失败点
+    # 从「缺 manifest」前移到「正式接线尚未完成」；断言改为「必须抛错」，
+    # 且**绝不**返回 synthetic bundle。
+    with pytest.raises((FileNotFoundError, ValueError, NotImplementedError)):
         build_scenario("train", "s", 24, 4, synthetic=False, manifest_dir="data/manifest")
