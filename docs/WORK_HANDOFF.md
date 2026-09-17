@@ -19,8 +19,8 @@
 > ⚠️ **M1.3f-b 冻结的是模型/方法来源，不是 2024 观测**：四项 readiness 现为 `true`
 > 只代表驱动表已物化，正式 `ScenarioBundle`、训练与评估**仍然 blocked**；
 > **M1.3g-a / R1 已通过**；**六项人工裁决 D1–D6 已给出**；
-> **M1.3g-0（contract-v9）已通过**；**M1.3g-b（formal causal `ScenarioBundle` 构造内核）
-> 执行完成，等待人工复审**，见 §7Q。
+> **M1.3g-0（contract-v9）已通过**；**M1.3g-b / R1（formal causal `ScenarioBundle`
+> 构造内核）执行完成，等待人工复审**，见 §7Q–§7R。
 > ⚠️ **契约版本为 `contract-v9`**；`SOURCE_KINDS` 含
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **g-b 只做构造内核**：**不**接线 env/train、**不**创建三个正式 split manifest、
