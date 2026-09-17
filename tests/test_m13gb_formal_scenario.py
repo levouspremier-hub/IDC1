@@ -1,0 +1,403 @@
+"""M1.3g-b：formal causal `ScenarioBundle` 构造内核。
+
+**改前缺陷（本文件在实现前必须为红）**：
+
+- `scenario/formal_scenario.py` **不存在**——正式路径在
+  `scenario/scenario.py` 直接抛 `NotImplementedError`；
+- 没有任何把五类 causal driver forecast 变换成 PV / 风电 forecast 的正式内核；
+- carbon 的 `human_approved_external_low_resolution` 与 arrival 的**期望值**口径
+  都还没有被任何构造器使用。
+
+**本卡不接线 env / train、不创建三个正式 split manifest、不冻结 refs。**
+"""
+
+import hashlib
+import importlib
+import json
+import pathlib
+import shutil
+
+import numpy as np
+import pandas as pd
+import pytest
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+FORMAL_MODULE = "scenario.formal_scenario"
+DRIVERS_MODULE = "scenario.exogenous_drivers"
+FORECAST_MODULE = "scenario.forecast"
+
+CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
+CANONICAL_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_half_hour.json"
+SPLIT_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_splits.json"
+POLICY_V2 = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy_v2.json"
+ENDOGENOUS_MANIFEST = REPO_ROOT / "data/manifest/singapore_2024_exogenous_v2.json"
+ENDOGENOUS_SOURCE = REPO_ROOT / "data/manifest/m13f_materialization_sources_v3.json"
+ENDOGENOUS_PARQUET = REPO_ROOT / "data/processed/singapore_2024/exogenous_drivers_v2.parquet"
+
+TOTAL_ROWS = 17568
+TRAIN_ROWS = 10224
+PERIOD_STEPS = 48
+CARBON_VALUE = 0.402
+ARRIVAL_MEAN = 1000.0
+PV_AC_LIMIT_KW = 500.0 / 1.2
+WIND_RATED_KW = 800.0
+TIMEZONE = "Asia/Singapore"
+
+BUNDLE_FORECAST_FIELDS = (
+    "price_forecast", "load_forecast", "pv_forecast", "wind_forecast",
+    "temperature_forecast", "carbon_forecast", "arrival_forecast",
+)
+EXPECTED_KINDS = {
+    "price_forecast": "seasonal_naive",
+    "load_forecast": "seasonal_naive",
+    "temperature_forecast": "seasonal_naive",
+    "pv_forecast": "modeled_scenario",
+    "wind_forecast": "modeled_scenario",
+    "arrival_forecast": "modeled_scenario",
+    "carbon_forecast": "human_approved_external_low_resolution",
+}
+
+_ORIGIN = TRAIN_ROWS // 2      # 全局 origin，位于 train 内部且历史充足
+_CUTOFF = 4
+
+
+def formal():
+    return importlib.import_module(FORMAL_MODULE)
+
+
+def drivers():
+    return importlib.import_module(DRIVERS_MODULE)
+
+
+def forecast():
+    return importlib.import_module(FORECAST_MODULE)
+
+
+def _sha256(path) -> str:
+    return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+
+def _assets_present() -> bool:
+    return all(
+        p.exists()
+        for p in (CANONICAL_PARQUET, CANONICAL_MANIFEST, SPLIT_MANIFEST, POLICY_V2,
+                  ENDOGENOUS_MANIFEST, ENDOGENOUS_SOURCE, ENDOGENOUS_PARQUET)
+    )
+
+
+needs_assets = pytest.mark.skipif(
+    not _assets_present(), reason="真实冻结上游资产不在本机"
+)
+
+
+def build(**over):
+    """用**真实**冻结资产构造 formal bundle（默认 origin/cutoff 固定）。"""
+    kwargs = dict(
+        split="train",
+        origin=_ORIGIN,
+        forecast_cutoff=_CUTOFF,
+        canonical_parquet_path=CANONICAL_PARQUET,
+        canonical_manifest_path=CANONICAL_MANIFEST,
+        split_manifest_path=SPLIT_MANIFEST,
+        policy_manifest_path=POLICY_V2,
+        exogenous_manifest_path=ENDOGENOUS_MANIFEST,
+        exogenous_source_manifest_path=ENDOGENOUS_SOURCE,
+    )
+    kwargs.update(over)
+    return formal().build_formal_scenario(**kwargs)
+
+
+# --- 1. 内核存在性 -----------------------------------------------------------
+
+def test_formal_kernel_module_exists():
+    module = formal()
+    for name in ("build_formal_scenario", "FORMAL_SOURCE_KINDS",
+                 "EXOGENOUS_OUTPUT_SHA256"):
+        assert hasattr(module, name), name
+
+
+# --- 2. 形状、时间轴与 source_kind -------------------------------------------
+
+@needs_assets
+def test_bundle_is_a_formal_contract_v9_bundle():
+    from contracts import CONTRACT_VERSION_ID
+
+    bundle = build()
+    assert bundle.mode == "formal"
+    assert bundle.schema_version == CONTRACT_VERSION_ID
+    assert bundle.split == "train"
+    assert bundle.forecast_cutoff == _CUTOFF
+
+
+@needs_assets
+def test_source_kinds_are_exactly_the_frozen_mapping():
+    bundle = build()
+    for field, kind in EXPECTED_KINDS.items():
+        entry = getattr(bundle.forecast_provenance, field)
+        assert entry.series_name == field
+        assert entry.source_kind == kind, field
+
+
+@needs_assets
+def test_all_seven_generated_at_equal_the_origin():
+    bundle = build()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    origin_stamp = pd.Timestamp(canonical["timestamp"].iloc[_ORIGIN]).isoformat()
+    assert bundle.generated_at == origin_stamp
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert getattr(bundle.forecast_provenance, field).generated_at == origin_stamp
+
+
+@needs_assets
+def test_every_series_has_the_cutoff_length():
+    bundle = build()
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert len(getattr(bundle, field)) == _CUTOFF, field
+
+
+@needs_assets
+def test_bundle_passes_the_training_purpose_gate():
+    from contracts.validators import validate_forecast_purpose
+
+    validate_forecast_purpose(build(), purpose="training")
+
+
+# --- 3. carbon 与 arrival 的口径 ---------------------------------------------
+
+@needs_assets
+def test_carbon_is_the_approved_constant_and_not_modeled_scenario():
+    bundle = build()
+    assert np.allclose(np.asarray(bundle.carbon_forecast), CARBON_VALUE)
+    entry = bundle.forecast_provenance.carbon_forecast
+    assert entry.source_kind == "human_approved_external_low_resolution"
+    assert entry.source_kind != "modeled_scenario"
+
+
+@needs_assets
+def test_arrival_is_the_template_expectation_not_a_poisson_draw():
+    """D3：arrival forecast 是 `λ(slot)`，**不是** Poisson 抽样值。"""
+    module = formal()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    stamps = pd.DatetimeIndex(canonical["timestamp"].iloc[_ORIGIN:_ORIGIN + _CUTOFF])
+    slots = drivers().arrival_template_slot(stamps)
+    template = module.exogenous_rate_template()
+    expected = template[slots] * ARRIVAL_MEAN
+
+    bundle = build()
+    assert np.allclose(np.asarray(bundle.arrival_forecast), expected)
+
+    # 与 Poisson 实现值必须**不同**（否则说明用了抽样的实现值）
+    realized = drivers().generate_arrival(stamps, template)
+    assert not np.array_equal(np.asarray(bundle.arrival_forecast), realized)
+
+
+@needs_assets
+def test_arrival_is_deterministic_across_calls():
+    first = np.asarray(build().arrival_forecast)
+    second = np.asarray(build().arrival_forecast)
+    assert np.array_equal(first, second)
+
+
+# --- 4. PV / 风电：与同一物理函数逐位对照 ------------------------------------
+
+@needs_assets
+def test_pv_matches_the_frozen_physics_function():
+    module = formal()
+    bundle = build()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    stamps = pd.DatetimeIndex(canonical["timestamp"])
+    ghi_f = forecast().seasonal_naive_forecast(
+        canonical["ghi_w_per_m2"].to_numpy(), origin=_ORIGIN, forecast_cutoff=_CUTOFF)
+    temp_f = forecast().seasonal_naive_forecast(
+        canonical["temperature_deg_c"].to_numpy(), origin=_ORIGIN,
+        forecast_cutoff=_CUTOFF)
+    v10_f = forecast().seasonal_naive_forecast(
+        canonical["wind_speed_10m_mps"].to_numpy(), origin=_ORIGIN,
+        forecast_cutoff=_CUTOFF)
+    expected = drivers().local_pv_kw(
+        stamps[_ORIGIN:_ORIGIN + _CUTOFF], ghi_f, temp_f, v10_f)
+    assert np.array_equal(np.asarray(bundle.pv_forecast), expected)
+    assert np.array_equal(np.asarray(bundle.pv_forecast), module.pv_forecast(
+        stamps[_ORIGIN:_ORIGIN + _CUTOFF], ghi_f, temp_f, v10_f))
+
+
+@needs_assets
+def test_wind_matches_the_frozen_physics_function():
+    module = formal()
+    bundle = build()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    v10_f = forecast().seasonal_naive_forecast(
+        canonical["wind_speed_10m_mps"].to_numpy(), origin=_ORIGIN,
+        forecast_cutoff=_CUTOFF)
+    expected = drivers().wind_generation_kw(v10_f)
+    assert np.array_equal(np.asarray(bundle.wind_forecast), expected)
+    assert np.array_equal(
+        np.asarray(bundle.wind_forecast), module.wind_forecast(v10_f))
+
+
+@needs_assets
+def test_pv_and_wind_respect_the_same_caps_as_truth():
+    """全年前 4 个窗口之外：直接对整条序列验证上限与夜间零。"""
+    module = formal()
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    stamps = pd.DatetimeIndex(canonical["timestamp"])
+    ghi = canonical["ghi_w_per_m2"].to_numpy()
+    temp = canonical["temperature_deg_c"].to_numpy()
+    v10 = canonical["wind_speed_10m_mps"].to_numpy()
+    pv = module.pv_forecast(stamps, ghi, temp, v10)
+    wind = module.wind_forecast(v10)
+
+    assert (pv >= 0.0).all() and (pv <= PV_AC_LIMIT_KW + 1e-9).all()
+    night = ghi <= 0.0
+    assert night.sum() > 0
+    assert np.allclose(pv[night], 0.0)
+    assert (wind >= 0.0).all() and (wind <= WIND_RATED_KW + 1e-9).all()
+
+
+# --- 5. 因果性：未来真值不得进入 forecast ------------------------------------
+
+def _mutated_chain(tmp_path, *, mutate_from: int, mutate_to: int | None = None):
+    """复制冻结链并篡改 canonical 的 `[mutate_from, mutate_to)` 行，同步两个 hash。"""
+    root = tmp_path / "chain"
+    (root / "data/processed/singapore_2024").mkdir(parents=True)
+    (root / "data/manifest").mkdir(parents=True)
+    for name in ("singapore_2024_half_hour.json", "singapore_2024_splits.json"):
+        shutil.copy(REPO_ROOT / "data/manifest" / name, root / "data/manifest" / name)
+
+    canonical = pd.read_parquet(CANONICAL_PARQUET)
+    stop = len(canonical) if mutate_to is None else mutate_to
+    canonical.loc[canonical.index[mutate_from:stop], "temperature_deg_c"] += 7.0
+    canonical.loc[canonical.index[mutate_from:stop], "ghi_w_per_m2"] += 11.0
+    canonical.loc[canonical.index[mutate_from:stop], "wind_speed_10m_mps"] += 0.9
+    parquet = root / "data/processed/singapore_2024/half_hour.parquet"
+    canonical.to_parquet(parquet, index=False)
+
+    canonical_manifest = root / "data/manifest/singapore_2024_half_hour.json"
+    payload = json.loads(canonical_manifest.read_text())
+    payload["output_parquet_sha256"] = _sha256(parquet)
+    canonical_manifest.write_text(json.dumps(payload))
+
+    split_manifest = root / "data/manifest/singapore_2024_splits.json"
+    splits = json.loads(split_manifest.read_text())
+    splits["canonical_parquet_sha256"] = _sha256(parquet)
+    splits["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    splits["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    splits["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
+    splits["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
+    split_manifest.write_text(json.dumps(splits))
+
+    return {
+        "canonical_parquet_path": parquet,
+        "canonical_manifest_path": canonical_manifest,
+        "split_manifest_path": split_manifest,
+    }
+
+
+@needs_assets
+def test_future_truth_mutation_does_not_change_any_forecast(tmp_path):
+    """`[i, i+C)` 的 canonical 真值变化**不得**改变七条 forecast 中的任何一条。"""
+    baseline = build()
+    mutated = build(**_mutated_chain(tmp_path, mutate_from=_ORIGIN,
+                                     mutate_to=_ORIGIN + _CUTOFF))
+    for field in BUNDLE_FORECAST_FIELDS:
+        assert np.array_equal(
+            np.asarray(getattr(baseline, field)),
+            np.asarray(getattr(mutated, field)),
+        ), field
+
+
+@needs_assets
+def test_history_mutation_changes_the_derived_forecasts(tmp_path):
+    """`[i−48, i)` 的 driver 真值变化**必须**体现在 forecast 上。"""
+    baseline = build()
+    mutated = build(**_mutated_chain(
+        tmp_path, mutate_from=_ORIGIN - PERIOD_STEPS, mutate_to=_ORIGIN))
+    for field in ("price_forecast", "temperature_forecast", "pv_forecast",
+                  "wind_forecast"):
+        assert not np.array_equal(
+            np.asarray(getattr(baseline, field)),
+            np.asarray(getattr(mutated, field)),
+        ), field
+
+
+# --- 6. 信任链 fail closed ---------------------------------------------------
+
+@needs_assets
+def test_v1_policy_is_rejected(tmp_path):
+    """正式的 contract-v8 v1 policy 不得被 formal 内核接受。"""
+    v1 = REPO_ROOT / "data/manifest/singapore_2024_forecast_policy.json"
+    with pytest.raises((ValueError, TypeError)):
+        build(policy_manifest_path=v1)
+
+
+@needs_assets
+def test_v1_exogenous_manifest_is_rejected():
+    """M1.3f-c 的 v1 外生驱动 manifest 不得作为正式链证据。"""
+    v1 = REPO_ROOT / "data/manifest/singapore_2024_exogenous.json"
+    with pytest.raises((ValueError, TypeError)):
+        build(exogenous_manifest_path=v1)
+
+
+@needs_assets
+@pytest.mark.parametrize("field", ("carbon", "pv", "arrival"))
+def test_missing_or_tampered_approval_is_rejected(tmp_path, field):
+    """缺 / 篡改 B1（carbon）或 B5（PV / arrival）声明必须 fail closed。"""
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text())
+    if field == "carbon":
+        payload["columns"]["carbon_intensity"].pop("human_decision")
+    elif field == "pv":
+        payload["columns"]["local_pv_kw"]["b5_pv_approval"]["albedo"] = 0.5
+    else:
+        payload["columns"]["arrival"]["b5_approval"].pop("seed")
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises((ValueError, TypeError)):
+        build(exogenous_manifest_path=target)
+
+
+@needs_assets
+def test_bad_exogenous_hash_is_rejected(tmp_path):
+    """exogenous manifest 被改写（hash 不符）必须拒绝。"""
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text())
+    payload["readiness"]["formal_training_ready"] = True
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises((ValueError, TypeError)):
+        build(exogenous_manifest_path=target)
+
+
+@needs_assets
+def test_wrong_output_hash_is_rejected(tmp_path):
+    """manifest 声明的 v2 output hash 与 parquet 实际字节不符必须拒绝。"""
+    root = tmp_path / "manifests"
+    root.mkdir()
+    payload = json.loads(ENDOGENOUS_MANIFEST.read_text())
+    payload["output"]["sha256"] = "0" * 64
+    target = root / "exogenous_v2.json"
+    target.write_text(json.dumps(payload))
+    with pytest.raises((ValueError, TypeError)):
+        build(exogenous_manifest_path=target)
+
+
+# --- 7. 公开入口仍 fail closed ----------------------------------------------
+
+def test_build_scenario_formal_path_still_requires_the_split_manifest():
+    """g-c 之前：三个正式 split manifest 不存在 → 必须 FileNotFoundError。"""
+    from scenario.scenario import build_scenario
+
+    for name in ("train.json", "validation.json", "test.json"):
+        assert not (REPO_ROOT / "data/manifest" / name).exists(), name
+    with pytest.raises(FileNotFoundError):
+        build_scenario("train", start="2024-01-01", horizon=24, forecast_cutoff=4)
+
+
+def test_synthetic_path_is_untouched():
+    from scenario.scenario import build_scenario
+
+    bundle = build_scenario("train", start="s", horizon=24, forecast_cutoff=4,
+                            synthetic=True)
+    assert bundle.mode == "synthetic"
