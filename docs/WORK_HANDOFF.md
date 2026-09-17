@@ -24,8 +24,10 @@
 > ⚠️ **契约版本为 `contract-v9`**；`SOURCE_KINDS` 含
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
-> **g-d / R1 与 g-c 均已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
-> **g-c（正式 split manifest triad）执行完成，等待人工复审**，见 §7T–§7V；
+> **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
+> **g-c 第一轮审核不通过，经 R1 返修后执行完成，等待人工复审**（见 §7T–§7W）；
+> **v2 triad（`data/manifest/formal_splits_v2/`）是唯一候选**，
+> v1 标为 `superseded_pre_live_input_binding_fix`；
 > `g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
@@ -1709,6 +1711,68 @@ git revert <交接提交> <本验收提交> 83a0ac8 88e8c9d c761de3 31ae6cc d31a
 ```
 
 **g-c 通过复审之前**：`g-e / g-f` 均不得开始；
+**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7W. M1.3g-c-R1：formal split manifest 的实时输入绑定修复（**执行完成，等待复审**）
+
+**M1.3g-c 第一轮审核不通过**，起点 `62269d9`，实现终点 `0edb145`
+（详见卡片 §u–§v）。
+
+**已复现的缺陷**：`validate_split_manifest` 只检查 `path` / `sha256` 的**语法**。
+把 `inputs.frozen_refs` 改成
+`{"path": "configs/frozen_refs/refs.json", "sha256": "0"*64}`
+后 **仍返回成功** —— triad 可以把 refs 指向被取代的 v2 而不被发现。
+因此 **v1 triad 不能作为后续正式证据**。
+
+**修正**：
+
+1. `load_verified_split_manifest()` 成为**唯一**的「验证并加载」公开入口：
+   结构校验 → **实时输入绑定**（八个角色的 `path` 必须精确等于**固定生产
+   logical path**，`sha256` 必须等于对应实际文件的**实测字节**）→
+   `frozen_refs` 精确为 `refs_v3.json` / `ab7f5b58…`（v2 一律拒绝）→
+   **实际调用**四项既有严格链（含 reader）。
+2. `build_split_manifest` 与 `materialize_split_manifest_triad` **删除**
+   `inputs` mapping、路径参数与 `materializer_revision` 覆盖；未知参数
+   一律 **`TypeError`**。
+3. schema 升 **`m1.3g-formal-split-manifest-v2`**，输出目录
+   `data/manifest/formal_splits_v2/`。
+4. triad 仍**整体原子**：专测「**第二次** replace 失败 → 第一个已写文件也回滚」；
+   幂等 / `mtime` 不变 / 不同 / 部分 / 畸形拒绝全部保留。
+
+**实测拒绝证据**：审核复现 → `inputs.frozen_refs.path 必须精确等于固定生产
+logical path 'configs/frozen_refs/refs_v3.json'`；八个角色逐一篡改 hash
+→ **8/8 拒绝**；篡改 path / 交换角色 / 使用 v2 refs 真实 hash → 全部拒绝。
+
+**v1 保留、v2 生成**：
+
+| 项 | 值 |
+|---|---|
+| **v1**（**逐字节不变**，`superseded_pre_live_input_binding_fix`） | `data/manifest/{train,validation,test}.json` = `91b2d7c2…` / `19f17706…` / `a40c595a…` |
+| **v2**（唯一候选） | `data/manifest/formal_splits_v2/{train,validation,test}.json` = `e0084a66…` / `1f539fcc…` / `0b4009b8…` |
+
+v2 的**声明内容与 v1 相同**（行范围 / 时间范围 / D5 candidate origins /
+`contract-v9` / 八角色 / `refs_v3`），只是 schema 与读取入口变严。
+**未来 g-e/g-f 只能读取 v2。**
+
+> **必须如实登记的范围外修改（`.gitignore`，单独提交）**：既有规则
+> `!data/manifest/*.json` 只解开**直接子级**，故新增两行**只**放行
+> `data/manifest/formal_splits_v2/`。与 M1.3f-b 处理
+> `public_benchmarks/*.md` 同构；冻结资产不受影响（已实测）。
+
+**先红实测**（`02a23ed`）：`55 failed, 9 passed`
+（含 `AssertionError: 公开 verified loader 必须存在`）。
+**转绿**：focused **64**、`m12/m13/contracts` **1261**、
+`make check` **exit 0**、`make smoke` **exit 0**、`make train` **exit 2**
+（原因仍为 `manifest 缺少字段 'source'`，即 g-e/g-f 未接线；不回退 synthetic、
+无 checkpoint）。上游全部未变；**v1 triad 字节不变**。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> <本验收提交> 84f4be0 19983e4 0edb145 02a23ed 4bf7d3d
+```
+
+**g-c-R1 通过复审之前**：`g-e / g-f` 均不得开始；
 **正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
