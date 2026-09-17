@@ -52,14 +52,19 @@ from scenario.splits import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v2"
+MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v3"
 CONTRACT_VERSION = "contract-v9"
 TIMEZONE = "Asia/Singapore"
 HISTORY_STEPS = 48
 
 MANIFEST_DIR = REPO_ROOT / "data/manifest"
-# 正式 triad 的**唯一**输出目录（R1：未来 g-e/g-f 只能读取这里）
-FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v2"
+# 正式 triad 的**唯一**输出目录与路径来源（R2：未来 g-e/g-f 只能读取这里）
+FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v3"
+# **已被取代**的两个位置：任何传入其中的 triad 路径都必须 fail closed
+SUPERSEDED_SPLIT_DIRS: tuple[Path, ...] = (
+    MANIFEST_DIR,                          # v1：superseded_pre_live_input_binding_fix
+    MANIFEST_DIR / "formal_splits_v2",     # v2：superseded_pre_canonical_path_fix
+)
 CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
 CANONICAL_MANIFEST = MANIFEST_DIR / "singapore_2024_half_hour.json"
 TRUTH_SPLIT_MANIFEST = MANIFEST_DIR / "singapore_2024_splits.json"
@@ -273,6 +278,21 @@ def production_logical_paths() -> dict[str, str]:
     return {
         role: logical_repo_path(path) for role, path in default_inputs().items()
     }
+
+
+def _reject_superseded_location(path: Path | str, *, label: str) -> Path:
+    """**R2-5**：triad 路径落在 v1 / v2 的**位置**上一律 fail closed。
+
+    即使该文件的**内容**是合法的 v3，位置本身也已被取代 —— 没有 fallback。
+    """
+    resolved = Path(path).resolve()
+    for legacy in SUPERSEDED_SPLIT_DIRS:
+        if resolved.parent == legacy.resolve():
+            raise SplitManifestError(
+                f"{label} 位于已被取代的位置 {logical_repo_path(legacy)}/："
+                f"正式链只接受 {logical_repo_path(FORMAL_SPLIT_DIR)}/（无 fallback）"
+            )
+    return resolved
 
 
 def _require_live_binding(declared: object) -> None:
@@ -569,7 +589,7 @@ def load_verified_split_manifest(path: Path | str, *, expected_split: str) -> di
     """
     if expected_split not in SPLIT_NAMES:
         raise SplitManifestError(f"未知 split：{expected_split!r}")
-    path = Path(path)
+    path = _reject_superseded_location(path, label="verified split manifest")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -585,5 +605,12 @@ def load_verified_split_manifest(path: Path | str, *, expected_split: str) -> di
 
 
 def manifest_relative_path(split: SplitName) -> str:
-    """三份 manifest 的仓库相对逻辑路径（唯一来源）。"""
-    return f"data/manifest/{split}.json"
+    """正式 triad 的**唯一公开路径来源**：`data/manifest/formal_splits_v3/<split>.json`。
+
+    R2：此 helper 曾返回 `data/manifest/<split>.json` —— **superseded 的 v1**。
+    任何按文档使用它的代码都必须拿到**唯一候选**（v3）；`FORMAL_SPLIT_DIR`
+    是同一路径的目录形式，两者恒等。
+    """
+    if split not in SPLIT_NAMES:
+        raise SplitManifestError(f"未知 split：{split!r}，必须属于 {list(SPLIT_NAMES)}")
+    return f"{logical_repo_path(FORMAL_SPLIT_DIR)}/{split}.json"
