@@ -26,8 +26,9 @@
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
 > **g-c 已经 R1 / R2 / R3 三轮返修后通过人工复审**（2026-09-18，见 §7T–§7Y）；
-> **M1.3g-e-a 第一轮审核不通过，经 R1 返修后执行完成，等待人工复审**
-> （见 §7Z–§7AA）；**`D-INTENSITY` 与 D1–D11 未裁决前不得开始 g-e-b**；
+> **M1.3g-e-a 前两轮审核不通过，经 R1 / R2 返修后执行完成，等待人工复审**
+> （见 §7Z–§7AB）；**`D-INTENSITY` 与 D1–D11 未裁决前不得开始 g-e-b**，
+> 且本审计**建议下一张卡是上游 arrival-intensity 决策卡（M1.3f）**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1967,6 +1968,64 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 
 **验收**：focused（m13f / m13gb / m13gc / m13gd）**221 passed, 1 deselected**、
 `make check` exit 0、`git diff --check` / `git status --short` 空。
+
+**g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**执行完成，等待复审**）
+
+**M1.3g-e-a-R1 第二轮审核不通过**，起点 `77e0a6c`，实现终点 `3ee0397`
+（详见卡片 §ae–§ag）。**两项 P1 + 一项 P2：**
+
+1. **P1-1 微例的 work/step 不变性写错**：改前 §C.4 写
+   「`workload / duration_steps = 10 work/step`（**两种步长一致**）」——
+   实测 1 h step 是 **20** work/step、0.5 h step 是 **10** work/step，
+   **不相等**；**保持不变的是 work/hour**（两者皆 `20 work/hour`）。
+2. **P1-2 mapper schema 不全 + 分割无每任务上下界**：改前输出只列 10 个字段，
+   **缺** `name` / `load_profile` / `arrival_time`，也没有到 `Task` 的字段映射；
+   largest-remainder **不保证** `w_k ∈ [w_min_k, w_max_k]`。
+3. **P2 从无标签 aggregate 数据声称校准 profile 概率**：改前 §H / D11 写
+   「可由 train split 校准：profile 概率候选、`E[workload_per_task]`」——
+   aggregate 数据**只有每槽总 workload**，没有任何任务级标签。
+
+**修正要点**：
+
+- **§G.1 完整 Task schema**：覆盖 `idc_model/task.py` 的 **11 个必填字段**
+  （含 `name`、`load_profile`）并给出**显式映射**
+  （`arrival_slot→arrival_time`、`duration_steps→duration`、`deadline_steps→deadline`）；
+  另附 8 项 provenance。
+- **§G.2 有界确定性分割**（替代无约束 largest-remainder）：8 步流程，
+  含 `Σw_min <= total <= Σw_max` 覆盖检查、确定性增/减任务、
+  `MAX_TASKS_PER_SLOT` + 迭代上限后 **fail closed**、上下界内分配 residual、
+  收尾断言「每任务可行**且**全局守恒」。
+- **§G.4 profile 可行域**：`w_min`/`w_max` 公式 + 四个可行约束 +
+  实测区间（A `37.6–169.0`、B `131.5–704.3`、C `413.2–1690.4`、D `37.6–375.6` work）。
+- **§G.5 load_profile 确定性构造**：**推荐平坦 profile**
+  `u = w/(duration_steps × C_IDC × delta_t_hours)`，`load_profile = [u] × duration_steps`。
+- **§G.6 固定点（fixed-point）整数账本**：整数 / micro-work-unit，
+  Hamilton 只在整数域运行，`Task.workload` 只是运行时 float 表示，
+  hash 基于 canonical 整数表示；**每槽与全 episode 精确守恒**。
+- **§G.7 不变式扩至 18 条**（新增 14–18）。
+- **§H / D11 参数来源修正**：profile 参数**全部**是人工批准的 modeled scenario；
+  `E[workload_per_task]` 由批准参数**推导**；train split **只**用于验证输入范围与守恒账本。
+- **§C.4 微例修正**（见上）。
+
+**★ D-INTENSITY 建议**：当前 `1000 work-units/半小时` **只是 modeled scenario 尺度**，
+rate-based 下约为容量 **4.970 倍**，**不宜直接作为唯一正式主训练场景**。
+**建议保留为明确标记的 `stress` 候选**，并在 **g-e-b 之前**先返回 **M1.3f**
+为 **main scenario** 冻结有来源、预先批准、**不得按结果调节**的 intensity。
+**该建议不授权修改数据**；只登记「**下一张卡应是上游 arrival-intensity 的
+审计/决策卡，而不是 mapper 实现卡**」（§J.0）。
+**本卡未自行批准** ≈4.970× 场景进入实现。
+
+**验收**：focused（m13f/m13gb/m13gc/m13gd）**221 passed, 1 deselected**、
+`make check` exit 0（**2462 passed**）、`git diff --check` / `git status --short` 空。
+**九项人工确认全部通过**。**范围外修改：无**（`.gitignore` 未动）。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> <本验收提交> 3ee0397 a953d45
+```
 
 **g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
