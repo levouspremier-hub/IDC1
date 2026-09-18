@@ -307,6 +307,20 @@ expected `31.994`／realized `32.0204`／`rho_realized` `0.80066`（`diagnostic_
 refs 新版本、`formal_splits_v5`、旧版本 superseded 登记）；**本卡未切换 formal 链**
 （仍绑定 v2），**不得自行开始 `M1.3f-e-b2`**，mapper / 训练仍未开始。
 
+**✅ `M1.3f-e-b1-R1` 执行完成（等待人工复审）**：**e-b1 第一轮审核不通过**——
+旧 loader 只校验结构与上游绑定，**接受被伪造的嵌套业务语义**
+（实测 `FORGED_SEMANTICS_ACCEPTED True 1000.0 False`）。新增**统一生产入口**
+`load_verified_v3_bundle()`（`--verify` **只**调用它）：三份产物非 symlink、
+**顶层与所有嵌套对象**精确键集合、policy 走正式 loader、v2 shape 按冻结 hash、
+source-v4 **由 trusted constants + live hashes 重建**、两份 manifest **共享
+`frozen_at_utc`**、**由 canonical 输入重算完整 DataFrame 并与 parquet 逐列逐值一致**、
+再**重建 output manifest 并与文件逐字段相等**。因此 arrival 语义、`rho_realized`、
+predecessor、readiness **全部由 policy 与重算结果导出**，不信任 JSON 自报。
+伪造、**coordinated source/parquet 篡改**、symlink、dirty —— **全部 REJECTED**；
+未篡改对照 **ACCEPTED**。最终 v3：parquet `07b648f0…`（**字节未变**）、
+manifest `31cb241c…`、source-v4 `73f75cef…`，`materializer_revision = 34f2de0…`。
+**上游 hash 全部未变**；`make check` **2520 passed**。
+
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
 每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与

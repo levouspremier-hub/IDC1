@@ -36,8 +36,10 @@
 > （31.994 work/半小时）；
 > **M1.3f-e-a（B6 policy 冻结）已通过人工复审**（见 §7AD），
 > canonical policy `data/manifest/m13f_arrival_intensity_policy_v1.json`；
-> **M1.3f-e-b1（由 B6 policy 物化 exogenous v3）执行完成，等待人工复审**
-> （见 §7AE）：v3 三资产已冻结，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
+> **M1.3f-e-b1（由 B6 policy 物化 exogenous v3）第一轮审核不通过，
+> 经 M1.3f-e-b1-R1 返修后执行完成，等待人工复审**（见 §7AE–§7AF）：
+> v3 三资产已冻结，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
+> **R1 新增统一入口 `load_verified_v3_bundle()`**（语义信任边界已闭合）；
 > **formal 链在 e-b2 之前仍绑定 v2**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
@@ -2194,6 +2196,63 @@ refs 新版本、`formal_splits_v5`、canonical-only 与旧版本 superseded 登
 `predecessor.status = predecessor_formal_chain_still_bound_to_v2`）；
 `formal_scenario_bundle_ready` / `formal_training_ready` **仍为 false**；
 **mapper / env 接线 / 正式训练 / 评估 / M6 均未开始**。
+
+### 7AF. M1.3f-e-b1-R1：闭合 v3 bundle 的语义信任边界（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §Y–§AA。**e-b1 第一轮审核不通过**：现有
+`load_verified_v3_manifest()` 只校验结构与上游绑定，**不**校验嵌套业务语义。
+
+**改前实测（只读复现）**：
+
+```text
+FORGED_SEMANTICS_ACCEPTED True 1000.0 False
+```
+
+即 `b5_scale_inherited=true` + scale `1000.0` + `forbid_realization_feedback=false`
+**被公开 loader 全部接受**。
+
+**修复**：新增**统一生产入口** `load_verified_v3_bundle()`（`--verify` **只**调用它，
+不再做两个不相交的浅层检查）。它一次性验证：三份产物为预期路径下的普通文件
+（**非 symlink**）；manifest/source **顶层及所有嵌套对象**精确键集合；B6 policy 走
+正式 loader；v2 shape manifest 按冻结 hash；source-v4 由 trusted constants +
+live hashes **重建**并逐字段相等；两份 manifest **共享 `frozen_at_utc`**；
+由 canonical 输入 + policy + 冻结 template **重算**完整 DataFrame 并与磁盘 parquet
+在列名/dtype/timestamp/行数/数值上完全一致；再用重算结果**重建** output manifest
+并**逐字段等于**文件。因此 arrival 嵌套语义、`rho_realized`、predecessor、readiness
+**全部由 policy 与重算结果导出**，**不信任 JSON 自报**。
+
+**修复前后对照（实测）**：`b5_scale_inherited=true`、scale=1000、
+`forbid_realization_feedback=false`、`realization_seed` 被改、诊断量伪造、
+template 元数据、`predecessor`/`readiness`、**coordinated source 篡改（同步 hash）**、
+**coordinated parquet 篡改（同步 `output.sha256`）**、`frozen_at_utc` 不一致、
+三处 **symlink**、dirty 生成器 —— **全部 REJECTED**；未篡改对照 **ACCEPTED**。
+
+**原子失败**：改为通过 `materialize_b6_exogenous()` 在 **parquet 后 / source 后 /
+output 写入时**三个阶段注入失败；三份正式产物均不存在、0 临时文件；
+「已存在且不同则拒绝覆盖」**未削弱**。
+
+> **必须如实登记（夹具缺陷）**：R1 初版夹具用**非规范** `json.dumps` 写盘，
+> 使 source 字节与仓库文件不同、SHA 失配，于是**每个**用例都「因错误的理由」被拒绝
+> （假绿）。`abb4805` 改为与生产 `write_json_atomic` **逐字节一致**的规范序列化，
+> 并新增**接受性对照**；修复后拒绝矩阵才有意义。
+
+**最终 v3 三资产**：parquet `07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612`
+（**字节未变**——确定性重算得到同一内容）、manifest
+`31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4`、source-v4
+`73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557`；
+`materializer_revision = 34f2de03d1b86a98a59c983b0783bd602e357f6f`。
+**旧候选被最终候选替换**（`5f55aaf7…`/`360deef7…` → `31cb241c…`/`73f75cef…`）。
+
+**验收**：v3 focused **42 passed**、m13f/g/e focused **428 passed, 2 deselected**、
+`make check` exit 0（**2520 passed**）、`--verify` 连续 3 次 exit 0 且
+bytes/hash/`mtime_ns` 不变、`git diff --check` / `git status --short` 空。
+**上游 hash 全部未变**（v2 三项、B6 policy `7066a0e1…`、`refs_v3` `ab7f5b58…`、
+`formal_splits_v4` 三份）。**范围外修改：无。**
+
+**账本修正**：`c79cc43..1853d4b`（**含**开卡提交）实为 **8 个** b1 提交；
+加审核收口 `7f8fae9` 共 **9 个**。
+
+**⛔ 下一张卡仍是 M1.3f-e-b2**；**不得自行开始**；mapper / 训练 / 评估 / M6 未开始。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 
