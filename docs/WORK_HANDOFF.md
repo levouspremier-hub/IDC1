@@ -2085,12 +2085,17 @@ mapper 仍**只**执行 **1:1 原始 aggregate 守恒**。
 **数据获取决策卡**；**不是** mapper 实现卡（g-e-b）。
 **g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
-### 7AD. M1.3f-e-a：B6 arrival-intensity policy 冻结（**执行完成，等待人工复审**）
+### 7AD. M1.3f-e-a：B6 arrival-intensity policy 冻结（**已通过人工复审**，2026-09-18）
 
-`docs/task_cards/M1.3f.md` §R–§T。把 B6-INTENSITY 裁决机器可读化并冻结为
-**唯一 canonical** policy manifest
+`docs/task_cards/M1.3f.md` §R–§U。把 B6-INTENSITY 裁决机器可读化并冻结为
+**当前唯一** main-intensity policy manifest
 `data/manifest/m13f_arrival_intensity_policy_v1.json`
 （schema `m1.3fea-b6-arrival-intensity-policy-v1`，SHA-256 `7066a0e1…`）。
+
+**审核收口（§U）**：同卡内 `df451a3 → 3456f96 → 27f5737` 的重物化**获认可**
+（候选尚未获批，最终证据必须晚于实现修改）；
+**账本勘误**：上一轮报告把提交**列表**写对（11 项）但**计数写成 10** ——
+`f648614..1648ad7`（R1 收口 + e-a）实为 **11 个**提交。
 
 **六个核心数（实测）**：
 

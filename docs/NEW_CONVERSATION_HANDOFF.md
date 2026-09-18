@@ -276,7 +276,7 @@ main expected **63.988 work/hour** = **31.994 work/半小时**（`delta_t_hours=
 **下一步 M1.3f-e-a 冻结该 policy（只冻结 policy，不物化新版 arrival）；在 main
 intensity 版本化完成之前，不得开始 g-e-b / g-e / g-f。**
 
-**✅ `M1.3f-e-a` 已执行完成（等待人工复审）**：canonical policy
+**✅ `M1.3f-e-a` 已通过人工复审（2026-09-18）**：canonical policy
 `data/manifest/m13f_arrival_intensity_policy_v1.json`
 （schema `m1.3fea-b6-arrival-intensity-policy-v1`，SHA-256 `7066a0e1…`，
 `materializer_revision 3456f96…`）已冻结六个核心数
@@ -285,7 +285,8 @@ intensity 版本化完成之前，不得开始 g-e-b / g-e / g-f。**
 `source_kind=modeled_scenario`、`empirical_workload_claim=false`；
 `rho_realized` 仅诊断、禁止反调；`1000` 保持 `stress_candidate`；sensitivity `none`。
 canonical-only（副本 / symlink / 伪造 revision / 篡改 hash / 空目录全部拒绝，无 fallback），
-`--verify` 连续 3 次 bytes/hash/mtime 不变。
+`--verify` 连续 3 次 bytes/hash/mtime 不变。**该 policy 是当前唯一的 main-intensity policy**；
+readiness 仍为 `false`。
 **⛔ 下一张卡是 `M1.3f-e-b`**（生成新 exogenous 版本、更新 forecast/provenance/refs、
 生成新 formal split triad，保留旧 v2/v4 与 stress 资产）；**本卡未物化新版 arrival**，
 **不得自行开始 `M1.3f-e-b`**。
