@@ -25,8 +25,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
+from envs.idc_price_env import IDCPriceEnv20D
 from scenario.splits import (
-    SplitError,
     _require_canonical_utc,
     _require_dict,
     _require_exact_keys,
@@ -170,9 +172,6 @@ def recompute_sustainable_capacity(server_seed: int, T_amb: float) -> float:
     均匀逐服务器负载，二分解出 `calc_pue_and_total_power == access_limit_kw` 的负载
     `lo`，返回 `(lo - base_load) * sum(C_server)`。**不读 validation/test。**
     """
-    import numpy as np
-    from envs.idc_price_env import IDCPriceEnv20D
-
     env = IDCPriceEnv20D(horizon=24, task_seed=0, server_seed=server_seed,
                          forecast_seed=300000)
     model = env.model

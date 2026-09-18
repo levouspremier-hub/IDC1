@@ -34,13 +34,12 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scenario.arrival_intensity_policy import (
-    ArrivalIntensityPolicyError,
     B6_SOURCE_PATHS,
     CANONICAL_MANIFEST_LOGICAL,
     CANONICAL_PARQUET_LOGICAL,
     POLICY_MANIFEST_KEYS,
     SPLIT_MANIFEST_LOGICAL,
-    b6_code_revision,
+    ArrivalIntensityPolicyError,
     build_b6_policy_manifest,
     canonical_policy_path,
     load_verified_b6_policy,
