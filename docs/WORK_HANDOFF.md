@@ -26,9 +26,11 @@
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
 > **g-c 已经 R1 / R2 / R3 三轮返修后通过人工复审**（2026-09-18，见 §7T–§7Y）；
-> **M1.3g-e-a 前两轮审核不通过，经 R1 / R2 返修后执行完成，等待人工复审**
-> （见 §7Z–§7AB）；**`D-INTENSITY` 与 D1–D11 未裁决前不得开始 g-e-b**，
-> 且本审计**建议下一张卡是上游 arrival-intensity 决策卡（M1.3f）**；
+> **M1.3g-e-a/R2 已通过人工复审**（2026-09-18，见 §7Z–§7AB）；
+> **`D-INTENSITY` 已裁决**：当前 `1000` 保留为 `stress` 候选，
+> **返回上游 M1.3f 建立 main intensity**；
+> **M1.3f-d（arrival intensity 物理口径与场景分层审计）执行完成，等待人工裁决**
+> （见 §7AC）；**在 main intensity 获人工批准并版本化之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1980,6 +1982,79 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 3. 在该上游决定与**版本化方案通过之前**，**不得开始 g-e-b**。
 
 **下一张卡是 M1.3f-d**（arrival intensity 物理口径与场景分层审计）。
+**g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7AC. M1.3f-d：arrival intensity 物理口径与场景分层审计（**执行完成，等待人工裁决**）
+
+`docs/AUDIT_ARRIVAL_INTENSITY.md`（新增）+ 卡片 §M–§N。**纯只读审计**：
+未改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置；
+未创建新数据资产 / mapper / fixture / checkpoint / run；未训练或评估。
+
+**核心结论：当前 `1000` 没有任何独立物理校准**，来源链是
+
+```text
+【declared, 无实证】lambda_ref = 2000 work-units/hour（refs: source_kind=declared_physical_scale,
+                                                    binding=[], training_range=not_applicable）
+   → × 0.5 hour（B5-ARRIVAL 人工批准）→ 【modeled scenario】1000 work-units/半小时
+   → × 归一化 template（均值**精确为 1**，只有形状）→ formal arrival forecast
+```
+
+三条只读证据：`lambda_ref` 无 binding / 无 train 推导；`1000 == 2000 × 0.5`；
+**template 均值精确为 1**（`tpl×1000` 与 `tpl×5` 形状相同）。
+**唯一 external evidence 是形状**（Azure Functions 2019，CC-BY-4.0）。
+
+**capacity ledger（rate-based，实测）**：
+
+| # | 能力 | work/hour |
+|---|---|---|
+| 1 | 理论计算上限 | **388.518** |
+| 2 | **接入受限可持续** | **95.599** |
+| 3 | 可再生+BESS 时变 | 未接线 |
+| 4 | 瞬时峰值 | **不得**作锚点 |
+
+`arrival = 2000.344 work/hour` ⇒ vs ①**5.1487×**、vs ②**20.9242×**。
+`access_limit_kw = 18.0 kW` 把任务服务能力压到理论值约 **1/4**。
+
+> **额外发现**：`C_IDC` 随 `server_seed` 变化 **7.1%** ⇒ 任何 `rho` 的**分母
+> 必须是声明常数**，不得用 seed 实现值。
+
+**intensity 依据评估**：六项候选**没有一项**能独立确定 absolute intensity 且有实证
+依据（Azure 绝对量不可比且已被归一化掉；形状只能定 shape；profile 只定可行区间；
+本 IDC 容量只提供分母；文献利用率**仓库内不存在**；人工 `rho` 是**唯一**可操作路径）。
+**唯一可操作路径**：`absolute intensity = rho × declared_sustainable_capacity`，
+`rho` 为**人工预先批准的 modeled scenario 参数**。
+
+**main / stress 分层**：main 用于训练与主比较、**训练前冻结**、不按结果调整、
+需明确 `rho`；stress 保留 `1000`、明确 **4.970×**（full-action 分母）与
+**20.9242×**（可持续分母）**并写明分母**、不混入 main 统计、不包装主方法性能、
+积压与 SLA 违约**必须保留**。
+
+**`rho` 唯一公式**：`rho = mean arrival work per hour / declared sustainable
+service capacity (work/hour)`，配八项规定（分子 train `[0,10224)`、分母**可持续**
+95.599、含 access-limit、不含可再生/BESS、均值、不改物理约束、预先批准的场景输入）。
+
+**推荐**：在人工批准 `rho` 定义与**具体数值**之前，main intensity **继续 blocked**；
+**本审计不给任何具体 `rho` 数值**（现有资产无独立实证依据）。
+**备选 A**：先获取/批准实证依据。**备选 B**：获批后另设 sensitivity levels。
+
+**⛔ 人工裁决 D1–D11**（审计 §H）：source kind、`rho` 公式、sustainable 分母、
+**main load level（`rho` 数值）**、sensitivity levels、stress 标签、seed policy、
+train-only 统计范围、refs 更新策略、新旧资产命名/version、允许的论文表述。
+**在 main intensity 获人工批准并版本化之前，不得开始 g-e-b。**
+
+**版本化影响**（只设计）：需新版的 10 类资产/清单；旧 v2 exogenous 与 v4 split
+证据**全部保留**、当前 `1000` 标 `stress candidate`、**不原地覆盖、不自动迁移**、
+formal loader **不得 fallback**、新证据**必须晚于**最后一次相关代码修改、
+mapper 仍**只**执行 **1:1 原始 aggregate 守恒**。
+
+> **必须如实登记的范围外修改**：`.gitignore` 新增两行**只**放行
+> `docs/AUDIT_ARRIVAL_INTENSITY.md`（`docs/` 为逐文件白名单），单独提交。
+
+**验收**：focused **221 passed, 1 deselected**、`make check` exit 0
+（**2462 passed**）、`git diff --check` / `git status --short` 空。
+
+**下一张卡**：**M1.3f-e**（若人工批准 main intensity，则版本化）**或**备选 A 的
+**数据获取决策卡**；**不是** mapper 实现卡（g-e-b）。
 **g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
