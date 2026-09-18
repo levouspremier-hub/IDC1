@@ -75,7 +75,7 @@ git diff --check
 | M1.3g-0 | 通过 | contract-v9 carbon provenance 升级。 |
 | M1.3g-b | 通过 | formal causal ScenarioBundle kernel、代码 provenance、交叉资产绑定完成。 |
 | M1.3g-d | 通过 | train-only frozen refs v3 完成。 |
-| M1.3g-c | 通过，R2 当前候选 | formal split manifest triad v3 已完成并 live-bind 输入。 |
+| M1.3g-c | 通过（含 R1/R2/R3） | formal split manifest triad **v4** 是唯一候选，canonical-only loader + live revision。 |
 | M1.3g-e | 未开始 | formal env 注入和 0.5h 对齐；先解决 arrival-to-Task 语义阻塞。 |
 | M1.3g-f | 未开始 | train entry 正式 gate 与接线。 |
 | M5.4 | 工程门禁已解除 | corrector production budget 0.25 秒仅本机候选，不代表正式训练、性能或收敛。 |
@@ -191,9 +191,9 @@ queue_capacity_ref=6000, cost_ref=60   declared physical scales
 
 ### 8.2 Formal split triad
 
-只可用目录 data/manifest/formal_splits_v3/。
+只可用目录 data/manifest/formal_splits_v4/。
 
-schema 是 m1.3g-formal-split-manifest-v3；三个文件共享一个 frozen_at_utc，并以 triad 原子物化。
+schema 是 m1.3g-formal-split-manifest-v4；三个文件共享一个 frozen_at_utc，并以 triad 原子物化。
 
 | split | split-local candidate origins |
 | --- | --- |
@@ -203,13 +203,14 @@ schema 是 m1.3g-formal-split-manifest-v3；三个文件共享一个 frozen_at_u
 
 candidate origin 仅说明有 48 个历史槽位；实际 H/C 仍运行时检查。triad 不固定 H/C，不含 forecast 数组、未来真值、默认曲线、单点 origin。
 
-scenario/formal_split_manifests.py 的 manifest_relative_path 和 CLI 默认都必须指向 v3。唯一 verified loader 是 load_verified_split_manifest(path, expected_split=...)。它 live-verify 八个输入角色、refs_v3、policy、truth split、exogenous 链、范围/时间/origins/readiness/contract/schema。
+scenario/formal_split_manifests.py 的 manifest_relative_path 和 CLI 默认都必须指向 v4；loader 是 canonical-only（临时副本、路径别名、symlink、v1/v2/v3 位置一律拒绝），且 materializer_revision 必须等于当前 resolver。唯一 verified loader 是 load_verified_split_manifest(path, expected_split=...)。它 live-verify 八个输入角色、refs_v3、policy、truth split、exogenous 链、范围/时间/origins/readiness/contract/schema。
 
 下列仅历史保留，正式链禁止 fallback：
 
 ~~~
 data/manifest/train.json, validation.json, test.json       v1 superseded
 data/manifest/formal_splits_v2/                            v2 superseded
+data/manifest/formal_splits_v3/                            v3 superseded_pre_canonical_loader_trust_boundary_fix
 ~~~
 
 ## 9. 当前硬阻塞：arrival workload 到离散 Task 的语义
@@ -292,21 +293,24 @@ ef4dd58a88dcb34fd75690324f957a5f87d2fd7d1b7bf6afbcb528ae9b719e08  data/manifest/
 dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd  data/processed/singapore_2024/half_hour.parquet
 11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf  data/processed/singapore_2024/exogenous_drivers_v2.parquet
 ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f  configs/frozen_refs/refs_v3.json
-0ee774e4e8f09feb1b62a9449e586d4c4bb1803bc2245a1ae4a18c2577d2a5e2  data/manifest/formal_splits_v3/train.json
-3ac19480143b97aada0ed39ecc7b357480d0d8e991ed0afb68eced2d665a6d7a  data/manifest/formal_splits_v3/validation.json
-62b91d0aca37c0c981db2d690146cc5486511ce51e88f051715bcf9df9cb4573  data/manifest/formal_splits_v3/test.json
+0ee774e4e8f09feb1b62a9449e586d4c4bb1803bc2245a1ae4a18c2577d2a5e2  data/manifest/formal_splits_v3/train.json        (superseded)
+3ac19480143b97aada0ed39ecc7b357480d0d8e991ed0afb68eced2d665a6d7a  data/manifest/formal_splits_v3/validation.json   (superseded)
+62b91d0aca37c0c981db2d690146cc5486511ce51e88f051715bcf9df9cb4573  data/manifest/formal_splits_v3/test.json         (superseded)
+215c20968be1b71aa5d5d4b1d22e6cf7ecbd0eb4c802d361dca061a1fbf082cb  data/manifest/formal_splits_v4/train.json
+ a69cddaf282f04ebf4277dbe84e7a5d66950fca68054aacb07a811786945c258  data/manifest/formal_splits_v4/validation.json
+829a0f12f042c34be43cc42891ed70ee0588939e672026e299382043859c80bf  data/manifest/formal_splits_v4/test.json
 ~~~
 
 ## 13. 容易犯的错误
 
 - 不引用/覆盖 superseded 的 policy v1、exogenous v1、refs v2、formal split v1/v2。
-- formal split 文件存在不等于 formal training ready；v3 readiness 仍为 false。
+- formal split 文件存在不等于 formal training ready；v4 readiness 仍为 false。
 - 不把 carbon 0.402 写成半小时实测。
 - 不把 arrival Poisson truth 当 formal forecast。
 - 不把 national IGS 改称 local PV，也不把 ERA5 风速称为风电功率。
 - 不宽松化 validator、自动 coercion，或允许 caller expected hash/frame/kwargs。
 - 不改历史冻结 manifest 补字段；需要新 schema 时用新路径物化，旧证据保留。
-- 不为表面进度重复生成 v4；只有审计确认真实缺陷才开返修。
+- v1/v2/v3 均为 superseded，不得进入 g-e/g-f；只有审计确认真实缺陷才开新版本。
 
 ## 14. 新对话首条消息模板
 

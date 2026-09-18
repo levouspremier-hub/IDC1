@@ -102,7 +102,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2、g-d/R1 **均已通过**；**g-c/R1/R2/R3 执行完成待复审**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `refs_v3`**；**M1.3g-c 正式 split manifest triad（v4 候选）**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-e/f 均未开始**；**D1–D6 均已实现**（D1=g-0、D3=g-b、D2/D6=g-d、D5=g-c；D4 属 g-e）；env 接线与正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2、g-d/R1、**g-c/R1/R2/R3 均已通过**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `refs_v3`**；**M1.3g-c 正式 split manifest triad（v4 候选）**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-e/f 均未开始**；**D1–D6 均已实现**（D1=g-0、D3=g-b、D2/D6=g-d、D5=g-c；D4 属 g-e）；env 接线与正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v9`**（M1.3g-0 起；**v8/v7 buffer 与 checkpoint 均明确拒绝**）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -1840,7 +1840,7 @@ git revert <交接提交> <本验收提交> fe3ed7e 2d1f345 c5160f3 d525be4 b06f
 **g-c-R2 通过复审之前**：`g-e / g-f` 均不得开始；
 **正式 env / 训练 / 评估 / M6 仍未开始**。
 
-### 7Y. M1.3g-c-R3：关闭 formal split manifest 的路径与 provenance 信任边界（**执行完成，等待复审**）
+### 7Y. M1.3g-c-R3：关闭 formal split manifest 的路径与 provenance 信任边界（**已通过人工复审**，2026-09-18）
 
 **M1.3g-c-R2 审核不通过**，起点 `7a6a3f8`，实现终点 `df61a3e`
 （详见卡片 §y–§z）。
@@ -1916,8 +1916,9 @@ git revert <交接提交> <本验收提交> 54cfc35 5410c14 1342661 df61a3e deb6
 
 删除 `data/manifest/formal_splits_v4/` 并还原 `.gitignore` 两行即可。
 
-**g-c-R3 通过复审之前**：`g-e / g-f` 均不得开始；
-**正式 env / 训练 / 评估 / M6 仍未开始**。
+**M1.3g-c-R3 已通过人工复审**（2026-09-18）。**v4 是唯一候选**；
+v1 / v2 / v3 均为 superseded，**不得**进入 g-e/g-f。
+`g-e / g-f` 仍未开始；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
