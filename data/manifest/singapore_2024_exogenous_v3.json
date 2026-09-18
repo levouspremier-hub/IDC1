@@ -1,0 +1,92 @@
+{
+  "arrival_shape_source_manifest_path": "data/manifest/singapore_2024_exogenous_v2.json",
+  "arrival_shape_source_manifest_sha256": "640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9",
+  "b6_policy_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+  "b6_policy_sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251",
+  "canonical_manifest_path": "data/manifest/singapore_2024_half_hour.json",
+  "canonical_manifest_sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667",
+  "canonical_parquet_path": "data/processed/singapore_2024/half_hour.parquet",
+  "canonical_parquet_sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+  "columns": {
+    "arrival": {
+      "b5_scale_inherited": false,
+      "classification": "modeled_scenario",
+      "diagnostic_note": "realized mean 与 rho_realized **只是诊断登记**；禁止反向修改 31.994 / 79.985 / rho_target=0.80",
+      "expected_annual_mean": 31.994000000000003,
+      "forbid_realization_feedback": true,
+      "mean_arrival_work_units_per_half_hour_scale": 31.994,
+      "realization_seed": 20240916,
+      "realized_annual_mean": 32.02037795992714,
+      "rho_realized": 0.8006595726680538,
+      "rho_realized_purpose": "diagnostic_only",
+      "scale_rule": "lambda_t = rate_template[slot] × policy.main_expected_amount_work_per_half_hour（31.994 work/half-hour）；**不继承** B5 的 1000 scale",
+      "shape_rule": "复用 v2 manifest 冻结的 48-slot day-of-benchmark-period rate template（均值精确为 1）；Azure invocation count **只**贡献形状，不是 work-unit",
+      "shape_source_manifest_path": "data/manifest/singapore_2024_exogenous_v2.json",
+      "shape_source_manifest_sha256": "640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9",
+      "template_mean": 1.0,
+      "template_slots": 48,
+      "unit": "work-units/step"
+    },
+    "carbon_intensity": {
+      "classification": "human_approved_external_low_resolution",
+      "rule": "local_pv_kw / wind_generation_kw / carbon_intensity 复用 v2 的同一实现与同一输入，因此与 v2 **逐行相同**",
+      "unit": "kgCO2/kWh"
+    },
+    "local_pv_kw": {
+      "classification": "modeled_scenario",
+      "rule": "local_pv_kw / wind_generation_kw / carbon_intensity 复用 v2 的同一实现与同一输入，因此与 v2 **逐行相同**",
+      "unit": "kW"
+    },
+    "wind_generation_kw": {
+      "classification": "modeled_scenario",
+      "rule": "local_pv_kw / wind_generation_kw / carbon_intensity 复用 v2 的同一实现与同一输入，因此与 v2 **逐行相同**",
+      "unit": "kW"
+    }
+  },
+  "frozen_at_utc": "2026-09-18T12:03:38+00:00",
+  "materialization_sources_path": "data/manifest/m13f_materialization_sources_v4.json",
+  "materialization_sources_sha256": "360deef7fbd3371c191d039e7416acf43fc85633185c83b4c56a72eefe33c756",
+  "materializer_revision": "0e16b294c2844c559fb93fb24e0511cb3c130752",
+  "output": {
+    "columns": [
+      "timestamp",
+      "local_pv_kw",
+      "wind_generation_kw",
+      "carbon_intensity",
+      "arrival"
+    ],
+    "end_exclusive": "2025-01-01 00:00:00+08:00",
+    "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+    "rows": 17568,
+    "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612",
+    "start": "2024-01-01 00:00:00+08:00",
+    "timezone": "Asia/Singapore"
+  },
+  "predecessor": {
+    "note": "v2 **逐字节保留**；formal 链在 M1.3f-e-b2 之前**仍**绑定 v2；本卡不做 loader 切换、不迁移、无 fallback",
+    "output_manifest_path": "data/manifest/singapore_2024_exogenous_v2.json",
+    "output_manifest_sha256": "640f26cda94b3479049fdbee56f05e1546a24fc3ecdf6286674c4fb415b484b9",
+    "output_parquet_path": "data/processed/singapore_2024/exogenous_drivers_v2.parquet",
+    "output_parquet_sha256": "11d322b2919e2180b596e6b02614acafdb3ee8d63682ae74e5a3ee1dbc8b92cf",
+    "source_manifest_path": "data/manifest/m13f_materialization_sources_v3.json",
+    "source_manifest_sha256": "4203b4f399ee6433bfcdf63fa94ddd03a56a7bd1e6add45f697c3bec804da1b6",
+    "status": "predecessor_formal_chain_still_bound_to_v2",
+    "v1": {
+      "manifest_sha256": "46d88c38247bf1eb1568e84abc48647f1f4aeb58a5c0b525a30b8bfb0b2ac224",
+      "parquet_sha256": "0c5e65d8fdc25ed8ced228e8087f13eb0605d0146d7e258caf54a552a246287c",
+      "status": "superseded_pre_approval_and_loss_fix"
+    }
+  },
+  "readiness": {
+    "arrival_ready": true,
+    "carbon_intensity_ready": true,
+    "exogenous_drivers_ready": true,
+    "formal_scenario_bundle_ready": false,
+    "formal_training_ready": false,
+    "local_pv_kw_ready": true,
+    "wind_generation_kw_ready": true
+  },
+  "schema": "m1.3feb-b6-exogenous-v1",
+  "split_manifest_path": "data/manifest/singapore_2024_splits.json",
+  "split_manifest_sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+}
