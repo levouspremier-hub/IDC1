@@ -285,18 +285,297 @@ def test_verify_is_idempotent():
     assert leftovers == []
 
 
-# --- 14. 首次写入失败不留半成品 --------------------------------------------------
+# --- 14. 首次写入失败不留半成品（**R1：走真实 materializer 事务**） ----------------
+
+def _empty_bundle_root(tmp_path) -> dict:
+    """构造一个**空的**临时 bundle 根（三个正式产物都不存在）。"""
+    root = tmp_path / "repo"
+    man = root / "data/manifest"
+    proc = root / "data/processed/singapore_2024"
+    man.mkdir(parents=True)
+    proc.mkdir(parents=True)
+    return {"root": root, "manifest_dir": man, "parquet_dir": proc}
+
+
+def _patch_v3_roots(monkeypatch, roots) -> None:
+    m = b6_module()
+    monkeypatch.setattr(m, "_canonical_v3_dir", lambda: roots["manifest_dir"])
+    monkeypatch.setattr(m, "_canonical_v3_parquet_dir", lambda: roots["parquet_dir"])
+
+
+def _leftovers(directory) -> list:
+    return [p for p in directory.iterdir() if p.name.startswith(".")]
+
 
 @needs_assets
-def test_first_write_failure_leaves_nothing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stage", ["after_parquet", "after_source", "at_output"])
+def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch, stage):
+    """在**三个不同阶段**注入失败：首次物化不得留下任何正式产物或临时文件。"""
     mod = materializer()
-    target = tmp_path / "v3_out.json"
-
-    def boom(path, body):
-        raise RuntimeError("injected write failure")
-
+    roots = _empty_bundle_root(tmp_path)
+    _patch_v3_roots(monkeypatch, roots)
     monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(mod, "_atomic_write_bytes", boom)
+
+    real_write = mod._atomic_write_bytes  # noqa: SLF001
+
+    def exploding_write(path, body):
+        name = pathlib.Path(path).name
+        if stage == "after_parquet" and name.endswith(".parquet"):
+            raise RuntimeError("injected failure after parquet")
+        if stage == "after_source" and "sources_v4" in name:
+            raise RuntimeError("injected failure after source")
+        if stage == "at_output" and "exogenous_v3" in name:
+            raise RuntimeError("injected failure at output manifest")
+        real_write(path, body)
+
+    monkeypatch.setattr(mod, "_atomic_write_bytes", exploding_write)
     with pytest.raises(RuntimeError):
-        mod._atomic_write_bytes(target, b"{}")  # noqa: SLF001
-    assert list(tmp_path.iterdir()) == []
+        mod.materialize_b6_exogenous(frozen_at_utc="2026-09-18T00:00:00+00:00")
+
+    assert not (roots["parquet_dir"] / "exogenous_drivers_v3.parquet").exists()
+    assert not (roots["manifest_dir"] / "singapore_2024_exogenous_v3.json").exists()
+    assert not (roots["manifest_dir"] / "m13f_materialization_sources_v4.json").exists()
+    assert _leftovers(roots["parquet_dir"]) == []
+    assert _leftovers(roots["manifest_dir"]) == []
+
+
+@needs_assets
+def test_existing_different_output_is_still_refused(tmp_path, monkeypatch):
+    """R1 **不得**削弱生产「已存在且不同则拒绝覆盖」。"""
+    mod = materializer()
+    roots = _empty_bundle_root(tmp_path)
+    _patch_v3_roots(monkeypatch, roots)
+    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
+    (roots["parquet_dir"] / "exogenous_drivers_v3.parquet").write_bytes(b"not a parquet")
+    with pytest.raises(mod.B6ExogenousError):
+        mod.materialize_b6_exogenous(frozen_at_utc="2026-09-18T00:00:00+00:00")
+
+
+# =============================================================================
+# M1.3f-e-b1-R1：语义信任边界
+# =============================================================================
+
+BUNDLE_ENTRY = "load_verified_v3_bundle"
+
+
+def _bundle(tmp_path, *, tamper=None, tamper_source=None, tamper_parquet=None,
+            split_frozen_at=False, symlink=None) -> dict:
+    """构造一份**完整**的临时 v3 bundle（三份产物 + 可选的语义篡改）。
+
+    `tamper(payload)` 改 output manifest；`tamper_source(payload)` 改 source-v4；
+    `tamper_parquet(frame)` 改 parquet。`symlink` 把指定产物换成 symlink。
+    """
+    root = tmp_path / "repo"
+    man = root / "data/manifest"
+    proc = root / "data/processed/singapore_2024"
+    man.mkdir(parents=True)
+    proc.mkdir(parents=True)
+
+    parquet = proc / V3_PARQUET.name
+    manifest = man / V3_MANIFEST.name
+    source = man / V3_SOURCE.name
+
+    if tamper_parquet is None:
+        shutil.copy(V3_PARQUET, parquet)
+    else:
+        frame = pd.read_parquet(V3_PARQUET)
+        tamper_parquet(frame)
+        frame.to_parquet(parquet, index=False)
+
+    payload = json.loads(V3_MANIFEST.read_text(encoding="utf-8"))
+    source_payload = json.loads(V3_SOURCE.read_text(encoding="utf-8"))
+    if tamper is not None:
+        tamper(payload)
+    if tamper_source is not None:
+        tamper_source(source_payload)
+    if split_frozen_at:
+        source_payload["frozen_at_utc"] = "2026-09-18T00:00:00+00:00"
+    manifest.write_text(json.dumps(payload))
+    source.write_text(json.dumps(source_payload))
+
+    if symlink == "manifest":
+        manifest.unlink()
+        manifest.symlink_to(V3_MANIFEST)
+    elif symlink == "source":
+        source.unlink()
+        source.symlink_to(V3_SOURCE)
+    elif symlink == "parquet":
+        parquet.unlink()
+        parquet.symlink_to(V3_PARQUET)
+
+    return {
+        "root": root, "manifest_dir": man, "parquet_dir": proc,
+        "manifest_path": manifest, "source_path": source, "parquet_path": parquet,
+    }
+
+
+def _assert_bundle_rejected(tmp_path, monkeypatch, **kwargs):
+    m = b6_module()
+    assert hasattr(m, BUNDLE_ENTRY), "统一生产入口 load_verified_v3_bundle 必须存在"
+    bundle = _bundle(tmp_path, **kwargs)
+    _patch_v3_roots(monkeypatch, bundle)
+    with pytest.raises(m.B6ExogenousError):
+        getattr(m, BUNDLE_ENTRY)()
+
+
+def _arrival(tamper):
+    def inner(payload):
+        tamper(payload["columns"]["arrival"])
+    return inner
+
+
+# --- 1–4. arrival 的冻结语义 ----------------------------------------------------
+
+@needs_assets
+def test_forged_b5_scale_inherited_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a: a.update(b5_scale_inherited=True)))
+
+
+@needs_assets
+def test_forged_scale_1000_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a: a.update(
+            mean_arrival_work_units_per_half_hour_scale=1000.0)))
+
+
+@needs_assets
+def test_forged_forbid_realization_feedback_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a: a.update(forbid_realization_feedback=False)))
+
+
+@needs_assets
+def test_forged_realization_seed_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a: a.update(realization_seed=1)))
+
+
+# --- 5. 诊断量不得伪造 ----------------------------------------------------------
+
+@needs_assets
+@pytest.mark.parametrize("field,value", [
+    ("expected_annual_mean", 1000.0),
+    ("realized_annual_mean", 1000.0),
+    ("rho_realized", 0.5),
+])
+def test_forged_diagnostic_values_are_rejected(tmp_path, monkeypatch, field, value):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a, f=field, v=value: a.update({f: v})))
+
+
+# --- 6. template 元数据 --------------------------------------------------------
+
+@needs_assets
+@pytest.mark.parametrize("field,value", [
+    ("template_mean", 2.0),
+    ("template_slots", 24),
+    ("shape_rule", "forged shape rule"),
+])
+def test_forged_template_metadata_is_rejected(tmp_path, monkeypatch, field, value):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=_arrival(lambda a, f=field, v=value: a.update({f: v})))
+
+
+# --- 7. predecessor / readiness -------------------------------------------------
+
+@needs_assets
+def test_forged_predecessor_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=lambda p: p["predecessor"].update(
+            status="migrated_to_v3"))
+
+
+@needs_assets
+def test_forged_readiness_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(
+        tmp_path, monkeypatch,
+        tamper=lambda p: p["readiness"].update(formal_training_ready=True))
+
+
+# --- 8. coordinated source 语义篡改（同步更新 output 的 source hash） ------------
+
+@needs_assets
+def test_coordinated_source_semantics_tamper_is_rejected(tmp_path, monkeypatch):
+    """改 source 语义**并**同步 output 的 source hash —— 仍必须拒绝。"""
+    m = b6_module()
+    bundle = _bundle(
+        tmp_path, monkeypatch,
+        tamper_source=lambda s: s.update(arrival_scale_rule="forged scale rule"))
+    # 攻击者把 output 里记录的 source hash 同步改成被篡改文件的真 hash
+    payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
+    payload["materialization_sources_sha256"] = _sha256(bundle["source_path"])
+    bundle["manifest_path"].write_text(json.dumps(payload))
+    _patch_v3_roots(monkeypatch, bundle)
+    with pytest.raises(m.B6ExogenousError):
+        m.load_verified_v3_bundle()
+
+
+# --- 9. coordinated parquet 篡改（同步更新 output.sha256） ----------------------
+
+@needs_assets
+def test_coordinated_parquet_tamper_is_rejected(tmp_path, monkeypatch):
+    """改 parquet 内容**并**同步 output.sha256 —— 仍必须拒绝。"""
+    m = b6_module()
+
+    def bump(frame):
+        frame.loc[0, "arrival"] = int(frame.loc[0, "arrival"]) + 7
+
+    bundle = _bundle(tmp_path, monkeypatch, tamper_parquet=bump)
+    payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
+    payload["output"]["sha256"] = _sha256(bundle["parquet_path"])
+    bundle["manifest_path"].write_text(json.dumps(payload))
+    _patch_v3_roots(monkeypatch, bundle)
+    with pytest.raises(m.B6ExogenousError):
+        m.load_verified_v3_bundle()
+
+
+# --- 10. 两份 manifest 的 frozen_at_utc 不一致 ----------------------------------
+
+@needs_assets
+def test_mismatched_frozen_at_utc_is_rejected(tmp_path, monkeypatch):
+    _assert_bundle_rejected(tmp_path, monkeypatch, split_frozen_at=True)
+
+
+# --- 11. canonical 文件自身是 symlink -------------------------------------------
+
+@needs_assets
+@pytest.mark.parametrize("which", ["manifest", "source", "parquet"])
+def test_canonical_symlink_is_rejected(tmp_path, monkeypatch, which):
+    _assert_bundle_rejected(tmp_path, monkeypatch, symlink=which)
+
+
+# --- 12. dirty 生成器 ----------------------------------------------------------
+
+@needs_assets
+def test_dirty_generator_is_rejected_by_verified_entry(monkeypatch):
+    m = b6_module()
+    monkeypatch.setattr(m, "_generator_is_dirty", lambda: True)
+    with pytest.raises(m.B6ExogenousError):
+        m.load_verified_v3_bundle()
+
+
+# --- 13. --verify 必须走统一入口 ------------------------------------------------
+
+@needs_assets
+def test_verify_uses_the_unified_bundle_entry(monkeypatch):
+    mod = materializer()
+    called = {"bundle": 0}
+    m = b6_module()
+    real = m.load_verified_v3_bundle
+
+    def spy(*args, **kwargs):
+        called["bundle"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(m, "load_verified_v3_bundle", spy)
+    monkeypatch.setattr(mod, "load_verified_v3_bundle", spy, raising=False)
+    assert mod.main(["--verify"]) == 0
+    assert called["bundle"] >= 1
