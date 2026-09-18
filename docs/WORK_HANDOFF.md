@@ -105,7 +105,7 @@ git diff --check
 | M0 | 已完成 | uv/Python 3.12、Makefile、AGENTS、测试骨架。 | 无。 |
 | M1.1 | 已完成 | 执行链审计。 | 无。 |
 | M1.2 | **原始冻结通过** | Singapore-2024 原始价格、负荷、IGS、ERA5 的 hash、时区、许可和只读核验。 | 不等于正式 ScenarioBundle；碳强度、IDC 本地 PV/风电映射、小时到半小时规则尚未冻结。 |
-| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2、g-d/R1、**g-c/R1/R2/R3 均已通过**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `refs_v3`**；**M1.3g-c 正式 split manifest triad（v4 候选）**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-e/f 均未开始**；**D1–D6 均已实现**（D1=g-0、D3=g-b、D2/D6=g-d、D5=g-c；D4 属 g-e）；env 接线与正式训练仍不可开始。 |
+| M1.3 | 推进中（b/c/d/e/f、f-c-R1、g-a/R1、g-0、g-b/R1/R2、g-d/R1、g-c/R1/R2/R3、**e-a/R1/R2 均已通过**） | M1.3b canonical 半小时事实表；M1.3d 连续 truth split + origin 门禁；**M1.3e 因果 seasonal-naive provider；M1.3f 四类外生驱动 v2/v3 已冻结**；**M1.3g-0 contract-v9 + v2 policy manifest**；**M1.3g-b formal causal bundle 构造内核**；**M1.3g-d train-only `refs_v3`**；**M1.3g-c 正式 split manifest triad（v4 候选）**。 | **M1.3g**（正式 ScenarioBundle + env/train 接线 + refs 冻结 + 三个正式 split manifest）**未实现**；**g-e/f 均未开始**；**D1–D6 均已实现**（D1=g-0、D3=g-b、D2/D6=g-d、D5=g-c；D4 属 g-e）；env 接线与正式训练仍不可开始。 |
 | M2 | 大部分完成 | 版本化契约、21 维拒绝、checkpoint/schema 门禁。当前版本为 **`contract-v9`**（M1.3g-0 起；**v8/v7 buffer 与 checkpoint 均明确拒绝**）。 | 与真实 M1.2 场景的完整接线仍待 M1.3g。 |
 | M3 | 有实现和大量卡片 | 21 维、A[i,g]、接入投影、尾段结算、deadline 分类、可见预测等已有卡片证据。 | 不在本轮 M5.4 工作范围内；跨分支整合前不得重新声称全链已验收。 |
 | M4 | 有实现和大量卡片 | H 步 LP/MIP、raw-action projection、wrapper、性能探针。 | M5.4 的 corrector 确定性/预算发布门禁仍未解除。 |
@@ -1969,9 +1969,20 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 **验收**：focused（m13f / m13gb / m13gc / m13gd）**221 passed, 1 deselected**、
 `make check` exit 0、`git diff --check` / `git status --short` 空。
 
-**g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+**M1.3g-e-a-R2 已通过人工复审**（2026-09-18）。
 
-### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**执行完成，等待复审**）
+**`D-INTENSITY` 人工裁决（已作出）**：
+
+1. 当前 **1000 work-units/半小时** 的 arrival **保留为明确标记的 `stress` / overload
+   候选**，**不作为唯一正式 main scenario**；
+2. **返回上游 M1.3f**，为 **main scenario** 建立**有来源、预先批准、
+   不得根据训练或测试结果调节**的 arrival intensity；
+3. 在该上游决定与**版本化方案通过之前**，**不得开始 g-e-b**。
+
+**下一张卡是 M1.3f-d**（arrival intensity 物理口径与场景分层审计）。
+**g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 
 **M1.3g-e-a-R1 第二轮审核不通过**，起点 `77e0a6c`，实现终点 `3ee0397`
 （详见卡片 §ae–§ag）。**两项 P1 + 一项 P2：**

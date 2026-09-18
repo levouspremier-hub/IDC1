@@ -235,7 +235,7 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
 
 审计和人工决定完成后，才能开真正的 M1.3g-e。
 
-**状态（2026-09-18）**：`M1.3g-e-a` **第一轮审核不通过，已返修（R1）并再次提交复审**。
+**状态（2026-09-18）**：`M1.3g-e-a` 前两轮审核不通过，**已返修（R1/R2）并通过人工复审**。**`D-INTENSITY` 已裁决**：当前 1000 保留为 `stress` 候选，**返回上游 M1.3f** 为 main scenario 建立有来源、预先批准、不得按结果调节的 arrival intensity；**在该上游方案通过前不得开始 g-e-b**。
 审计文档：`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`。**三项核心结论**：
 
 1. **mapper 必须 1:1 守恒原始 aggregate**：**不得**缩放 arrival
@@ -346,4 +346,4 @@ ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f  configs/frozen
 
 ## 14. 新对话首条消息模板
 
-请先读取 AGENTS.md、docs/IMPLEMENTATION_PLAN.md、docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md、docs/WORK_HANDOFF.md 和 docs/NEW_CONVERSATION_HANDOFF.md。当前分支为 p4-safeppo-m51a-rollout-contract-m12-integration，HEAD 以交接文档为准。不要启动 M6 或正式训练；先复核工作树、M1.3g-c focused 测试及 **v4** triad 的 --verify，随后复核 M1.3g-e-a **R1** 的审计文档（`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`）与 §7AA。**在 `D-INTENSITY` 与 D1–D11 裁决完成、且人工明确放行之前，不要实现 g-e-b / g-e / g-f。**
+请先读取 AGENTS.md、docs/IMPLEMENTATION_PLAN.md、docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md、docs/WORK_HANDOFF.md 和 docs/NEW_CONVERSATION_HANDOFF.md。当前分支为 p4-safeppo-m51a-rollout-contract-m12-integration，HEAD 以交接文档为准。不要启动 M6 或正式训练；先复核工作树、M1.3g-c focused 测试及 **v4** triad 的 --verify，随后复核 M1.3g-e-a **R2** 的审计文档（`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`）与 **§7AB**。**在 `D-INTENSITY` 与 D1–D11 裁决完成、且人工明确放行之前，不要实现 g-e-b / g-e / g-f。**
