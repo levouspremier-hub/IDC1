@@ -249,12 +249,16 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
    （另一种非物理口径为 2.485，隐含每小时服务能力翻倍，**不得**用作推荐）。
    **不**通过改容量/SOC/deadline/queue 或删任务来「修好」。
 
-**⛔ 人工决定 `D-INTENSITY`**：**(1)** 当前 arrival 仅作明确标记的
-`stress` / overload **候选**场景；**(2)** **返回 M1.3f** 为 **main scenario**
-冻结有来源、预先批准、不得按结果调节的 intensity。
-**本审计建议先做 (2)**（当前 `1000` 只是 modeled scenario 尺度，rate-based 下 ≈4.970×），
-并在 g-e-b 前先开**上游 arrival-intensity 审计/决策卡**（§J.0），**不是** mapper 实现卡。
-**在该决定与 D1–D11 完成之前，不得开始 g-e-b / g-e / g-f。**
+**✅ 人工决定 `D-INTENSITY`（已作出 2026-09-18）**：**(1)** 当前 `1000` 保留为
+明确标记的 `stress` / overload **候选**；**(2)** **返回上游 M1.3f** 为 main scenario
+建立有来源、预先批准、不得按结果调节的 intensity。
+**`M1.3f-d` 审计已完成**（`docs/AUDIT_ARRIVAL_INTENSITY.md`）：`1000` **没有任何**
+独立物理校准（唯一来源是声明的 `lambda_ref=2000`；Azure trace 只贡献**形状**，
+template 均值精确为 1）；可持续任务服务能力实测 **95.599 work/hour**
+（接入上限 18 kW 把能力压到理论值约 1/4），故 arrival 相对**可持续**能力是
+**20.9242×**、相对**理论计算上限**是 **5.1487×**。
+**⛔ 在人工批准 `rho` 定义与具体数值、并完成版本化之前，不得开始 g-e-b / g-e / g-f。**
+下一张卡是 **M1.3f-e**（版本化 main intensity）或数据获取决策卡，**不是** mapper 卡。
 
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
