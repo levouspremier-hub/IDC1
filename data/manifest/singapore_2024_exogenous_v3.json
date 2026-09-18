@@ -43,10 +43,10 @@
       "unit": "kW"
     }
   },
-  "frozen_at_utc": "2026-09-18T12:03:38+00:00",
+  "frozen_at_utc": "2026-09-18T12:25:53+00:00",
   "materialization_sources_path": "data/manifest/m13f_materialization_sources_v4.json",
-  "materialization_sources_sha256": "360deef7fbd3371c191d039e7416acf43fc85633185c83b4c56a72eefe33c756",
-  "materializer_revision": "0e16b294c2844c559fb93fb24e0511cb3c130752",
+  "materialization_sources_sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557",
+  "materializer_revision": "34f2de03d1b86a98a59c983b0783bd602e357f6f",
   "output": {
     "columns": [
       "timestamp",
