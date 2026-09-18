@@ -476,10 +476,10 @@ D3 批准前只用符号 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`。
 唯一**可操作**的路径是 **C.6（人工声明的 `rho`）+ C.4（声明容量）+ C.2（外部形状）**：
 
 ```text
-absolute main intensity（work/hour） = rho × declared_sustainable_capacity（work/hour）
+absolute main intensity（work/hour） = rho_target × DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR（work/hour）
 ```
 
-其中 **`rho` 是 modeled scenario 参数**（人工预先批准），
+其中 **`rho_target` 是 modeled scenario 参数**（人工预先批准，见 §E），
 **容量是声明物理尺度**，**形状来自外部 benchmark trace**。
 
 **若人工不批准某个 `rho`，则必须如实写**：
@@ -501,7 +501,7 @@ absolute main intensity（work/hour） = rho × declared_sustainable_capacity（
 | 不得按结果调整 | **不得**根据策略表现、validation/test 成本或服务率调整 |
 | offered-load 定义 | **必须**有明确的 `rho` 定义（§E） |
 | 形状来源 | Azure trace 的相对形状（§C.2） |
-| 绝对强度 | `rho × declared_sustainable_capacity`，**`rho` 人工预先批准** |
+| 绝对强度 | `rho_target × DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`，**`rho_target` 人工预先批准** |
 | 标记 | `modeled_scenario`（**不是** 2024 观测） |
 
 ### D.2 stress scenario
@@ -532,15 +532,28 @@ absolute main intensity（work/hour） = rho × declared_sustainable_capacity（
 
 ## E. offered-load ratio `rho` 的定义
 
-### E.1 唯一公式（**推荐**）
+### E.1 `rho_target` 与 `rho_realized` 两个口径（**R1 修正：必须分开**）
+
+`rho` 的**分子**有两种可能——**formal expected arrival rate** 或 **Poisson
+realization**——二者**不是同一个量**，**不得**互相混称「truth」或「calibration」：
 
 ```text
-                mean arrival work per hour
-rho  =  ────────────────────────────────────────────────
-        declared sustainable service capacity (work/hour)
+rho_target  =  train 范围内 formal expected arrival rate（lambda_t）的均值（work/hour）
+               ──────────────────────────────────────────────────────────────────────────
+               DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR（work/hour）
+
+rho_realized =  固定 Poisson seed 后 train arrival realization 的均值（work/hour）
+               ──────────────────────────────────────────────────────────────────────────
+               同一 DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR（work/hour）
 ```
 
-### E.2 逐项规定（**不得省略任何一项**）
+- **main intensity 由 `rho_target` 决定**；
+- **`rho_target` 是训练前人工批准的 modeled scenario 参数**（不是训练后调参）；
+- **不得用 `rho_realized` 反向调整 main intensity**（否则形成 seed-conditioned /
+  circular calibration）；
+- **`rho_realized` 只作物化后诊断**（登记实现值与期望值的差，不改变场景强度）。
+
+### E.2 `rho_target` 的逐项规定（**不得省略任何一项**）
 
 | # | 问题 | 推荐规定 |
 |---|---|---|
@@ -553,10 +566,10 @@ rho  =  ────────────────────────
 | 7 | `rho` 是否改变物理约束？ | **不改变**任何容量 / SOC / 接入上限 / 任务约束 |
 | 8 | `rho` 的定位 | **场景输入**（预先批准的 modeled 参数），**不是**训练后调参 |
 
-### E.3 由 `rho` 反推绝对强度（**唯一**允许的换算）
+### E.3 由 `rho_target` 反推绝对强度（**唯一**允许的换算）
 
 ```text
-main_intensity_work_per_hour = rho × declared_sustainable_capacity_work_per_hour
+main_intensity_work_per_hour = rho_target × DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR
 main_intensity_work_per_half_hour = main_intensity_work_per_hour × delta_t_hours
 ```
 
@@ -566,6 +579,22 @@ manifest/refs、并由人工预先批准；**不得**在 mapper 里实现（mapp
 
 > **⚠️ 不得只写「取 0.8」而没有分母定义和来源。** 任何 `rho` 值都必须附带
 > 分母（哪一类容量）、分子的时间范围与 split、以及批准记录。
+
+### E.4 `rho_target` / `rho_realized` 必须写清的字段（**逐项，缺一不可**）
+
+| # | 字段 | 规定 |
+|---|---|---|
+| 1 | **train 范围** | 两者分子都只取 train split `[0, 10224)` 的 30 分钟槽 |
+| 2 | **work/hour 与 work/half-hour 换算** | `lambda_t` 与 realization 都是**每半小时**量；换算到 per-hour 需**除以 `delta_t_hours`（0.5）**，即 `× 2`；分子分母必须同一时间基准 |
+| 3 | **`delta_t_hours`** | 显式 `0.5`（D4 裁决：formal 路径 0.5，legacy 1.0 不改） |
+| 4 | **seed provenance** | `rho_target` 的分子是**期望值**（不用 seed）；`rho_realized` 的分子是 **Poisson seed `20240916`** 的实现值，必须登记该 seed |
+| 5 | **分母 revision** | 都是 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`，其 revision 待 **D3** 冻结（§H） |
+| 6 | **validation/test 不参与** | 两个量都**不得**读 validation/test 来选择或校准 |
+| 7 | **expected 与 realization 不混称** | formal expected `lambda_t` 与 Poisson realization **不得**互相称为 truth / calibration；`rho_realized` 不得反调 `rho_target` |
+
+**红线复述**：`rho_target` 是训练前批准的 modeled 参数；`rho_realized` 只是
+物化后诊断。任何「用 realization 均值反推 main intensity」都是
+**seed-conditioned / circular calibration**，**禁止**。
 
 ---
 
@@ -580,9 +609,9 @@ manifest/refs、并由人工预先批准；**不得**在 mapper 里实现（mapp
 **「继续阻塞」的精确含义**（推荐方案的**内容**，不是「什么都不做」）：
 
 1. **保留**当前 `1000 work-units/半小时` 为明确标记的 **`stress` / overload 候选**；
-2. **main scenario** 采用 **§E 的 `rho` 公式**，但**要求人工预先批准 `rho` 的
-   具体数值**（`rho` 是 modeled scenario 参数，**不**从 validation/test 推导，
-   **不**按策略表现调节）；
+2. **main scenario** 采用 **§E 的 `rho_target` 公式**，但**要求人工预先批准
+   `rho_target` 的具体数值**（`rho_target` 是 modeled scenario 参数，
+   **不**从 validation/test 推导，**不**按策略表现调节）；
 3. 在上游**新版本化**（§G）之前，**不得**开始 g-e-b；
 4. 形状继续取 Azure trace 的相对形状（§C.2），**绝对强度不取自该 trace**。
 
@@ -590,7 +619,7 @@ manifest/refs、并由人工预先批准；**不得**在 mapper 里实现（mapp
 
 ```text
 main_intensity_work_per_half_hour
-    = rho × DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR × delta_t_hours
+    = rho_target × DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR × delta_t_hours
 ```
 
 ### F.2 备选 A：**先获取/批准实证依据，再定 intensity**
@@ -658,7 +687,7 @@ main_intensity_work_per_half_hour
 | # | 决定 | 推荐值 / 规则 | 替代项 | 风险 | 阻塞哪张卡 |
 |---|---|---|---|---|---|
 | **D1** | main intensity 的 **source kind** | `modeled_scenario`（人工批准 `rho`）+ 外部**shape** | 真实 IDC trace（需许可/hash/provenance） | 无实证依据时会被称为实测 | **g-e-b**、**M1.3f-e** |
-| **D2** | **`rho` 公式** | §E.1（分子 = train `[0,10224)` 的 per-hour 均值；分母 = 声明可持续容量） | 用 `p95` 或保守下界作分子 | 公式不唯一会导致不可比 | **M1.3f-e** |
+| **D2** | **`rho_target` 公式** | §E.1 的 `rho_target`（分子 = train `[0,10224)` 的 per-hour **formal expected arrival** 均值；分母 = 声明可持续容量 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`） | 用 `p95` 或保守下界作分子 | 公式不唯一会导致不可比 | **M1.3f-e** |
 | **D3** | **sustainable capacity 分母（以下 6 项必须共同批准，缺一不可）** | **待人工批准**：① 正式硬件 realization、固定 `server_seed`，或确定性硬件参数；② 温度口径（声明设计温度 / train 均值 / train worst-case / 其它明确且预先批准的规则）；③ 持续容量计算公式；④ 是否采用保守下界；⑤ 是否以及如何排除 PV、风电与 BESS；⑥ 最终容量常数 + 单位 + 来源 + revision + provenance | 理论计算上限 388.518（亦为 seed 0 探针） | 用未冻结的单点探针（如 95.599）作分母会把过载藏起来 / 随 seed 漂移 | **M1.3f-e**、**g-e-b** |
 | **D4** | **main load level（`rho` 数值）** | **待人工批准**（本审计不给数值） | 多 load-level | 凭空给数 = 以可行性反推 | **g-e-b** |
 | **D5** | **sensitivity levels** | 主场景确定后再定（如 `rho/2`、`2rho`） | 不设 | 事后挑选层级 | **g-e-b** |
