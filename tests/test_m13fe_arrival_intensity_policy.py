@@ -43,9 +43,9 @@ def _sha256(path) -> str:
 
 
 def _assets_present() -> bool:
+    # 只检查**上游冻结资产**；本卡输出的 policy manifest 不在此列（否则先红会变 skip）。
     return all(
-        p.exists() for p in (CANONICAL_PARQUET, CANONICAL_MANIFEST, SPLIT_MANIFEST,
-                             POLICY_PATH)
+        p.exists() for p in (CANONICAL_PARQUET, CANONICAL_MANIFEST, SPLIT_MANIFEST)
     )
 
 
