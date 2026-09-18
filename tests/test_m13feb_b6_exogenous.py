@@ -297,10 +297,16 @@ def _empty_bundle_root(tmp_path) -> dict:
     return {"root": root, "manifest_dir": man, "parquet_dir": proc}
 
 
-def _patch_v3_roots(monkeypatch, roots) -> None:
+def _patch_v3_roots(monkeypatch, roots, *, dirty: bool = False) -> None:
+    """把 canonical v3 根指向临时 bundle，并把 dirty 门固定为已知值。
+
+    **语义**用例必须让 `_generator_is_dirty()` 为已知 `False`，否则在实现文件
+    尚未提交时会因 dirty 提前拒绝，用例会「因错误的理由」通过。
+    """
     m = b6_module()
     monkeypatch.setattr(m, "_canonical_v3_dir", lambda: roots["manifest_dir"])
     monkeypatch.setattr(m, "_canonical_v3_parquet_dir", lambda: roots["parquet_dir"])
+    monkeypatch.setattr(m, "_generator_is_dirty", lambda: dirty)
 
 
 def _leftovers(directory) -> list:
@@ -507,7 +513,7 @@ def test_coordinated_source_semantics_tamper_is_rejected(tmp_path, monkeypatch):
     """改 source 语义**并**同步 output 的 source hash —— 仍必须拒绝。"""
     m = b6_module()
     bundle = _bundle(
-        tmp_path, monkeypatch,
+        tmp_path,
         tamper_source=lambda s: s.update(arrival_scale_rule="forged scale rule"))
     # 攻击者把 output 里记录的 source hash 同步改成被篡改文件的真 hash
     payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
@@ -528,7 +534,7 @@ def test_coordinated_parquet_tamper_is_rejected(tmp_path, monkeypatch):
     def bump(frame):
         frame.loc[0, "arrival"] = int(frame.loc[0, "arrival"]) + 7
 
-    bundle = _bundle(tmp_path, monkeypatch, tamper_parquet=bump)
+    bundle = _bundle(tmp_path, tamper_parquet=bump)
     payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
     payload["output"]["sha256"] = _sha256(bundle["parquet_path"])
     bundle["manifest_path"].write_text(json.dumps(payload))
@@ -566,16 +572,17 @@ def test_dirty_generator_is_rejected_by_verified_entry(monkeypatch):
 
 @needs_assets
 def test_verify_uses_the_unified_bundle_entry(monkeypatch):
+    """`--verify` 必须调用**统一入口**（不是两个不相交的浅层检查）。"""
     mod = materializer()
     called = {"bundle": 0}
     m = b6_module()
-    real = m.load_verified_v3_bundle
+    monkeypatch.setattr(m, "_generator_is_dirty", lambda: False)
 
     def spy(*args, **kwargs):
         called["bundle"] += 1
-        return real(*args, **kwargs)
+        return {"manifest": {}, "source": {}, "frame": None, "policy": {}}
 
     monkeypatch.setattr(m, "load_verified_v3_bundle", spy)
-    monkeypatch.setattr(mod, "load_verified_v3_bundle", spy, raising=False)
+    monkeypatch.setattr(mod, "load_verified_v3_bundle", spy)
     assert mod.main(["--verify"]) == 0
-    assert called["bundle"] >= 1
+    assert called["bundle"] == 1

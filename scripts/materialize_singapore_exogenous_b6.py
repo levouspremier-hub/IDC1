@@ -30,7 +30,6 @@ import hashlib
 import io
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
@@ -46,8 +45,8 @@ from scenario.exogenous_drivers import (
     load_frozen_inputs,
 )
 from scenario.exogenous_drivers_b6 import (
-    B6_EXOGENOUS_SOURCE_PATHS,
     B6ExogenousError,
+    _generator_is_dirty,
     b6_exogenous_revision,
     build_v3_frame,
     build_v3_output_manifest,
@@ -57,24 +56,11 @@ from scenario.exogenous_drivers_b6 import (
     canonical_v3_source_path,
     load_b6_policy,
     load_v2_arrival_template,
-    load_verified_v3_manifest,
-    load_verified_v3_source,
+    load_verified_v3_bundle,
 )
 from scenario.splits import SplitError, _require_canonical_utc
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def _git(*args: str) -> str:
-    return subprocess.run(
-        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=True
-    ).stdout
-
-
-def _generator_is_dirty() -> bool:
-    """本卡实现文件是否有未提交修改（含未跟踪的新文件）。"""
-    status = _git("status", "--porcelain", "--", *B6_EXOGENOUS_SOURCE_PATHS)
-    return bool(status.strip())
 
 
 def existing_frozen_at_utc(manifest_path: Path) -> str | None:
@@ -210,8 +196,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.verify:
         try:
-            load_verified_v3_manifest()
-            load_verified_v3_source()
+            # **唯一**入口：不得分别做两个不相交的浅层检查
+            load_verified_v3_bundle()
         except (B6ExogenousError, SplitError, OSError, ValueError) as error:
             print(f"materialize_singapore_exogenous_b6: {error}", file=sys.stderr)
             return 1
