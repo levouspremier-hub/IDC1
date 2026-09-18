@@ -10,13 +10,25 @@
 workload**，如何在不改变物理容量、SOC、任务约束与信息边界的前提下，
 **确定性、可复现、因果**地转换为 `IDCPriceEnv20D` 使用的离散 `Task` stream？
 
-**结论摘要（详见 §I）**：**当前不可直接映射**。
-① 正式 aggregate arrival 的量级约为 env 满负荷服务能力的 **5 倍**
-（§D.7），直接 1:1 转成 task workload 会让队列无界增长，等于改变物理语义；
-② env 的步长（1 h）与正式数据的步长（0.5 h）不一致，`Task.workload` 的
-时间语义随步长变化（§C）；③ 存在三处未来信息暴露面（§E）。
-本审计给出一个推荐方案（§G.1）与一个备选（§G.2），并把 **D1–D11** 共 11 项
-语义决定升级给人工（§I.2）。
+**结论摘要（详见 §I）**：
+
+① **映射本身是 1:1 恒等的**：mapper **必须**把原始 aggregate arrival
+**原样**分割成任务，**不得**缩放、不得改变场景强度（§G.3 不可变式 1）。
+② **在推荐的 rate-based 物理语义下**（§C.0），正式 aggregate arrival
+`1000.172 work / 0.5h` 对应服务能力 `402.521 work/hour × 0.5h
+= 201.261 work / 0.5h`，**arrival/service ≈ 4.970**（§D.7）——
+即当前 arrival 数据是一个**过载（重负载）场景**。这**如实登记**，
+**不**通过缩放 arrival 或放大容量来「修好」它。
+③ **步长**：env 默认 1 h 与正式数据 0.5 h 不一致；本审计给出**唯一一致**的
+半小时物理语义（§C），并说明旧的 work/step 方案是**非物理备选**。
+④ 存在三处 future-information 暴露面（§E）。
+
+**推荐 M-1**：原始 aggregate **1:1 守恒** + 确定性分割（允许结果是过载场景）；
+**备选 M-2**：暂停实现并**回到 M1.3f** 重新定义、版本化并人工批准有**物理依据**
+的 arrival intensity（**不是**在 mapper 里乘一个系数）。
+
+**⛔ 在「接受当前 arrival 作为正式重负载场景」vs「返回 M1.3f 重定强度」
+这一决定完成之前，不得开始 g-e-b**（§I.2 **D-INTENSITY**）。
 
 ---
 
@@ -68,20 +80,21 @@ workload**，如何在不改变物理容量、SOC、任务约束与信息边界�
 |---|---|
 | 定义 | `idc_model/task_model.py:163` `workload = float(np.sum(load_profile) * self._task_workload_capacity_ref())` |
 | 参考量 | `:63-66` `_task_workload_capacity_ref() = C_IDC_base × task_workload_scale` |
-| 单位 | **`capacity-ref × 步数`**，即 **`Σ(每步负载率) × C_IDC_base × scale`** |
-| **时间语义** | **`load_profile` 的第 i 项代表「第 i 个仿真步内的负载率」**，因此
-  `workload` 的物理含义随 `duration`（步数）变化，且**隐含 delta_t_hours=1** |
+| **当前实现** | `workload = Σ(load_profile) × C_IDC_base × scale`，**没有乘 `delta_t_hours`** |
+| **推荐语义（§C.2）** | **物理 work 数量** = `Σ(load_profile × C_IDC × delta_t_hours)`，单位 **work** |
+| **时间语义** | `load_profile` 的第 i 项是**第 i 个仿真步内的负载率（速率）**；步内工作量 = `负载率 × C_IDC × delta_t_hours` |
 | 实测参考量 | `C_IDC_base = 469.556874725279`，`task_workload_scale = 1.0`（§D.3） |
 
-> **⚠️ 矛盾登记 ①**：`load_profile[i]` 是**无量纲负载率**（0.08–0.45），
-> 但 `workload = Σ load_profile × ref` **没有乘 `delta_t_hours`**。
-> 若 `delta_t_hours = 0.5`，同一条 `load_profile` 代表的**物理能量**减半，
-> 而 `workload` 的数值**不变**。即：
+> **⚠️ 矛盾登记 ①（本卡 P1 的根源之一）**：`load_profile[i]` 是**无量纲速率**，
+> 但当前 `workload = Σ load_profile × ref` **没有乘 `delta_t_hours`**。
+> 因此在 `delta_t_hours = 0.5` 下：
 >
-> - 作为「工作量计数」它是**每步**量（不变）；
-> - 作为「物理能量」它隐含 `delta_t_hours = 1`（**会变**）。
+> - 作为「**每步工作量计数**」它**不变**，但该计数**不再等于物理 work**；
+> - 作为「物理 work」它**必须**乘 `delta_t_hours`，否则每步工作量被**高估 2 倍**。
 >
 > 二者**当前不可区分**，因为 env 的 `delta_t_hours` 默认恰为 `1.0`。
+> **推荐**采用 §C.2：`workload` 一律是**物理 work 数量**，
+> 且 `max_rate` 与 `capacity_per_step` 同处 **work/step** 单位。
 
 ### A.5 `Task.duration`
 
@@ -92,6 +105,7 @@ workload**，如何在不改变物理容量、SOC、任务约束与信息边界�
 | 与 `load_profile` 的关系 | `len(load_profile) == duration`（`:162`） |
 | 期望 | **2.7 步**（§D.3） |
 | **时间语义** | 「步」= `delta_t_hours`。**1 h step → 2.7 h；0.5 h step → 1.35 h** |
+| **推荐（§C.2）** | profile 的业务时长**按物理小时声明**；`duration_steps = round_half_up(hours / delta_t_hours)`，**最小 1 步** |
 
 ### A.6 `Task.deadline` / `latest_finish_time`
 
@@ -103,6 +117,7 @@ workload**，如何在不改变物理容量、SOC、任务约束与信息边界�
 | 生成约束 | `real_deadline_min = max(deadline_min, duration)`（`task_model.py:167`） |
 | 使用位置 | env `:1256` `deadline_left = latest_finish_time - current_time`；`:1319` 传给分配器 **绝对**值；`planning/snapshot_adapter.py:231` `deadline=int(task.latest_finish_time)` **绝对**值 |
 | **时间语义** | 同样是**步数**；0.5 h step 下同一数值代表**一半的物理时间** |
+| **推荐（§C.2）** | 业务 deadline **按物理小时声明**；`deadline_steps = round_half_up(hours / delta_t_hours)`，且**不得小于** `duration_steps` |
 
 > **⚠️ 矛盾登记 ②**：`idc_model/allocation.py:24-27` 的调度口径写
 > 「按 (priority 降序, **deadline 升序**, …) 排序」，读的是 `tasks[i]["deadline"]`
@@ -126,9 +141,9 @@ workload**，如何在不改变物理容量、SOC、任务约束与信息边界�
 |---|---|
 | `C_IDC` | `idc_model/power_model.py:90` `self.C_IDC_base = sum(self.single_server_C_server)`；`:91` `C_server = single_server_C_server × server_group_size` |
 | 实测 | `C_IDC_base = 469.556874725279`；`Σ C_server = 469.556874725279`（scale=1、group model 关闭） |
-| `planned_capacity_vec` | `envs/idc_price_env.py:622` `planned_task_loads × C_server`（逐组） |
-| 单位 | **work-units / 步**（**不含** `delta_t_hours`） |
-| 全动作上限 | `max_task_load_per_server(0.80) × Σ C_server = 402.521` work/步（§D.7） |
+| `planned_capacity_vec`（**当前实现**） | `envs/idc_price_env.py:622` `planned_task_loads × C_server`（逐组），**不含** `delta_t_hours` |
+| **推荐语义（§C.2）** | `planned_capacity_rate`（**work/hour**）→ `capacity_per_step = rate × delta_t_hours`（**work/step**） |
+| 全动作上限 | `max_task_load_per_server(0.80) × Σ C_server = 402.521` **work/hour**（§D.7 计算 1） |
 
 > **⚠️ 矛盾登记 ③**：`planned_capacity_vec` 与 `Task.workload` 都是「每步」量，
 > 二者**自洽**；但两者与**物理功率/能量**之间的关系需要 `delta_t_hours`
@@ -258,68 +273,111 @@ mapper 不能「接上」它，必须**替换**它（在 g-e-c 中，且不得�
 
 ## C. 半小时步长影响
 
+### C.0 三个**必须分开**的概念（本卡 P1 修正的核心）
+
+> 修复前的 §G.1 让 `arrival_scale` 同时承担了三件事，这是错的。三者**必须分开**：
+
+| # | 概念 | 定义 | 影响 arrival/service 比？ | 允许出现在哪里 |
+|---|---|---|---|---|
+| 1 | **单位换算** | 对 arrival、capacity、queue refs 等**同维度量**做**一致**换算（例如 work/hour ↔ work/step） | **否**（分子分母同比例） | mapper / env 注入层 |
+| 2 | **归一化** | 只改**观测数值尺度**（如 `λ / lambda_ref`） | **否** | 观测层 |
+| 3 | **场景强度修改** | 改 arrival / service 的**比值**本身 | **是** | **只能**在上游场景定义（M1.3f + manifest + refs + 人工批准 + 版本化） |
+
+**红线**：第 3 类**不得**藏在 mapper 里。「为了让环境可行而缩小 arrival」等于
+**放松约束 / 改变任务负载来制造可行**（AGENTS §1.1、IMPLEMENTATION_PLAN §1.1.1）。
+`arrival_scale` **不是**单位换算量，**不得**作为 mapper 参数或 train-only 校准参数。
+
 ### C.1 `delta_t_hours=1.0` vs 数据 0.5 h
 
 `envs/idc_price_env.py:81` 默认 `delta_t_hours = 1.0`；正式 canonical 与 v2 驱动表
 是 **30 min**（17,568 行，`FREQUENCY="30min"`）。**D4 已裁决**：formal 路径**显式**
 使用 `delta_t_hours = 0.5`；旧路径默认 `1.0` **不改**。
 
-### C.2 `planned_capacity_vec` 是 work/hour 还是 work/step？
+### C.2 **推荐默认：唯一一致的 rate-based 半小时物理语义**
 
-**是 work/step**（`env:622` 无 `delta_t_hours` 因子）。
-所以在 0.5 h 下，**同样的 action 给出同样的每步容量**，但其**每小时**产能翻倍。
-若希望「每小时产能不变」，必须把容量乘 `delta_t_hours`。
+> 这是本审计**推荐的默认**，取代修复前的「保持 `planned_capacity_vec` 为
+> work/step、不乘 `delta_t_hours`」。
 
-### C.3 0.5 h 下是否需要乘 `delta_t_hours` 才得到每槽可执行工作量？
-
-**取决于 C.2 的选择**，二者必须**成对**决定：
-
-- 若把 `planned_capacity_vec` 定义为 **work/step**（现状）：**不需要**乘，
-  但「每小时产能」会随步长翻倍；
-- 若定义为 **work/hour**：**必须**乘 `delta_t_hours` 得到每步可执行量。
-
-**本审计推荐**：保持 `planned_capacity_vec` = **work/step**（不动现有语义），
-并在 mapper 与 refs 中把**每步 arrival** 与**每步容量**放在同一基准上
-（即 C.5 的推荐）。
-
-### C.4 `Task.workload = Σ load_profile × capacity_ref` 的时间假设
-
-见 §A.4 ⚠️①：**隐含 `delta_t_hours = 1`**。在 0.5 h 步长下：
-若 `load_profile` 仍表示「该步内的负载率」，则 `workload` 的数值语义
-（每步工作量）**不变**，但其代表的**物理能量**减半。
-
-**这是必须由人工裁决的语义选择**（§I.2 D2）。
-
-### C.5 `duration` / `deadline` 从 1 h 切到 0.5 h 是否必须换算？
-
-**必须**，否则任务物理时长减半：
-
-| 项 | 1 h step | 0.5 h step（不换算） | 0.5 h step（应换算） |
+| 量 | 语义 | 单位 | 与 `delta_t_hours` 的关系 |
 |---|---|---|---|
-| `duration=2` | 2 h | **1 h** ❌ | 4 步 = 2 h ✓ |
-| `deadline=8`（相对） | 8 h | **4 h** ❌ | 16 步 = 8 h ✓ |
+| `C_IDC` / `C_server` | **服务速率** | **work-units / hour** | 与步长**无关** |
+| `planned_capacity_rate` | `action × max_task_load × C_server` | **work / hour** | 与步长**无关** |
+| `capacity_per_step` | `planned_capacity_rate × delta_t_hours` | **work / step** | **乘 `delta_t_hours`** |
+| `Task.workload` | `Σ(load_profile × C_IDC × delta_t_hours)` | **work**（物理工作数量） | **乘 `delta_t_hours`** |
+| `load_profile` | **速率 / 利用率**语义（该步内占算力的比例） | 无量纲 | 与步长**无关** |
+| `duration` / `deadline`（业务参数） | 按**物理小时**声明 | **hour** | 与步长**无关** |
+| `duration_steps` / `deadline_steps` | `physical_hours / delta_t_hours` | **step** | **除 `delta_t_hours`** |
+| per-task `max_rate`（env / allocation） | **work / step** | **work/step** | 与 `capacity_per_step` **同单位** |
+| `lambda_ref` | **work-units / hour**（refs 声明） | work/hour | — |
+| `lambda_ref_per_step` | `lambda_ref_work_per_hour × delta_t_hours` | work/step | **乘 `delta_t_hours`** |
+| `queue_ref` / `queue_capacity_ref` | **存量** work-units | work | **不**因步长直接缩放 |
+| `price` / `carbon` / `cost` | 由 `kW × delta_t_hours` 得 kWh 再计价 | — | **乘 `delta_t_hours`** |
 
-**本审计推荐**：在 **mapper** 中把 profile 的 `duration_range` /
-`deadline_range`（以「小时」为隐含单位的历史常量）按
-`× (1 / delta_t_hours)` 换算成**步数**，并在冻结参数中显式记录
-「profile 的时长常量以小时声明」。
+**非整数 `duration_steps` 的确定性取整规则（必须冻结并登记）**：
+`duration_steps = round_half_up(physical_hours / delta_t_hours)`，**最小 1 步**；
+`deadline_steps` 同样取整，且**不得小于** `duration_steps`
+（与 `task_model.py:167` 的既有约束一致）。
+
+### C.3 为什么该语义在 1 h → 0.5 h 下保持自洽
+
+| # | 必须保持的不变量 | 为什么成立 |
+|---|---|---|
+| 1 | **每小时服务能力不变** | `rate` 与步长无关；`rate × delta_t_hours` 只是把速率**折算到该步** |
+| 2 | **同一物理持续时间不变** | `duration_steps = hours / delta_t_hours` ⇒ `steps × delta_t_hours == hours` |
+| 3 | **同一负载曲线产生的总工作量不变** | `Σ(load_profile) × C_IDC × delta_t_hours`，步数翻倍与单步时长减半**互相抵消**（§C.4 微例） |
+| 4 | **task `max_rate` 与 per-step capacity 同单位** | 二者都是 **work/step** |
+| 5 | **arrival/service 比不因离散步长改变** | arrival 与 capacity 都换算到**同一** work/step 基准 |
+
+### C.4 数值微例：同一物理 profile 在 1 h / 0.5 h 下的总工作量
+
+```text
+设定：物理持续时间 1 小时，平均负载率 0.2，C_IDC = 100 work/hour
+
+1h step : duration_steps = 1/1.0 = 1
+          workload = 1 × 0.2 × 100 × 1.0 h = 20 work        ← 1 步 × 20 work/step
+
+0.5h step: duration_steps = 1/0.5 = 2
+          workload = 2 × 0.2 × 100 × 0.5 h = 20 work        ← 2 步 × 10 work/step
+
+⇒ 总工作量 20 work 不变；每步工作量由 20 降到 10（因为每步只占 0.5 h）
+⇒ task 的 work/step 速率 = workload / duration_steps = 10 work/step（两种步长一致）
+```
+
+> **修复前的问题**：旧稿说「duration 翻倍、workload **数值不变**、capacity 每步不变」，
+> 那会让 `workload / duration_steps` **减半**，即改变任务的**最大速率语义**。
+> 采用 §C.2 后不再发生。
+
+### C.5 `duration` / `deadline` 从 1 h 切到 0.5 h 的换算
+
+**必须**换算，否则任务物理时长减半：
+
+| 项 | 业务声明（物理小时） | 1 h step | 0.5 h step（正确） | 0.5 h step（不换算，❌） |
+|---|---|---|---|---|
+| `duration` | 2 h | 2 步 = 2 h | **4 步 = 2 h** | 2 步 = **1 h** |
+| `deadline`（相对） | 8 h | 8 步 = 8 h | **16 步 = 8 h** | 8 步 = **4 h** |
+
+**profile 常量按小时声明**：`task_model.py:81/91/101/111` 的
+`duration_range` / `deadline_range` 目前**隐含**以小时为单位
+（因为 env 默认 1 h step）。mapper 必须显式按 §C.2 转换为**槽数**。
 
 ### C.6 `lambda_ref = 2000 work-units/hour` 与 ≈1000 work-units/half-hour
 
-见 §A.10 ⚠️。**推荐**：formal 链的 `lambda_ref` **按步长换算**使用——
-`lambda_ref_per_step = 2000 × delta_t_hours`（0.5 h → 1000），
-或等价地把 v2 表按 1 h 聚合后再除以 2000。**二者不可混用**。
+见 §A.10。**推荐**：formal 链使用
+`lambda_ref_per_step = 2000 × delta_t_hours`（0.5 h → **1000**），
+归一化时**分子分母同基准**。**不得**用「每小时参考值」去除「每半小时量」
+（那会系统性减半，见 §A.10 ⚠️）。注意这属于 **§C.0 第 1/2 类**（单位换算 / 归一化），
+**不改变** arrival/service 比。
 
 ### C.7 `queue_ref` / `cost_ref` / SLA 是否受步长影响？
 
-| 参考值 | 是否随步长变化 | 理由 |
-|---|---|---|
-| `queue_ref` / `queue_capacity_ref` | **是**（背景量：队列 = 工作量的累积） | 队列以 work-units 计，其**积累速率**随步长变化 |
-| `cost_ref` | **否**（货币） | 总额与步长无关；但**每步**成本随步长减半 |
-| `price_ref` | **否** | 单位是 SGD/kWh |
-| `carbon_ref` / `carbon_factor_ref` | **否** | kgCO2 / kgCO2·kWh⁻¹ |
-| `sla_penalty_ref` | **否**（货币） | — |
-| `lambda_ref` | **是** | 「每小时速率」，见 C.6 |
+| 参考值 | 语义 | 是否随步长变化 | 理由 |
+|---|---|---|---|
+| `queue_ref` / `queue_capacity_ref` | **存量** work-units | **否**（不因步长缩放） | 队列是工作量**存量**，其数值由 arrival 与 service 的**速率差**随时间累积决定；把参考值本身乘步长会改变归一化语义 |
+| `cost_ref` | 货币 | **否** | 总额与步长无关 |
+| `price_ref` | SGD/kWh | **否** | 单位是 kWh 计价 |
+| `carbon_ref` / `carbon_factor_ref` | kgCO2 / kgCO2·kWh⁻¹ | **否** | — |
+| `sla_penalty_ref` | 货币 | **否** | — |
+| `lambda_ref` | **速率** work/hour | **是**（换算到每步：`× delta_t_hours`） | 速率量必须与步长配对 |
 
 ### C.8 未来可能触及 `envs/idc_price_env.py::step()` 的变更
 
@@ -400,25 +458,70 @@ E[duration per task] = 2.7 步
 
 ```text
 env demo : num_tasks=12 over horizon=24 (1h step) → 0.500 任务/步 = 131.2 work/步
-formal   : 2000.34 work/小时 → 7.62 任务/小时 → 182.9 任务/天
-差距     : 任务数 ≈ 7.6× ；工作量/小时 ≈ 15.2×
+formal   : 2000.344 work/小时 → 7.62 任务/小时 → 182.9 任务/天
+差距     : 任务数 ≈ 7.6×；工作量/小时 ≈ 15.2×（**rate-based**，见 §D.7 计算 1）
 ```
 
-### D.7 单槽服务容量 vs 到达量（**核心不可行性证据**）
+> 本节的「工作量/小时」按 **rate-based 物理语义**（§C.2 / §D.7 计算 1）表达。
+> 若按非物理的 work/step 语义，分母会翻倍，差距会**看起来**小一半 ——
+> **不得**混用两种基准。
+
+### D.7 服务容量 vs 到达量：**两种计算必须分开写**
+
+> **不得混用。** 两种语义的差别完全来自「`planned_capacity_vec` 是否乘
+> `delta_t_hours`」，即 §C.2 与旧 work/step 方案的差别。
+
+**计算 1（★ 推荐：rate-based 物理语义，§C.2）**
+
+```bash
+uv run python -c "
+arr_hh = 1000.1721   # work / 0.5 h
+cap_rate = 402.521   # work / hour  (@ action=1.0)
+delta = 0.5
+print(arr_hh, cap_rate * delta, arr_hh / (cap_rate * delta))
+print(arr_hh*2, cap_rate, (arr_hh*2)/cap_rate)
+"
+```
 
 ```text
-max_task_load_per_server = 0.80 | base_load = 0.05 | access_limit_kw = 18.0
-planned capacity @ action=1.0 = 402.521 work / 步
+arrival = 1000.172 work / 0.5h
+service = 402.521 work/hour × 0.5h = 201.261 work / 0.5h
+ratio   ≈ 4.9695  → 4.970
 
-formal arrival   : 1000.17 work/半小时 = 2000.34 work/小时
-service capacity : 402.52 work/步 (delta=1.0h) = 402.52 work/小时
-ratio arrival/capacity (per hour) = 4.970
+按小时表达：
+arrival ≈ 2000.344 work/hour
+service ≈  402.521 work/hour
+ratio   ≈ 4.9695  → 4.970
 ```
 
-> **⚠️ 硬结论**：把 aggregate arrival 的数值**直接**当作 task workload，
-> 到达速率是满负荷服务能力的 **≈5 倍**，队列将**无界增长**。
-> 这不是「参数需要微调」，而是**映射契约必须显式包含一个尺度约定**
-> （§G），并由人工批准。任何「直接 1:1」的方案都等于**改变物理语义**。
+**计算 2（当前代码若只传 `delta_t_hours=0.5`、但**不**缩放 planned capacity）**
+
+```text
+arrival = 1000.172 work/step
+service =  402.521 work/step
+ratio   ≈ 2.4848  → 2.485
+
+其隐含的每小时服务能力 = 402.521 / 0.5 = 805.042 work/hour
+```
+
+> **结论**：计算 2 的比值虽然「看起来好一半」，但它是**非物理**的 ——
+> 它把每小时服务能力**翻倍**（402.521 → 805.042）。**不得**用它作为正式推荐。
+
+**★ 硬结论（rate-based，计算 1）**：正式 aggregate arrival 是满负荷服务能力的
+**≈4.970 倍**。把 aggregate **原样 1:1** 映射成 task workload（这正是
+本审计的推荐，§G.1）会得到**过载（重负载）场景** —— 队列持续增长、
+大量任务无法在 deadline 内完成。
+
+**如实登记，不「修好」**：
+
+1. mapper **保持原始 aggregate 1:1 守恒**（§G.3 不可变式 1）；
+2. **不**通过改 `C_server` / `max_task_load` / 接入容量 / SOC / deadline / queue
+   来制造可行；
+3. **不**因队列增长或 deadline miss 删除、截断、提前完成任务或不计入队列；
+4. 若论文主场景需要稳定负载或一定服务达标率，则**当前 arrival 数据的尺度
+   缺乏物理校准** ⇒ **阻塞**，并回到上游 arrival 场景口径（M1.3f）
+   **重新批准并版本化**（§I.2 **D-INTENSITY**）；
+5. **mapper 不承担**修正上游尺度的职责。
 
 ### D.8 初始 backlog 数量级
 
@@ -523,11 +626,10 @@ refs 侧**，但 env 构造默认值仍是旧值，g-e-c 必须**显式**传参�
 
 ## G. 映射契约
 
-### G.1 **推荐方案 M-1：`arrival_scale` + 确定性加权分割**
+### G.1 **推荐方案 M-1：原始 aggregate 1:1 守恒 + 确定性任务分割**
 
-**核心思想**：把「aggregate work-units / 半小时」**显式**地按一个
-**冻结、人工批准**的 `arrival_scale`（work-units → task-workload 单位）缩放，
-再**确定性**分割成整数个 task。
+**核心思想**：mapper 把每槽的**原始** aggregate arrival **原样**分割成整数个
+`Task`。**没有**缩放系数、**没有**「有效 workload」、**没有**场景强度修改。
 
 **输入（全部显式、全部冻结）**
 
@@ -535,7 +637,7 @@ refs 侧**，但 env 构造默认值仍是旧值，g-e-c 必须**显式**传参�
 |---|---|
 | `split` | `train` / `validation` / `test` |
 | `episode_origin` | 全局步索引（经 M1.3d `validate_episode_origin`） |
-| `aggregate_workload_truth` | 该 episode 覆盖的每槽 aggregate（**仅**用于「实际到达」语义） |
+| `aggregate_workload_truth` | 该 episode 覆盖的每槽 aggregate（**原始值，不缩放**） |
 | `causal_workload_forecast` | 同一窗口的**因果** forecast（**唯一**可进决策的版本） |
 | `mapper_revision` | 冻结的 Git SHA |
 | `params` | 冻结参数集（§H） |
@@ -544,49 +646,56 @@ refs 侧**，但 env 构造默认值仍是旧值，g-e-c 必须**显式**传参�
 
 **输出（每个 task 一行）**
 
-`task_id`（稳定：`f(seed, slot, k)`）、`arrival_slot`、`workload`、
-`profile_key`、`duration`、`deadline`、`priority`、`interruptible`、
+`task_id`（稳定：`f(seed, slot, k)`）、`arrival_slot`、`workload`（**work**）、
+`profile_key`、`duration_steps`、`deadline_steps`、`priority`、`interruptible`、
 `parallelizable`、`provenance`（mapper revision + 参数 hash + 输入 hash）。
 
-**分割规则（确定性）**
+**分割规则（确定性，**不含任何缩放**）**
 
 ```text
-total = arrival_scale × aggregate_workload[slot]
-n     = max(1, round(total / E[workload_per_task]))        # 冻结的期望
+total = aggregate_workload[slot]                      # ← 原始值，1:1
+n     = max(1, round(total / E[workload_per_task]))   # 冻结的期望
 w_k   = 按冻结的 profile 概率与 profile 期望 workload 加权，
         用 largest-remainder（Hamilton）法分配 total 到 n 个 task
-        ⇒ Σ w_k == total  （精确，无浮点余数丢失）
+        ⇒ Σ w_k == total   （**对原始 aggregate 精确守恒**，无浮点余数丢失）
 ```
 
 **为什么推荐它**
 
-1. **守恒可证**：largest-remainder 保证 `Σ w_k == total`（不可变式 1/3）；
+1. **数据保真**：`Σ w_k == total == 原始 aggregate`（不可变式 1/2/3）；
 2. **确定性**：`n` 与 `w_k` 都是 `total` 与冻结参数的纯函数（不可变式 5）；
-3. **把不可行性摆到台面上**：`arrival_scale` 是**显式的人工批准量**，
-   而不是藏在某处的隐式系数（§D.7 的 5× 差距必须被**看见**）；
-4. **不碰物理**：mapper 只产出任务表；容量/SOC/约束全在 env 侧不变；
-5. **可审计**：每个 task 都带 provenance，可与 `aggregate` 对账。
+3. **不碰物理**：mapper 只产出任务表；容量 / SOC / 约束全在 env 侧不变；
+4. **不碰场景**：不改变 arrival/service 比（§C.0 第 3 类**不出现**在 mapper 中）；
+5. **可审计**：每个 task 都带 provenance，可与**原始** aggregate 对账。
 
-**代价**：需要人工批准 `arrival_scale`（§I.2 D1）与 `E[workload_per_task]`
-所用的 profile 期望口径（§I.2 D5）。
+**它允许的结果是过载场景**（§D.7 计算 1：≈4.970）。这是**如实**的结论，
+不是缺陷；是否适合作为论文主实验场景，是**另一层决策**（§I.2 D-INTENSITY）。
 
-### G.2 **备选方案 M-2：aggregate **直接**作为 workload（不缩放）**
+### G.2 **备选方案 M-2：阻塞并回到 M1.3f 重定 arrival intensity**
 
-把 `total = aggregate_workload[slot]` 原样分割，`arrival_scale ≡ 1`。
+**内容**：暂停 mapper 实现，回到上游 M1.3f 的 arrival 口径，
+重新定义并冻结一个**有物理依据**的 arrival intensity
+（新的数据版本、manifest、refs、人工批准与版本化）。
 
-- **优点**：没有任何未声明的系数；「aggregate 就是工作量」最直观。
-- **致命问题**：§D.7 实测到达速率是服务能力的 **≈5 倍** ⇒ 队列无界增长、
-  任务几乎全部逾期。要让它可行，就必须**同时**改 `C_server`/`max_task_load`
-  或 refs —— 那**改变了物理容量语义**，违反本卡红线。
-- **结论**：**仅在人工明确接受「队列长期溢出」这一语义时**才可选；
-  本审计**不推荐**。
+**这不是**「在 mapper 里乘一个系数」：
 
-### G.3 不可变式（12 条，任何方案都必须满足）
+- 新的 intensity 属于 **§C.0 第 3 类**（场景强度修改），
+  **必须**在上游完成并被版本化；
+- 一旦上游产出新版本 arrival，mapper 仍按 **§G.1 的 1:1 规则**处理**新**数据；
+- 旧版本 arrival 与旧 mapper 证据**保留**、标记 superseded。
+
+**触发条件**：人工判定「当前 arrival ≈4.970 倍的过载场景不适合作为
+论文主实验场景」（§I.2 **D-INTENSITY**）。
+
+> **修复前**的 M-2（「不缩放，仅在人工接受长期溢出时可选」）**已删除**：
+> 1:1 是**数据保真要求**，不是可选项；能否作为主场景是**另一层**决策。
+
+### G.3 不可变式（**13 条**，任何方案都必须满足）
 
 | # | 不变式 |
 |---|---|
-| 1 | 每槽离散 Task workload 之和**精确等于**该槽 aggregate truth（缩放后） |
-| 2 | 全 episode workload **守恒** |
+| 1 | 每槽离散 Task workload 之和**精确等于**该槽 aggregate arrival truth（**原始值，无任何限定词**：**不得**写「缩放后」、「有效 workload」、`scaled truth`、「映射后 truth」等任何限定） |
+| 2 | 全 episode workload **守恒**（同一 work-unit 基准） |
 | 3 | 不因浮点余数丢工作量（largest-remainder 收尾） |
 | 4 | 不创建 `workload <= 0` 的任务 |
 | 5 | 固定输入 + revision + 参数 + seed ⇒ **相同** task stream / hash |
@@ -595,59 +704,76 @@ w_k   = 按冻结的 profile 概率与 profile 期望 workload 加权，
 | 8 | mapper **不**读取 origin 之后对当前决策不可见的 task 属性（`future` task 的 `workload`/`type`/`deadline`/`priority`，含**任务个数**） |
 | 9 | 不清队列、不丢任务、不缩短 deadline |
 | 10 | 不放松每任务最大速率、接入容量、SOC、充放电互斥 |
-| 11 | initial backlog 与 arrivals **分账** |
+| 11 | initial backlog 与 arrivals **分账**（backlog **不**进入不变式 1/2） |
 | 12 | 旧 demo task generator（`create_demo_tasks` / `create_random_tasks`）**不得**作为 formal fallback |
+| 13 | **mapper 不改变场景强度**：不得出现 `arrival_scale` 或任何等价缩放；若需改强度，走 §G.2（上游版本化） |
 
----
+> 若把 aggregate 表达成**另一单位**（例如 work/hour），**必须**同时给出
+> **双向换算**与**原始值**，并证明换算前后 arrival/service 比**不变**
+> （§C.0 第 1 类）。**不得**只展示换算后的量。
 
 ## H. 参数冻结方案
 
+> **`arrival_scale` 已从本表彻底删除**（本卡 P1 修正）。任何「改变 arrival 总强度」
+> 的参数都**不属于** mapper 的参数空间（§C.0 第 3 类、§G.3 不变式 13）。
+
 | 类别 | 参数 | 来源 |
 |---|---|---|
-| **可由 train split 校准** | `arrival_scale` **候选**、profile 概率**候选**、`E[workload_per_task]` | 仅 train 行 `[0, 10224)` |
-| **必须人工批准** | `arrival_scale` 最终值、四类 profile 的 `duration_range`/`load_range`/`deadline_range`/`priority_range`、`type_probability`、task count 规则、residual 规则 | 人工裁决（§I.2） |
-| **预定物理尺度** | `C_IDC`、`C_server`、`max_task_load_per_server`、`access_limit_kw`、BESS 参数、`queue_capacity_ref`（软上限） | 既有声明值，**不改** |
+| **可由 train split 校准** | profile 概率**候选**、`E[workload_per_task]` 的口径候选 | 仅 train 行 `[0, 10224)` |
+| **必须人工批准** | 四类 profile 的 `duration_range`/`load_range`/`deadline_range`/`priority_range`（按**物理小时**声明）、`type_probability`、task count 规则、residual 规则、`duration_steps` 取整规则 | 人工裁决（§I.2） |
+| **预定物理尺度** | `C_IDC`（**work/hour**）、`C_server`（**work/hour**）、`max_task_load_per_server`、`access_limit_kw`、BESS 参数、`queue_ref`/`queue_capacity_ref`（**存量 work-units**） | 既有声明值，**不改** |
 | **每 episode seed** | task realization seed | 显式传入，**不**留空 |
 | **禁止从 validation/test 计算** | 上表所有「校准」类 | — |
+| **⛔ 禁止出现在 mapper** | **任何**改变 arrival 总强度的量（含 `arrival_scale` 及其等价物） | 只能走上游 M1.3f 版本化（§G.2） |
 
-**未来冻结资产至少应包含**：`schema`/`version`、`mapper_revision`、`units`、
-`training_range`、`source_hashes`（canonical / split / exogenous v2 / **v4 triad** /
-`refs_v3`）、`profile_probabilities`、`workload_partition_rule`、
-`duration_deadline_rule`、`seed_policy`、`residual_handling`、
-`task_stream_content_hash`。
+**未来冻结资产至少应包含**：`schema`/`version`、`mapper_revision`、`units`
+（**逐项**声明 work/hour、work/step、work、hour、step）、`delta_t_hours`、
+`training_range`、`source_hashes`（canonical / split / exogenous v2 /
+**v4 triad** / `refs_v3`）、`profile_probabilities`、`workload_partition_rule`、
+`duration_deadline_rule`（含**物理小时 → 槽数**的取整规则）、`seed_policy`、
+`residual_handling`、`task_stream_content_hash`。
 
 **建议落盘位置**：`data/manifest/m1.3g_arrival_mapper_v1.json`（g-e-b 产出，
 本卡**不**创建）。
-
----
 
 ## I. 推荐结论与人工决定
 
 ### I.1 推荐
 
-**推荐 §G.1（M-1：`arrival_scale` + 确定性加权分割）**，备选 §G.2（M-2）。
-**明确不推荐**任何「demo tasks 继续充当 formal 来源」或「全零 / 默认曲线填充」
-的做法。
+**推荐 §G.1（M-1：原始 aggregate 1:1 守恒 + 确定性任务分割）**。
+它**允许**结果是**过载场景**（§D.7 计算 1：≈4.970）；这是**数据保真**的必然结果，
+**不**通过缩放 arrival 或放大容量来回避。
+
+**备选 §G.2（M-2）**：若人工判定过载场景不适合作为论文主实验场景，
+则**暂停实现**并回到 **M1.3f** 重新定义、版本化并批准有物理依据的
+arrival intensity。**这不是**在 mapper 里乘系数。
+
+**明确不推荐**：① `arrival_scale`（arrival-only 缩放，改变 arrival/service 比）；
+② 「demo tasks 继续充当 formal 来源」；③ 全零 / 默认曲线填充；
+④ 为让队列可行而修改容量 / SOC / deadline / queue。
 
 ### I.2 需要人工批准的最小决定集合
 
 | # | 决定 | 推荐默认 | 替代项 | 影响 |
 |---|---|---|---|---|
-| **D1** | aggregate arrival 的最终**单位**语义 | 「**每 30 分钟槽的 work-units**，经 `arrival_scale` 转为 task-workload 单位」 | ① 直接当 task-workload（M-2）；② 当作「任务个数」 | 决定整个契约；直接 1:1 不可行（§D.7） |
-| **D2** | `Task.workload` 在 0.5 h 下的语义 | 「**每步**工作量，`load_profile` 是**该步内负载率**」（数值不变，物理能量随步长变） | 「`workload` 表示物理能量，需 `× delta_t_hours`」 | 影响守恒式与 refs 口径 |
-| **D3** | `duration` / `deadline` 的槽位换算 | profile 常量按**小时**声明，mapper 乘 `1/delta_t_hours` 得步数 | 直接把常量当步数（物理时长减半） | 任务物理时长差 2× |
-| **D4** | `planned_capacity_vec` 语义 | 保持 **work/step**（现状 `:622` 不动） | 改为 work/hour（须 `× delta_t_hours`） | 与 D2 必须成对 |
-| **D5** | task count / partition 规则 | `n = max(1, round(total / E[workload]))` + largest-remainder | 固定 n；或按 profile 概率逐类采样 | 决定 task 数与 workload 分布 |
-| **D6** | profile/type 分配规则 | 确定性加权（按冻结 `type_probability`） | RNG 采样（须固定 seed 顺序） | 影响可复现性 |
-| **D7** | residual workload 处理 | largest-remainder **收尾到最后一个 task** | 丢弃（**违反不可变式 3，禁止**） | 守恒 |
+| **D1** | aggregate arrival 的语义 | **原始每槽 workload**（work-units/槽）；**mapper 不得改变其强度** | 无（缩放已被否决） | 决定整个契约；缩放 = 改变场景强度 |
+| **D2** | `Task.workload` 语义 | **物理 work 数量** = `Σ(load_profile × C_IDC × delta_t_hours)` | 无量纲「每步计数」（**非物理**，不推荐） | 守恒式与能量口径 |
+| **D3** | `duration` / `deadline` 的槽位换算 | profile 业务参数按**物理小时**声明；`steps = hours / delta_t_hours`，非整数按 §C.2 取整 | 把常量直接当槽数（物理时长减半，**禁止**） | 任务物理时长差 2× |
+| **D4** | `C_server` / planned capacity 语义 | **rate**（work/hour）；`capacity_per_step = rate × delta_t_hours` | 保持 work/step（**非物理**，每小时能力翻倍） | 与 D2 必须成对；决定 §D.7 用哪种比值 |
+| **D5** | task partition 规则 | 只**分割原始 aggregate**：`n = max(1, round(total / E[workload]))` + largest-remainder；**不得缩放总量** | 固定 n；按 profile 概率逐类采样 | task 数与 workload 分布 |
+| **D6** | profile/type 分配规则 | 确定性加权（按冻结 `type_probability`） | RNG 采样（须固定 seed 顺序） | 可复现性 |
+| **D7** | residual workload 处理 | largest-remainder **收尾到最后一个 task**，**保持原始总量** | 丢弃（违反不变式 3，**禁止**） | 守恒 |
 | **D8** | seed 粒度 | 每 `(split, episode_origin)` 一个显式 seed | 每 split 一个 | resume 可复现性 |
-| **D9** | initial backlog | 保持独立账本（`task_id=0`），**不计入** arrival 守恒 | 并入第一槽（**不推荐**） | 守恒式的正确性 |
-| **D10** | 跨 episode deadline | 允许任务在 episode 末仍未完成，由既有 terminal settlement 结算 | 截断 deadline（**禁止**，不可变式 9） | 语义保真 |
-| **D11** | train-only 校准参数 | 只允许 `arrival_scale` 候选与 profile 概率候选；其余人工批准 | 全部人工给定 | 防泄漏 |
+| **D9** | initial backlog | 保持独立账本（`task_id=0`），**不进入** arrival 守恒式 | 并入第一槽（**不推荐**） | 守恒式正确性 |
+| **D10** | 跨 episode deadline | 允许任务在 episode 末仍未完成，由既有 terminal settlement 结算 | 截断 deadline（**禁止**，不变式 9） | 语义保真 |
+| **D11** | train-only 校准参数 | **只允许** profile 概率候选与 `E[workload_per_task]` 口径候选；**删除 `arrival_scale` 候选**；任何改变 arrival 总强度的量**一律禁止** | 全部人工给定 | 防泄漏 + 防止悄悄改场景 |
+| **D-INTENSITY** | **独立人工决定** | **接受当前 arrival 作为正式「重负载 / 过载」场景**（≈4.970），按 §G.1 实施 | **返回 M1.3f** 重新批准并版本化有物理依据的 arrival intensity（§G.2） | **决定 g-e-b 能否开工** |
 
-**在 D1–D11 全部裁决之前，不得开始任何实现卡。**
+**在 D1–D11 与 D-INTENSITY 全部裁决之前**：
 
----
+- **不得开始 g-e-b**；
+- **不得**把本 mapper 设计称为「已获准实施」；
+- `formal_env_ready` / `formal_training_ready` **保持 false**。
 
 ## J. 后续实现拆卡（**只设计，不执行**）
 
@@ -656,7 +782,8 @@ w_k   = 按冻结的 profile 概率与 profile 期望 workload 加权，
 | 项 | 内容 |
 |---|---|
 | 建议允许文件 | 新增 `scenario/arrival_mapper.py`、新增 `tests/test_m13geb_arrival_mapper.py`、新增冻结参数 manifest、两份 docs |
-| 必须先红 | 守恒（`Σ w_k == total`）、确定性（同 seed 同 hash）、无零/负 workload、`delta_t_hours=0.5` 的 duration/deadline 换算、**不读** `[t, …)` 属性、demo generator 不得被调用 |
+| 前置 | **D-INTENSITY 与 D1–D11 必须先裁决**（§I.2）；**未裁决不得开工** |
+| 必须先红 | **对原始 aggregate 的逐槽守恒**（`Σ w_k == aggregate_truth[t]`，**无限定词**）、确定性（同 seed 同 hash）、无零/负 workload、`delta_t_hours=0.5` 的 duration/deadline **物理小时→槽数**换算、**不读** `[t, …)` 属性、demo generator 不得被调用、**不得出现任何缩放系数** |
 | 停点 | mapper 为**纯函数**；不接 env；readiness 不变 |
 
 ### J.2 M1.3g-e-c：formal env 注入与 0.5 h 对齐
@@ -664,7 +791,7 @@ w_k   = 按冻结的 profile 概率与 profile 期望 workload 加权，
 | 项 | 内容 |
 |---|---|
 | 建议允许文件 | 新增 `scenario/env_injection.py`、修改 `envs/idc_price_env.py`（**注入点**）、新增测试、两份 docs |
-| 必须先红 | 注入数组与 v4 triad / refs_v3 一致；`delta_t_hours=0.5` 显式；**永不**落回 `create_demo_tasks` / 全零 / 默认曲线；`task_forecast_mode` 不得为 `perfect`/`noisy` |
+| 必须先红 | 注入数组与 v4 triad / refs_v3 一致；`delta_t_hours=0.5` 显式；`capacity_per_step = rate × delta_t_hours`；**永不**落回 `create_demo_tasks` / 全零 / 默认曲线；`task_forecast_mode` 不得为 `perfect`/`noisy` |
 | 停点 | **若需改 `step()`，该卡必须先提交失败测试**（§C.8）；观测归一化分母修复（§E.2） |
 | 红线 | 不改物理链、SOC、互斥、接入上限 |
 
@@ -673,7 +800,7 @@ w_k   = 按冻结的 profile 概率与 profile 期望 workload 加权，
 | 项 | 内容 |
 |---|---|
 | 建议允许文件 | 新增 `tests/test_m13ged_arrival_conservation.py`、两份 docs |
-| 必须先红 | `@pytest.mark.leakage`：改 `[t, …)` 的真值不改变当步决策输入；task stream 是 `(seed, origin, params, revision)` 的纯函数；resume 后 task stream **逐位相同**；`Σ` 跨层守恒（mapper → env → reward → settlement） |
+| 必须先红 | `@pytest.mark.leakage`：改 `[t, …)` 的真值不改变当步决策输入；task stream 是 `(seed, origin, params, revision)` 的纯函数；resume 后 task stream **逐位相同**；`Σ` 跨层守恒（mapper → env → reward → settlement），且**守恒的是原始 aggregate** |
 | 停点 | 只加测试，不改实现（除被测缺陷） |
 
 ### J.4 M1.3g-f：formal train entry 门禁与接线
