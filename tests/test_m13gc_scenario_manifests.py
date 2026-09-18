@@ -174,6 +174,19 @@ def _redirect_canonical_dir(monkeypatch, tmp_path) -> pathlib.Path:
     return tmp_path
 
 
+def _redirect_all(monkeypatch, tmp_path) -> pathlib.Path:
+    """把**两处**私有 canonical 解析器都改指 `tmp_path`。
+
+    物化器与 manifests 模块各自持有私有解析器；只改一处会让物化器写 A 目录、
+    却用 B 目录的 canonical 路径去**读回**，从而以「路径非 canonical」失败。
+    """
+    module = manifests()
+    entry = materializer()
+    monkeypatch.setattr(module, "_canonical_split_dir", lambda: tmp_path)
+    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
+    return tmp_path
+
+
 def _place(tmp_path, split: str, mutate=None, payload=None) -> pathlib.Path:
     """把 payload（默认取自 canonical v4，缺省回退 v3）写到 `tmp_path/<split>.json`。"""
     if payload is None:
@@ -350,13 +363,23 @@ def test_cross_split_canonical_path_is_rejected(split):
 
 
 @needs_assets
-def test_a_path_alias_outside_the_repo_is_rejected():
-    """仓库外（但存在）的等价路径同样被拒绝。"""
+def test_a_relative_spelling_of_the_canonical_path_is_accepted():
+    """**词法等价**的写法（相对路径）允许 —— canonical 判定按绝对路径比较。"""
     module = manifests()
+    relative = pathlib.Path("data/manifest/formal_splits_v4/train.json")
+    assert module.load_verified_split_manifest(
+        relative, expected_split="train")["split"] == "train"
+
+
+@needs_assets
+def test_a_sibling_directory_with_the_same_basename_is_rejected(tmp_path):
+    """同名文件位于**别的**目录时拒绝。"""
+    sibling = tmp_path / "formal_splits_v4"
+    sibling.mkdir()
+    (sibling / "train.json").write_bytes(TRIAD["train"].read_bytes())
     with pytest.raises(ValueError):
-        module.load_verified_split_manifest(
-            MANIFEST_DIR.parent / "manifest" / "formal_splits_v4" / "train.json",
-            expected_split="train")
+        manifests().load_verified_split_manifest(
+            sibling / "train.json", expected_split="train")
 
 
 @needs_assets
@@ -547,13 +570,22 @@ def test_non_integer_row_bounds_are_rejected(tmp_path, monkeypatch, bad):
 
 # --- 6. 公开入口不接受任何信任边界参数 ----------------------------------------
 
-FORBIDDEN_KWARGS = ("inputs", "materializer_revision", "out_dir", "frozen_at_utc",
+# 信任根参数：三个公开入口**都**必须拒绝
+FORBIDDEN_KWARGS = ("inputs", "materializer_revision",
                     "expected_path", "expected_sha256", "expected_revision",
                     "allow_alternate", "trust_root", "test_mode",
                     "canonical_frame", "frame", "shadow_option")
+# 只对正式 materializer 生产入口禁止（`build_split_manifest` 的
+# `frozen_at_utc` 是幂等所必需，且不是信任根）
+PRODUCTION_ONLY_KWARGS = ("out_dir", "frozen_at_utc")
 ALLOWED_EXPECTED_PARAMS = ("expected_split",)
+# 信任根：**任何**公开入口都不得暴露
 TRUST_BOUNDARY_TOKENS = ("sha", "hash", "revision", "root", "trust", "frame",
-                         "inputs", "out_dir", "frozen_at")
+                         "inputs")
+# 输出位置 / 冻结时钟：只对**正式 materializer 生产入口**禁止
+# （`build_split_manifest` 是内部构造器，其 `frozen_at_utc` 是幂等所必需，
+#   且**不**是信任根 —— 物化器与 loader 都不把它的取值交给调用者。）
+PRODUCTION_ONLY_TOKENS = ("out_dir", "frozen_at")
 
 
 def test_public_signatures_expose_no_trust_boundary_parameters():
@@ -573,6 +605,16 @@ def test_public_signatures_expose_no_trust_boundary_parameters():
                 assert token not in name, f"{fn.__name__} 暴露了 {token}：{name}"
 
 
+def test_production_materializer_exposes_neither_out_dir_nor_a_caller_clock():
+    """R3-10：正式 materializer 只能操作 canonical triad —— 无参数。"""
+    params = inspect.signature(
+        materializer().materialize_split_manifest_triad).parameters
+    assert list(params) == [], list(params)
+    for name in params:
+        for token in PRODUCTION_ONLY_TOKENS:
+            assert token not in name, name
+
+
 @needs_assets
 def test_all_public_entries_raise_type_error_on_unknown_kwargs(tmp_path, monkeypatch):
     module = manifests()
@@ -584,6 +626,9 @@ def test_all_public_entries_raise_type_error_on_unknown_kwargs(tmp_path, monkeyp
         with pytest.raises(TypeError):
             module.load_verified_split_manifest(
                 TRIAD["train"], expected_split="train", **{kwarg: 1})
+        with pytest.raises(TypeError):
+            entry.materialize_split_manifest_triad(**{kwarg: 1})
+    for kwarg in PRODUCTION_ONLY_KWARGS:
         with pytest.raises(TypeError):
             entry.materialize_split_manifest_triad(**{kwarg: 1})
 
@@ -616,8 +661,8 @@ def test_cli_defaults_to_the_canonical_v4_directory():
 @needs_assets
 def test_first_freeze_is_atomic_for_the_whole_triad(tmp_path, monkeypatch):
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     monkeypatch.setattr(
         entry, "_atomic_write_text",
         lambda path, text: (_ for _ in ()).throw(OSError("boom")))
@@ -630,8 +675,8 @@ def test_first_freeze_is_atomic_for_the_whole_triad(tmp_path, monkeypatch):
 def test_second_write_failure_rolls_back_the_first_file(tmp_path, monkeypatch):
     """R3-13：**第二次** replace 失败后，第一个**已写**文件也必须回滚。"""
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     original = entry._atomic_write_text
     calls: list[str] = []
 
@@ -652,8 +697,8 @@ def test_second_write_failure_rolls_back_the_first_file(tmp_path, monkeypatch):
 def test_triad_is_idempotent_and_preserves_mtime(tmp_path, monkeypatch):
     """R3-15：v4 幂等验证不改变 bytes / hash / mtime_ns。"""
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     first = entry.materialize_split_manifest_triad()
     before = {n: (_sha256(p), p.stat().st_mtime_ns)
               for n, p in first["paths"].items()}
@@ -670,8 +715,8 @@ def test_triad_is_idempotent_and_preserves_mtime(tmp_path, monkeypatch):
 @needs_assets
 def test_partial_triad_is_rejected(tmp_path, monkeypatch):
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     entry.materialize_split_manifest_triad()
     (tmp_path / "validation.json").unlink()
     with pytest.raises(ValueError):
@@ -682,8 +727,8 @@ def test_partial_triad_is_rejected(tmp_path, monkeypatch):
 def test_different_existing_manifest_is_rejected(tmp_path, monkeypatch):
     """R3-14：不同内容必须拒绝覆盖。"""
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     result = entry.materialize_split_manifest_triad()
     target = result["paths"]["train"]
     payload = json.loads(target.read_text(encoding="utf-8"))
@@ -699,8 +744,8 @@ def test_different_existing_manifest_is_rejected(tmp_path, monkeypatch):
 def test_malformed_existing_manifest_is_rejected(tmp_path, monkeypatch):
     """R3-14：畸形既有文件必须拒绝。"""
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     entry.materialize_split_manifest_triad()
     for bad in ("not json", "[]", '{"schema": "other"}'):
         (tmp_path / "test.json").write_text(bad)
@@ -728,8 +773,8 @@ def test_v4_triad_shares_one_frozen_at_utc():
 def test_slow_first_freeze_is_still_idempotent(tmp_path, monkeypatch):
     """把每个 split 的构造**人为拖慢**跨越秒边界，仍必须共享时间戳且幂等。"""
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
 
     original = entry.build_split_manifest
     ticks = iter(["2026-01-01T00:00:01+00:00", "2026-01-01T00:00:02+00:00",
@@ -749,8 +794,8 @@ def test_slow_first_freeze_is_still_idempotent(tmp_path, monkeypatch):
     assert len(set(seen)) == 1, f"三个 split 未共享时间戳：{seen}"
 
     monkeypatch.undo()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     before = {n: (_sha256(p), p.stat().st_mtime_ns)
               for n, p in first["paths"].items()}
     second = entry.materialize_split_manifest_triad()
@@ -797,12 +842,15 @@ def test_reader_calls_the_existing_strict_chain_checks(monkeypatch):
 @needs_assets
 def test_committed_triad_matches_a_fresh_build(tmp_path, monkeypatch):
     entry = materializer()
+    _redirect_all(monkeypatch, tmp_path)
     monkeypatch.setattr(entry, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(entry, "canonical_out_dir", lambda: tmp_path)
     rebuilt = entry.materialize_split_manifest_triad()
     for split in SPLITS:
         on_disk = json.loads(TRIAD[split].read_text(encoding="utf-8"))
         fresh = json.loads(rebuilt["paths"][split].read_text(encoding="utf-8"))
+        # 首次物化到空目录会采样**新的** `utc_now()`；其余字段必须逐项相同
+        assert fresh.pop("frozen_at_utc")
+        assert on_disk.pop("frozen_at_utc")
         assert fresh == on_disk, split
 
 
