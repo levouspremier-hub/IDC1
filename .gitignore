@@ -94,6 +94,9 @@
 # 限制），同样显式放行该子目录。
 !data/manifest/formal_splits_v3/
 !data/manifest/formal_splits_v3/*.json
+# M1.3g-c-R3：唯一候选 triad 移到 formal_splits_v4/，同样显式放行该子目录。
+!data/manifest/formal_splits_v4/
+!data/manifest/formal_splits_v4/*.json
 !report_tools/
 !report_tools/*.py
 !legacy/
