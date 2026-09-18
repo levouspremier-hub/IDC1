@@ -261,33 +261,48 @@ access-limited sustainable (task-load only) = 95.5994 work/hour
 
 | # | 能力 | 值（work/hour） | 用途 |
 |---|---|---|---|
-| 1 | **理论计算上限**（纯算力，action=1.0，**无**接入/基础负载约束） | **388.518** | 上界参考；**不**是可持续服务能力 |
-| 2 | **受接入容量与基础负载限制的持续服务能力** | **95.599** | **唯一**可用作可持续锚点的量 |
+| 1 | **理论计算上限**（纯算力，action=1.0，**无**接入/基础负载约束） | **388.518**（`server_seed=0` 探针） | 上界参考；**不**是可持续服务能力 |
+| 2 | **受接入容量与基础负载限制的持续服务能力** | **95.599**（**只读示例探针**） | **不**是已声明/已冻结的正式容量；正式分母待 D3 批准 |
 | 3 | **有可再生与 BESS 的时变短期能力** | 未接线（M1.3g-e 才接） | 只能作**逐槽**容量，**不**作恒定 intensity 锚点 |
 | 4 | **瞬时峰值能力**（如 PV 满发 + BESS 全放那一刻） | 未接线 | **不得**用作 main intensity 锚点 |
 
-**⚠️ 关键发现**：`access_limit_kw = 18.0 kW` 把**任务**服务能力压到
-**95.599 work/hour** —— 比理论计算上限（388.518）**低约 4×**。
+**⚠️ 关键发现（经 R1 修正）**：`access_limit_kw = 18.0 kW` 把**任务**服务能力
+压到**约理论计算上限的 1/4**。但表内 **95.599** 是
+**`server_seed=0`、`T_amb=28°C`、`access_limit_kw=18`、`base_load=0.05`、
+无 PV/风电/BESS 支持时的只读示例探针值**——**不是**已声明/已冻结的正式容量，
+**不得**直接作为论文物理常数或正式 `rho` 分母。该探针随温度与 `server_seed`
+显著变化（见 §B.6），因此正式容量在人工批准前只用符号
+`DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`，**不得给该符号赋值 95.599**。
 `env.step()` 的 M3.7a 投影（`envs/idc_price_env.py:637-711`）会按接入预算
-**限缩** `planned_capacity_vec`，因此这是**实际约束**，不是纸面数字。
+**限缩** `planned_capacity_vec`，因此接入上限是**实际约束**，不是纸面数字。
 
 ### B.3 arrival vs 能力（rate-based，work/hour）
 
-| 对比 | arrival | 能力 | 比值 |
+| 对比 | arrival | 能力（`server_seed=0` 探针） | 比值（**探针，非冻结**） |
 |---|---|---|---|
 | vs **理论计算上限** | 2000.344 | 388.518 | **5.1487** |
-| vs **接入受限可持续** | 2000.344 | **95.599** | **20.9242** |
+| vs **接入受限可持续**（seed 0、28°C、18 kW） | 2000.344 | **95.599** | **20.9242** |
 
-> **⚠️ 本审计修正了 M1.3g-e-a 的 4.970 结论的**适用范围**：
-> `4.970` 是「arrival vs **full-action 计划容量**（`max_task_load × ΣC_server/…`）」
-> 的比值；若改以**可持续**能力为分母，比值是 **20.9242**。
-> **两者都对，但分母不同**；§E 的 `rho` 定义必须**明确**用哪一个分母。
+> **⚠️ 历史比值退役（经 R1 修正）**：`4.970` 的分母
+> （`402.521 work/hour` 的 full-action 计划容量）来自**早先未冻结 `server_seed`
+> 的环境实例**，**不可复现**，已**退役**为 `superseded_unfrozen_probe`。
+> 本轮固定 `server_seed=0` 的理论 full-action 是 **388.518 work/hour**，
+> 对应比值是 **5.1487**，**不是 4.970**；**不得**再写「4.970 与 20.9242 两者都对」。
+> **5.1487 与 20.9242 也都只是带 seed、温度与约束条件的示例探针**，
+> 随 `server_seed` / `T_amb` 漂移（§B.6），**不得**称为正式冻结比值。
+> 正式比值只能写
+> `stress_ratio = mean_stress_arrival_work_per_hour /
+> DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`，
+> 在 D3 冻结前**不得**给正式数值。
 
 ### B.4 结论
 
-- **唯一**可用作 intensity 锚点的是第 2 类（**可持续服务能力 = 95.599 work/hour**）；
+- **第 2 类（受接入限制的持续能力）在「量纲」上**是 intensity 锚点的唯一**候选**，
+  但**其具体数值尚未决定**：§B.2 的 95.599 只是 `server_seed=0`、28°C 的单点探针，
+  §B.6 证明它随 `server_seed` 与 `T_amb` 显著变化；
 - 第 3 类只能作**逐槽**容量；第 4 类**不得**用作锚点；
-- 第 1 类只能作**上界**参考，**不**得冒充可持续能力。
+- 第 1 类只能作**上界**参考，**不**得冒充可持续能力；
+- 正式分母在人工批准前只用符号 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`。
 
 ### B.5 **额外发现：`C_IDC` 本身随 `server_seed` 变化**
 
@@ -312,6 +327,63 @@ spread (max-min)/mean = 0.071
 > **hard 结论**：任何 `rho` 的**分母**都**必须**是一个**声明（declared）**的
 > 容量常数，**不得**用某个 seed 实现出来的 `C_IDC` —— 否则「intensity 是否可接受」
 > 会随 `server_seed` 漂移，违反「冻结后所有方法共享」。
+
+### B.6 持续服务能力的**依赖清单**与多温度 / 多 seed 只读探针（**R1 新增**）
+
+**持续服务能力至少依赖以下 8 项**（任何一项未冻结，就不能称为「已声明容量」）：
+
+| # | 依赖 | 影响 |
+|---|---|---|
+| 1 | `server_seed` 生成的 `P_idle` | 改变每台服务器 idle 功耗 |
+| 2 | `server_seed` 生成的 `P_max` | 改变满载功耗 |
+| 3 | `server_seed` 生成的 `C_server` | 改变总算力（§B.5 实测 7.1% 漂移） |
+| 4 | `T_amb` 与 PUE（COP 随温度变化） | 改变冷却功耗，接入预算可服务的任务负载随之变 |
+| 5 | `access_limit_kw` | 硬接入上限（18 kW） |
+| 6 | `base_load` | 需先从接入预算中扣除（`(lo − base_load) × C`） |
+| 7 | 动作与服务器负载分配口径 | 本探针取**均匀负载** `L=mid` 的 full-action 语义 |
+| 8 | 是否排除 PV、风电和 BESS | 本探针**无 PV/风电/BESS 支持**（`pv_t`/`wt_t` 全零、BESS 未放电） |
+
+**探针口径**（只读，未新增脚本/缓存/run/CSV/JSON/parquet）：
+
+- **task-load capacity** = `max_task_load_per_server(0.80) × Σ C_server`；
+- **`base_load` 先扣除**：对负载 `mid` 二分，使
+  `calc_pue_and_total_power(L=mid, T_amb)[P_IDC]/1000 == access_limit_kw`，
+  得到 `lo` 后，持续任务服务能力 = `(lo − base_load) × ΣC_server`（work/hour）；
+- **action/load 含义**：`mid` 是逐服务器统一负载率（full-action 语义，
+  `calc_it_power` 按 `P_idle + (P_max−P_idle)·(2L − L^k)` 计 IT 功耗）；
+- **PUE 与 access-limit 的关系**：`calc_pue_and_total_power` 的 `P_IDC` 含
+  IT + 冷却（COP 随 `T_amb`/负载变化）+ `P_others`，接入预算约束的是这个**总功率**；
+- **无 PV/风电/BESS 假设**：本探针只评估「纯计算任务服务能力」，不叠加可再生/储能。
+
+**探针 1：`server_seed=0`，多温度**（命令与 §B.2 相同，仅 `T_amb` 变化）：
+
+```text
+T_amb=20°C  sustainable=116.5965 work/hour
+T_amb=24°C  sustainable=106.5175 work/hour
+T_amb=28°C  sustainable= 95.5994 work/hour
+T_amb=30°C  sustainable= 89.7949 work/hour
+T_amb=32°C  sustainable= 83.7421 work/hour
+T_amb=35°C  sustainable= 74.1653 work/hour
+```
+
+**探针 2：`T_amb=28°C`，多 `server_seed`**：
+
+```text
+seed=0  sustainable= 95.5994 work/hour
+seed=1  sustainable=107.4348 work/hour
+seed=2  sustainable=104.1109 work/hour
+seed=3  sustainable=109.3575 work/hour
+seed=4  sustainable= 93.2696 work/hour
+seed=5  sustainable=108.3390 work/hour
+seed=6  sustainable=103.8888 work/hour
+seed=7  sustainable=114.5974 work/hour
+```
+
+**结论**：95.599 只能称为「`server_seed=0`、`T_amb=28°C` 下的示例探针值」；
+温度从 20°C 到 35°C 使持续能力从 116.60 降到 74.17 work/hour，
+`server_seed` 0→7 使 28°C 下的持续能力在 93.27 ~ 114.60 work/hour 间漂移。
+**这些探针只证明「正式分母仍未决定」，不得从中挑选最有利的值**；正式容量在
+D3 批准前只用符号 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`。
 
 ---
 
@@ -369,7 +441,7 @@ spread (max-min)/mean = 0.071
 | 只能决定 shape？ | 否 |
 | **能决定 absolute intensity？** | **能提供分母**，但**分子**仍需外部依据 |
 | 可否用于 formal main scenario？ | **可以**（作分母；且必须用**声明**容量，不用 seed 实现值，§B.5） |
-| 允许的论文表述 | 「服务能力为模型声明值；可持续任务服务率 95.599 work/hour（受 18 kW 接入限制）」 |
+| 允许的论文表述 | 「服务能力为模型声明值；接入限制下的持续任务服务率随 `server_seed`/温度漂移，**正式**口径待人工批准 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`（seed 0、28°C 探针约 95.599 work/hour，仅示例）」 |
 
 ### C.5 文献或公开基准中的利用率区间
 
@@ -437,7 +509,7 @@ absolute main intensity（work/hour） = rho × declared_sustainable_capacity（
 | 要求 | 规定 |
 |---|---|
 | 内容 | **保留当前 `1000 work-units/半小时` 候选** |
-| 定量 | 明确约为 nominal/full-action 计划容量的 **4.970 倍**（§B.3 计算 1）；若以**可持续**能力为分母则为 **20.9242 倍**（§B.3 计算 2）；**两者都必须写明分母** |
+| 定量 | 相对**可持续**能力（seed 0、28°C、18 kW 探针）约为 **20.9242 倍**；相对**理论计算上限**（seed 0 探针）约为 **5.1487 倍**；**两者都是带 seed/温度/约束的示例探针**，**必须写明分母与条件**。历史 `4.970` 已**退役**为 `superseded_unfrozen_probe`（§B.3） |
 | 不得混入 | **不得混入 main 场景统计** |
 | 不得用于 | **不得用于包装主方法性能** |
 | 失败必须保留 | 积压、deadline miss、SLA 违约**必须保留**（不得清理、不得丢弃任务、不得缩短 deadline） |
@@ -473,7 +545,7 @@ rho  =  ────────────────────────
 | # | 问题 | 推荐规定 |
 |---|---|---|
 | 1 | 分子用哪个时间范围？ | **train split `[0, 10224)` 的 30 分钟槽**（归一化到 per-hour） |
-| 2 | 分母是理论上限还是持续容量？ | **持续物理容量**（**可持续**，即受 `access_limit_kw` 与 `base_load` 限制的那一类，§B.2 第 2 类 = **95.599 work/hour**）—— **不**用理论计算上限（388.518） |
+| 2 | 分母是理论上限还是持续容量？ | **持续物理容量**（**可持续**，即受 `access_limit_kw` 与 `base_load` 限制的那一类，§B.2 第 2 类）—— **不**用理论计算上限（388.518）。**但该类的具体数值尚未决定**：§B.2 的 95.599 只是 seed 0、28°C 的单点探针，正式分母在 D3 批准前只用符号 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR` |
 | 3 | 是否含 access-limit 影响？ | **含**（这正是「可持续」的定义） |
 | 4 | 是否含可再生与 BESS？ | **不含**（PV/wind/BESS 是**逐槽**时变能力，§B.2 第 3 类；把它们并入分母会让 `rho` 随天气漂移，破坏「冻结后共享」） |
 | 5 | 是否按 train split 计算？ | **是**（分子）；分母是**声明常数**，与 split 无关 |
@@ -587,7 +659,7 @@ main_intensity_work_per_half_hour
 |---|---|---|---|---|---|
 | **D1** | main intensity 的 **source kind** | `modeled_scenario`（人工批准 `rho`）+ 外部**shape** | 真实 IDC trace（需许可/hash/provenance） | 无实证依据时会被称为实测 | **g-e-b**、**M1.3f-e** |
 | **D2** | **`rho` 公式** | §E.1（分子 = train `[0,10224)` 的 per-hour 均值；分母 = 声明可持续容量） | 用 `p95` 或保守下界作分子 | 公式不唯一会导致不可比 | **M1.3f-e** |
-| **D3** | **sustainable capacity 分母** | §B.2 **第 2 类** = **95.599 work/hour**（声明常数） | 理论计算上限 388.518 | 用错分母会把过载藏起来 | **M1.3f-e** |
+| **D3** | **sustainable capacity 分母（以下 6 项必须共同批准，缺一不可）** | **待人工批准**：① 正式硬件 realization、固定 `server_seed`，或确定性硬件参数；② 温度口径（声明设计温度 / train 均值 / train worst-case / 其它明确且预先批准的规则）；③ 持续容量计算公式；④ 是否采用保守下界；⑤ 是否以及如何排除 PV、风电与 BESS；⑥ 最终容量常数 + 单位 + 来源 + revision + provenance | 理论计算上限 388.518（亦为 seed 0 探针） | 用未冻结的单点探针（如 95.599）作分母会把过载藏起来 / 随 seed 漂移 | **M1.3f-e**、**g-e-b** |
 | **D4** | **main load level（`rho` 数值）** | **待人工批准**（本审计不给数值） | 多 load-level | 凭空给数 = 以可行性反推 | **g-e-b** |
 | **D5** | **sensitivity levels** | 主场景确定后再定（如 `rho/2`、`2rho`） | 不设 | 事后挑选层级 | **g-e-b** |
 | **D6** | **stress 标签** | 当前 `1000` 显式标 `stress` / `overload` | — | 隐式混入主比较 | **g-e-b** |
