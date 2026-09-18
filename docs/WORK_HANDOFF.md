@@ -25,11 +25,13 @@
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
-> **g-c 经 R1 / R2 两轮返修后执行完成，等待人工复审**（见 §7T–§7X）；
-> **v3 triad（`data/manifest/formal_splits_v3/`）是唯一候选**：
+> **g-c 经 R1 / R2 / R3 三轮返修后执行完成，等待人工复审**（见 §7T–§7Y）；
+> **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
-> v2 = `superseded_pre_canonical_path_fix`；
-> `manifest_relative_path()` 是唯一公开路径来源且**只**返回 v3；
+> v2 = `superseded_pre_canonical_path_fix`、
+> v3 = `superseded_pre_canonical_loader_trust_boundary_fix`；
+> `manifest_relative_path()` 是唯一公开路径来源且**只**返回 v4；
+> verified loader 是 **canonical-only**；
 > `g-e / g-f` **均未开始**；
 > `formal_scenario_bundle_ready` 与 `formal_training_ready` **仍为 false**；
 > `train.json` / `validation.json` / `test.json` **仍未创建**；checkpoint **0**；
@@ -1836,6 +1838,85 @@ git revert <交接提交> <本验收提交> fe3ed7e 2d1f345 c5160f3 d525be4 b06f
 ```
 
 **g-c-R2 通过复审之前**：`g-e / g-f` 均不得开始；
+**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7Y. M1.3g-c-R3：关闭 formal split manifest 的路径与 provenance 信任边界（**执行完成，等待复审**）
+
+**M1.3g-c-R2 审核不通过**，起点 `7a6a3f8`，实现终点 `df61a3e`
+（详见卡片 §y–§z）。
+
+**已复现的缺陷**：
+
+```text
+load_verified_split_manifest(<临时目录副本>, expected_split="train")
+→ ARBITRARY_COPY_ACCEPTED
+payload["materializer_revision"] = "0"*40
+→ FORGED_PROVENANCE_ACCEPTED 0000000000000000000000000000000000000000
+```
+
+**根因**：`_reject_superseded_location()` 只拒绝仓库内两个已知旧目录；
+loader 不要求 `path` 等于该 split 的**唯一 canonical** manifest；
+`materializer_revision` 只校验「40 位十六进制」。
+
+**修正**：
+
+1. **canonical-only loader**：`load_verified_split_manifest(path, *, expected_split)`
+   要求路径**词法绝对等于**该 split 的唯一 canonical manifest，
+   **在读取 JSON 之前**完成；临时副本、仓库内其它目录、**路径别名**、
+   **symlink 文件/目录**一律拒绝；v1 / v2 / v3 三个历史位置给出明确的
+   「已被取代的位置」错误；split 与文件名不匹配明确失败。
+   **未**新增任何 caller 覆盖参数。
+2. **provenance**：`materializer_revision` 必须**精确等于**当前
+   `resolve_materializer_revision()`；`0`×40、历史、未知 revision 一律拒绝；
+   `MATERIALIZER_SOURCE_PATHS` 任一 dirty 时 loader 拒绝。
+3. **严格生产入口**：`materialize_split_manifest_triad()` **无参数**；
+   CLI **删除** `--out-dir`（`build_parser()` 的 dest 只有 `help` / `verify`）；
+   测试只能 monkeypatch **私有** `canonical_out_dir()` / `_canonical_split_dir()`；
+   私有 helper 不被 formal reader / env / train 调用。
+4. **版本化为 v4**：schema `m1.3g-formal-split-manifest-v4`，
+   目录 `data/manifest/formal_splits_v4/`。
+
+**四层版本**：
+
+| 版本 | 状态 | train SHA-256 |
+|---|---|---|
+| **v1** | `superseded_pre_live_input_binding_fix` | `91b2d7c2…` |
+| **v2** | `superseded_pre_canonical_path_fix` | `e0084a66…` |
+| **v3** | `superseded_pre_canonical_loader_trust_boundary_fix` | `0ee774e4…` |
+| **v4（唯一候选）** | 当前 | `215c20968be1b71aa5d5d4b1d22e6cf7ecbd0eb4c802d361dca061a1fbf082cb` |
+
+validation = `a69cddaf282f04ebf4277dbe84e7a5d66950fca68054aacb07a811786945c258`、
+test = `829a0f12f042c34be43cc42891ed70ee0588939e672026e299382043859c80bf`。
+**v1 / v2 / v3 逐字节保留**；v4 与 v3 的业务语义**逐字段相同**；
+v4 三份**共享一个** `frozen_at_utc`。
+
+**revision 关系**：v4 的 `materializer_revision` = **最后一次修改
+`MATERIALIZER_SOURCE_PATHS` 的提交** = `df61a3e`
+（与 `resolve_materializer_revision()` 逐字相等，有回归断言）。
+v4 在**最后一次实现提交之后**物化。
+
+**三次幂等 `--verify`**：bytes / SHA-256 / `mtime_ns` / 临时文件数
+**三次完全不变**（0 临时文件）。
+
+**先红实测**（`deb6efa`）：`75 failed, 8 passed`，两条直接复现用例为
+`Failed: DID NOT RAISE ValueError`。
+**转绿**：focused **85**、`m12/m13/contracts` **1282**、
+`make check` **exit 0（2462 passed）**、`make smoke` **exit 0**、
+`make train` **exit 2**（不回退 synthetic、无 checkpoint）。
+**上游全部冻结资产 hash 未变**；v1 / v2 / v3 字节未变。
+
+> **必须如实登记的范围外修改（`.gitignore`，单独提交）**：新增两行**只**放行
+> `data/manifest/formal_splits_v4/`。
+
+**回滚（由新到旧，含全部提交）**：
+
+```bash
+git revert <交接提交> <本验收提交> 54cfc35 5410c14 1342661 df61a3e deb6efa f559716
+```
+
+删除 `data/manifest/formal_splits_v4/` 并还原 `.gitignore` 两行即可。
+
+**g-c-R3 通过复审之前**：`g-e / g-f` 均不得开始；
 **正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
