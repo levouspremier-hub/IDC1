@@ -235,6 +235,24 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
 
 审计和人工决定完成后，才能开真正的 M1.3g-e。
 
+**状态（2026-09-18）**：`M1.3g-e-a` **第一轮审核不通过，已返修（R1）并再次提交复审**。
+审计文档：`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`。**三项核心结论**：
+
+1. **mapper 必须 1:1 守恒原始 aggregate**：**不得**缩放 arrival
+   （改前推荐的 `arrival_scale` 已**删除**）；「单位换算 / 归一化 / 场景强度修改」
+   三分，第 3 类**只能**在上游 M1.3f 版本化。
+2. **推荐 rate-based 半小时语义**：`C_IDC`/`C_server` 是 **work/hour** 速率；
+   `capacity_per_step = rate × delta_t_hours`；
+   `Task.workload = Σ(load_profile × C_IDC × delta_t_hours)`；
+   `duration`/`deadline` 按**物理小时**转槽。
+3. **当前 arrival 是过载场景**：rate-based 下 **arrival/service ≈ 4.970**
+   （另一种非物理口径为 2.485，隐含每小时服务能力翻倍，**不得**用作推荐）。
+   **不**通过改容量/SOC/deadline/queue 或删任务来「修好」。
+
+**⛔ 人工决定 `D-INTENSITY`**：**接受当前 arrival 作为正式重负载/过载场景**
+（按 M-1 实施）**vs** **返回 M1.3f** 重新批准并版本化有物理依据的 arrival intensity。
+**在该决定与 D1–D11 完成之前，不得开始 g-e-b / g-e / g-f。**
+
 ## 10. 后续顺序
 
 ~~~
@@ -311,7 +329,10 @@ ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f  configs/frozen
 - 不宽松化 validator、自动 coercion，或允许 caller expected hash/frame/kwargs。
 - 不改历史冻结 manifest 补字段；需要新 schema 时用新路径物化，旧证据保留。
 - v1/v2/v3 均为 superseded，不得进入 g-e/g-f；只有审计确认真实缺陷才开新版本。
+- 不得在 mapper 中缩放 arrival 或改变 arrival/service 比（改前 `arrival_scale`
+  已被否决）；要改场景强度只能回上游 M1.3f 版本化。
+- 不得把「缩放后 truth」当作守恒；守恒式必须对**原始 aggregate**成立。
 
 ## 14. 新对话首条消息模板
 
-请先读取 AGENTS.md、docs/IMPLEMENTATION_PLAN.md、docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md、docs/WORK_HANDOFF.md 和 docs/NEW_CONVERSATION_HANDOFF.md。当前分支为 p4-safeppo-m51a-rollout-contract-m12-integration，HEAD 以交接文档为准。不要启动 M6 或正式训练；先复核工作树、M1.3g-c focused 测试及 v3 triad 的 --verify，随后开一张只读 M1.3g-e-a arrival-to-task 接口审计卡。若审计本身需要人工语义决定，先停下来报告，不要实现 g-e。
+请先读取 AGENTS.md、docs/IMPLEMENTATION_PLAN.md、docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md、docs/WORK_HANDOFF.md 和 docs/NEW_CONVERSATION_HANDOFF.md。当前分支为 p4-safeppo-m51a-rollout-contract-m12-integration，HEAD 以交接文档为准。不要启动 M6 或正式训练；先复核工作树、M1.3g-c focused 测试及 **v4** triad 的 --verify，随后复核 M1.3g-e-a **R1** 的审计文档（`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`）与 §7AA。**在 `D-INTENSITY` 与 D1–D11 裁决完成、且人工明确放行之前，不要实现 g-e-b / g-e / g-f。**
