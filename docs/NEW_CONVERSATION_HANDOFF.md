@@ -255,7 +255,7 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
 **✅ 人工决定 `D-INTENSITY`（已作出 2026-09-18）**：**(1)** 当前 `1000` 保留为
 明确标记的 `stress` / overload **候选**；**(2)** **返回上游 M1.3f** 为 main scenario
 建立有来源、预先批准、不得按结果调节的 intensity。
-**`M1.3f-d` 审计已完成，但人工审核不通过，纯文档返修 `M1.3f-d-R1` 进行中**
+**`M1.3f-d` 审计已完成，`M1.3f-d-R1` 纯文档返修已通过人工复审**
 （`docs/AUDIT_ARRIVAL_INTENSITY.md`）：`1000` **没有任何**独立物理校准（唯一来源
 是声明的 `lambda_ref=2000`；Azure trace 只贡献**形状**，template 均值精确为 1）；
 可持续任务服务能力 **95.599 work/hour 只是 `server_seed=0`、`T_amb=28°C`、
@@ -265,9 +265,16 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
 探针，不是正式冻结比值**。正式容量只用符号
 `DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`；`rho` 已拆为 `rho_target`（期望值）
 与 `rho_realized`（Poisson realization），main intensity 由 `rho_target` 决定。
-**⛔ 在人工批准 D3（容量分母 6 项）与 D4（`rho_target` 数值）并完成版本化之前，
-不得开始 g-e-b / g-e / g-f。**
-下一张卡是 **M1.3f-e**（版本化 main intensity）或数据获取决策卡，**不是** mapper 卡。
+
+**✅ B6-INTENSITY 裁决（D3/D4，2026-09-18）**：`server_seed=0`、train max 温度
+**33.2°C**、`access_limit_kw=18.0`、`base_load=0.05`、`max_task_load_per_server=0.80`、
+排除 PV/风电/BESS、均匀逐服务器负载 + 现有接入二分公式；声明持续容量
+**79.985 work/hour**（原始 ≈79.985193 向下截断）；**`rho_target=0.80`**；
+main expected **63.988 work/hour** = **31.994 work/半小时**（`delta_t_hours=0.5`）；
+`source_kind=modeled_scenario`（不声称实测）；`rho_realized` 仅诊断、禁止反调；
+`1000` 保持 `stress_candidate`；sensitivity `none`。
+**下一步 M1.3f-e-a 冻结该 policy（只冻结 policy，不物化新版 arrival）；在 main
+intensity 版本化完成之前，不得开始 g-e-b / g-e / g-f。**
 
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；

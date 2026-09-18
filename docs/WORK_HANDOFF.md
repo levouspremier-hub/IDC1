@@ -29,9 +29,12 @@
 > **M1.3g-e-a/R2 已通过人工复审**（2026-09-18，见 §7Z–§7AB）；
 > **`D-INTENSITY` 已裁决**：当前 `1000` 保留为 `stress` 候选，
 > **返回上游 M1.3f 建立 main intensity**；
-> **M1.3f-d（arrival intensity 物理口径与场景分层审计）已执行，但人工审核不通过，
-> 正在进行纯文档返修 M1.3f-d-R1**（见 §7AC）；**在 main intensity 获人工批准并
-> 版本化之前不得开始 g-e-b**；
+> **M1.3f-d（arrival intensity 物理口径与场景分层审计）已执行，M1.3f-d-R1
+> 纯文档返修已通过人工复审**（见 §7AC）；
+> **D3/D4 已裁决（B6-INTENSITY）**：`server_seed=0`、train max 温度 33.2°C、
+> 声明持续容量 79.985 work/hour、`rho_target=0.80`、main 63.988 work/hour
+> （31.994 work/半小时），下一步 M1.3f-e-a 冻结 policy；
+> **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1985,14 +1988,23 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 **下一张卡是 M1.3f-d**（arrival intensity 物理口径与场景分层审计）。
 **g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
-### 7AC. M1.3f-d：arrival intensity 物理口径与场景分层审计（**已执行；人工审核不通过 → R1 返修**）
+### 7AC. M1.3f-d：arrival intensity 物理口径与场景分层审计（**已执行；R1 返修已通过人工复审**）
 
 > ⚠️ **R1 勘误（2026-09-18）**：本节是 M1.3f-d 的原始摘要，其中把 **95.599 /
 > 4.970 / 5.1487 / 20.9242** 写成了已冻结的正式事实，**已被 M1.3f-d-R1 修正**
-> （见卡片 §O–§P 与 `docs/AUDIT_ARRIVAL_INTENSITY.md` R1 后版本）：
+> （见卡片 §O–§Q 与 `docs/AUDIT_ARRIVAL_INTENSITY.md` R1 后版本）：
 > 95.599 只是 `server_seed=0`、`T_amb=28°C` 的单点探针；4.970 已**退役**为
 > `superseded_unfrozen_probe`；`rho` 已拆为 `rho_target` / `rho_realized`。
 > 以下每处已就地改为限定表述。
+
+> ✅ **B6-INTENSITY 裁决（2026-09-18）**：D3/D4 已裁决（见卡片 §Q.2）——
+> `server_seed=0`、train max 温度 **33.2°C**、`access_limit_kw=18.0`、
+> `base_load=0.05`、`max_task_load_per_server=0.80`、排除 PV/风电/BESS；
+> 声明持续容量 **79.985 work/hour**（原始 ≈79.985193 向下截断）；
+> `rho_target=0.80`、main **63.988 work/hour**（**31.994 work/半小时**）；
+> `source_kind=modeled_scenario`；`rho_realized` 仅诊断、禁止反调；
+> `1000` 保持 `stress_candidate`、sensitivity `none`。
+> 下一步 **M1.3f-e-a** 冻结该 policy，**尚未物化新版 arrival**。
 
 `docs/AUDIT_ARRIVAL_INTENSITY.md`（新增）+ 卡片 §M–§N。**纯只读审计**：
 未改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置；
