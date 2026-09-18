@@ -25,7 +25,9 @@
 > `human_approved_external_low_resolution`（仅 formal 的 `carbon_forecast`）。
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
-> **g-c 经 R1 / R2 / R3 三轮返修后执行完成，等待人工复审**（见 §7T–§7Y）；
+> **g-c 已经 R1 / R2 / R3 三轮返修后通过人工复审**（2026-09-18，见 §7T–§7Y）；
+> **M1.3g-e-a：arrival-to-task 只读审计与映射契约设计执行完成，等待人工语义裁决**
+> （见 §7Z）；**D1–D11 未裁决前不得开始任何实现卡**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1919,6 +1921,54 @@ git revert <交接提交> <本验收提交> 54cfc35 5410c14 1342661 df61a3e deb6
 **M1.3g-c-R3 已通过人工复审**（2026-09-18）。**v4 是唯一候选**；
 v1 / v2 / v3 均为 superseded，**不得**进入 g-e/g-f。
 `g-e / g-f` 仍未开始；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7Z. M1.3g-e-a：arrival-to-task 只读审计与映射契约设计（**执行完成，等待人工语义裁决**）
+
+`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`（新增）+ 卡片 §aa–§ab。
+**纯只读审计**：未改任何 `.py` / manifest / refs / parquet / raw / 配置；
+未创建 mapper、fixture、测试、checkpoint 或 run。
+
+**核心结论：当前不可直接映射。**
+
+1. **量级不可行**：正式 aggregate arrival `1000.17 work-units/半小时`
+   = `2000.34/小时`；env 满负荷服务能力 `402.52 work/步`
+   （`max_task_load_per_server 0.80 × Σ C_server 469.557`）
+   → **到达是服务能力的 ≈4.97 倍**，1:1 映射 ⇒ 队列无界增长。
+2. **步长不一致**：env `delta_t_hours=1.0` vs 数据 **30 min**；
+   `Task.workload = Σ load_profile × C_IDC_base` **隐含 delta_t_hours=1**；
+   `duration` / `deadline` 是**步数**，0.5 h 下不换算则物理时长**减半**。
+3. **三处 future-information 暴露面**：观测归一化分母
+   `total_task_ref = len(self.tasks)` 含 **future** task；
+   `info["true_task_arrival_profile"]` 暴露**整段 truth**；
+   观测用 `true_task_arrival_profile[t]` 而非 causal forecast。
+
+**登记的三处代码矛盾**：① `workload` 未乘 `delta_t_hours`；
+② `allocation.py` 的 `deadline`（相对）与 `snapshot_adapter` 的（绝对）**同名异义**；
+③ `lambda_ref` 声明 `work-units/hour`（2000）而数据是半小时量（≈1000）。
+
+**推荐**：**M-1** 显式 `arrival_scale`（**人工批准**）+ largest-remainder 确定性分割
+（满足 12 条不可变式）；备选 **M-2** 不缩放（仅在人工接受队列长期溢出时可选）。
+
+**⛔ 人工裁决停点 D1–D11**（审计 §I.2）：单位语义、`workload` 的 0.5 h 语义、
+`duration`/`deadline` 槽位换算、`planned_capacity_vec` 语义、task count/partition、
+profile 分配、residual 处理、seed 粒度、initial backlog、跨 episode deadline、
+train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现卡。**
+
+> **强制登记**：**若未来任何卡需要修改 `envs/idc_price_env.py::step()`，
+> 该实现卡必须先提交失败测试**，之后才能修改 `step()`。
+
+**后续拆卡（只设计，不执行）**：**g-e-b**（纯 arrival-to-task mapper）→
+**g-e-c**（formal env 注入与 0.5h 对齐）→ **g-e-d**（跨层守恒/泄漏/resume 回归）→
+**g-f**（formal train entry 门禁与接线）。
+
+> **必须如实登记的范围外修改**：`.gitignore` 新增两行**只**放行
+> `docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`（`docs/` 为逐文件白名单，
+> 否则审计文档无法入库），单独提交。
+
+**验收**：focused（m13f / m13gb / m13gc / m13gd）**221 passed, 1 deselected**、
+`make check` exit 0、`git diff --check` / `git status --short` 空。
+
+**g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
 ## 7I. M1.3d-R2 第二轮返修（已被 7J 取代）
 
