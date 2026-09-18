@@ -26,8 +26,8 @@
 > ⚠️ **`build_scenario(synthetic=False)` 仍因缺 split manifest 而 fail closed**。
 > **g-d / R1 已通过**；**`refs_v3.json` 是唯一 refs 绑定对象**；
 > **g-c 已经 R1 / R2 / R3 三轮返修后通过人工复审**（2026-09-18，见 §7T–§7Y）；
-> **M1.3g-e-a：arrival-to-task 只读审计与映射契约设计执行完成，等待人工语义裁决**
-> （见 §7Z）；**D1–D11 未裁决前不得开始任何实现卡**；
+> **M1.3g-e-a 第一轮审核不通过，经 R1 返修后执行完成，等待人工复审**
+> （见 §7Z–§7AA）；**`D-INTENSITY` 与 D1–D11 未裁决前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1967,6 +1967,70 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 
 **验收**：focused（m13f / m13gb / m13gc / m13gd）**221 passed, 1 deselected**、
 `make check` exit 0、`git diff --check` / `git status --short` 空。
+
+**g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7AA. M1.3g-e-a-R1：修正 arrival 缩放、容量比与半小时单位闭环（**执行完成，等待复审**）
+
+**M1.3g-e-a 第一轮审核不通过**，起点 `104d5dd`，实现终点 `a1a3341`
+（详见卡片 §ac–§ad）。**两项 P1 缺陷：**
+
+1. **arrival-only 缩放**：改前 §G.1 的
+   `total = arrival_scale × aggregate_workload[slot]` 只缩放 arrival、
+   **不**同比例缩放服务容量与 queue refs ⇒ 改变 **arrival/service 比**
+   （= 场景强度）。「为了让环境可行而缩小 arrival」正是
+   **「放松约束 / 改变任务负载制造可行」**这条红线所禁止的。
+2. **守恒式带限定词**：改前 §G.3 不变式 1 写
+   「…精确等于该槽 aggregate truth（**缩放后**）」——「缩放后」使它
+   **不再是**对原始 aggregate 的守恒声明。
+
+**同轮修正的第三处不一致**：改前 §C.3 推荐「保持 `planned_capacity_vec` =
+work/step、不乘 `delta_t_hours`」，而 §D.7 用 **per-hour** 解释算 `4.970`。
+
+**修正内容**：
+
+- **`arrival_scale` 彻底处置**：从推荐方案 M-1、§H 参数表、D11 中**全部删除**；
+  §C.0 新增「**单位换算 / 归一化 / 场景强度修改**」三分（第 3 类**只能**在上游
+  M1.3f 版本化）；§G.3 新增**不变式 13**「mapper 不改变场景强度」。
+- **守恒式改为无限定词的原始 aggregate 守恒**（不变式 1）。
+- **推荐默认改为 rate-based 半小时物理语义**（§C.2）：
+  `C_IDC`/`C_server` 是 **work/hour** 速率；
+  `capacity_per_step = rate × delta_t_hours`；
+  `Task.workload = Σ(load_profile × C_IDC × delta_t_hours)`（**work**）；
+  `duration`/`deadline` 按**物理小时**声明并转槽；
+  `lambda_ref_per_step = lambda_ref_work_per_hour × delta_t_hours`；
+  `queue_ref`/`queue_capacity_ref` 是**存量**、不因步长缩放。
+  旧的 work/step 方案降级为**非物理备选**（会让每小时能力**翻倍**）。
+  §C.4 给出数值微例：1 h × 0.2 × 100 = **20 work**，
+  0.5 h × 2 步 × 0.2 × 100 = **20 work**（守恒）。
+- **两种比值分开写**（§D.7）：rate-based `4.970`（★ 推荐）vs
+  不缩放 planned capacity 的 `2.485`（**非物理**，隐含 `805.042 work/hour`）。
+  §D.6 的「15.2×」已注明按 rate-based 基准。
+- **不可行性如实登记**：正式 arrival 是满负荷服务能力的 **≈4.970 倍** ⇒
+  **过载场景**；**不**通过改容量 / SOC / deadline / queue 或删任务来「修好」；
+  若需要稳定负载，**阻塞**并回 **M1.3f** 重定 intensity（§G.2）。
+- **新增独立人工决定 `D-INTENSITY`**：接受当前 arrival 作为正式**重负载**场景
+  （按 §G.1 实施）**vs** 返回 M1.3f 重定强度（§G.2）。
+- **保留**全部有效的泄漏 / resume / backlog / 边界 / v4 / refs_v3 结论与
+  「改 `step()` 前必须先提交失败测试」的登记。
+
+**推荐方案（修正后）**：**M-1** 原始 aggregate **1:1 守恒** + 确定性分割
+（允许过载）；**M-2** 阻塞并回 M1.3f 版本化重定 intensity。
+**删除**了改前「只有接受长期溢出才可选 1:1」的表述 —— 1:1 是**数据保真要求**。
+
+> **⛔ 在 `D-INTENSITY` 与 D1–D11 全部裁决之前：不得开始 g-e-b；
+> 不得把 mapper 设计称为「已获准实施」；
+> `formal_env_ready` / `formal_training_ready` 保持 false。**
+
+**验收**：focused（m13f/m13gb/m13gc/m13gd）**221 passed, 1 deselected**、
+`make check` exit 0、`git diff --check` / `git status --short` 空。
+**范围外修改：无**（`.gitignore` 未动）。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <交接提交> <本验收提交> <编号修正提交> a1a3341 e7fa96c
+```
 
 **g-e / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
