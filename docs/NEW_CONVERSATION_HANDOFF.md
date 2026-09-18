@@ -249,9 +249,20 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
    （另一种非物理口径为 2.485，隐含每小时服务能力翻倍，**不得**用作推荐）。
    **不**通过改容量/SOC/deadline/queue 或删任务来「修好」。
 
-**⛔ 人工决定 `D-INTENSITY`**：**接受当前 arrival 作为正式重负载/过载场景**
-（按 M-1 实施）**vs** **返回 M1.3f** 重新批准并版本化有物理依据的 arrival intensity。
+**⛔ 人工决定 `D-INTENSITY`**：**(1)** 当前 arrival 仅作明确标记的
+`stress` / overload **候选**场景；**(2)** **返回 M1.3f** 为 **main scenario**
+冻结有来源、预先批准、不得按结果调节的 intensity。
+**本审计建议先做 (2)**（当前 `1000` 只是 modeled scenario 尺度，rate-based 下 ≈4.970×），
+并在 g-e-b 前先开**上游 arrival-intensity 审计/决策卡**（§J.0），**不是** mapper 实现卡。
 **在该决定与 D1–D11 完成之前，不得开始 g-e-b / g-e / g-f。**
+
+**R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
+`idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
+每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与
+全局守恒（超出覆盖 **fail closed**，有冻结的 `MAX_TASKS_PER_SLOT`）；
+守恒用**固定点整数账本**（float `Task` 只是运行时表示）；
+profile 概率等参数**全部**是人工批准的 modeled scenario，**不得**声称由
+aggregate train 数据校准。
 
 ## 10. 后续顺序
 
