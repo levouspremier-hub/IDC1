@@ -34,8 +34,11 @@
 > **D3/D4 已裁决（B6-INTENSITY）**：`server_seed=0`、train max 温度 33.2°C、
 > 声明持续容量 79.985 work/hour、`rho_target=0.80`、main 63.988 work/hour
 > （31.994 work/半小时）；
-> **M1.3f-e-a（B6 policy 冻结）执行完成，等待人工复审**（见 §7AD），
+> **M1.3f-e-a（B6 policy 冻结）已通过人工复审**（见 §7AD），
 > canonical policy `data/manifest/m13f_arrival_intensity_policy_v1.json`；
+> **M1.3f-e-b1（由 B6 policy 物化 exogenous v3）执行完成，等待人工复审**
+> （见 §7AE）：v3 三资产已冻结，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
+> **formal 链在 e-b2 之前仍绑定 v2**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
@@ -2136,6 +2139,61 @@ mapper 仍**只**执行 **1:1 原始 aggregate 守恒**。
 生成新 formal split triad；保留旧 v2/v4 与 stress 资产；canonical-only 无 fallback）。
 **本卡只冻结 policy，未物化新版 arrival**；`formal_scenario_bundle_ready` /
 `formal_training_ready` **仍为 false**；**g-e-b / g-e-c / g-e-d / g-f 仍未开始**。
+
+### 7AE. M1.3f-e-b1：由 B6 policy 物化版本化 exogenous v3（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §V–§X。由**已验证的 canonical B6 policy** 物化**版本化**
+外生驱动表 v3；`local_pv_kw` / `wind_generation_kw` / `carbon_intensity` 与 v2
+**逐行相同**，`arrival` 改用 B6 尺度。
+
+**v3 三项资产（实测）**：
+
+| 资产 | SHA-256 |
+|---|---|
+| `exogenous_drivers_v3.parquet` | `07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612` |
+| `singapore_2024_exogenous_v3.json` | `5f55aaf74185ab8d1da7dea93b5da420791fa394ec1863e23d6e3e2c296214db` |
+| `m13f_materialization_sources_v4.json` | `360deef7fbd3371c191d039e7416acf43fc85633185c83b4c56a72eefe33c756` |
+
+`materializer_revision = 0e16b294c2844c559fb93fb24e0511cb3c130752`。
+
+**arrival shape / scale 分离**：shape 复用 v2 manifest 冻结的 48-slot template
+（均值精确为 1，**按冻结 SHA-256 逐字节绑定 v2 manifest**）；scale 来自 policy 的
+`main_expected_amount_work_per_half_hour = 31.994`，**不继承** B5 的 1000
+（`b5_scale_inherited = false`）。**Azure invocation count 只贡献形状，不是 work-unit。**
+
+**诊断值（实测）**：`expected_annual_mean = 31.994000000000003`、
+`realized_annual_mean = 32.02037795992714`、`rho_realized = 0.8006595726680538`
+（`diagnostic_only`、`forbid_realization_feedback = true`、seed `20240916`）。
+`arrival` 为 `int64`，min **12** / max **59**。
+
+**canonical-only（实测拒绝）**：仓库外副本、canonical symlink、伪造 revision、
+篡改 output hash、**旧 v2 fallback**、`--out-dir` / `--manifest-path`、
+generator dirty —— 全部 **REJECTED**。
+
+**幂等**：`--verify` 连续 3 次均 exit 0，v3 manifest / source-v4 / v3 parquet 的
+bytes / hash / `mtime_ns` 不变，0 临时文件；两份 manifest **共享同一个
+`frozen_at_utc`**。
+
+**v2 三项资产 hash 前后不变**（`11d322b2…` / `640f26cd…` / `4203b4f3…`）；
+`scenario/exogenous_drivers.py`、`scripts/materialize_singapore_exogenous.py`、
+`scenario/formal_scenario.py`、forecast policy、`refs_v3`、`formal_splits_v4`
+**均未修改**——因此 v2 的 `materializer_revision` 与其证据链保持一致。
+
+**验收**：v3 focused **18 passed**、m13f/g/e focused **404 passed, 2 deselected**、
+`make check` exit 0（**2496 passed**）、`git diff --check` / `git status --short` 空。
+**范围外修改：无**（`.gitignore` 未动；v3 parquet 与 v2 一样被忽略）。
+
+> **必须如实登记**：`10add3c` 的初版把 `b5_scale_inherited` 写成了 `true`
+> （与「不继承 B5 尺度」相反），`0e16b29` 修正为 `false` 并补上断言；
+> 因此 v3 三项资产在 `0e16b29` 后**重新生成**（候选尚未送审，符合
+> 「最终证据必须晚于最后一次实现修改」的纪律）。核心数未变。
+
+**⛔ 下一张卡是 M1.3f-e-b2**：formal scenario 切换 v3、新 forecast/provenance 绑定、
+refs 新版本、`formal_splits_v5`、canonical-only 与旧版本 superseded 登记。
+**本卡未切换 formal 链**（v3 manifest 的
+`predecessor.status = predecessor_formal_chain_still_bound_to_v2`）；
+`formal_scenario_bundle_ready` / `formal_training_ready` **仍为 false**；
+**mapper / env 接线 / 正式训练 / 评估 / M6 均未开始**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 

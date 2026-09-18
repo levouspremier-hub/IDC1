@@ -291,6 +291,22 @@ readiness 仍为 `false`。
 生成新 formal split triad，保留旧 v2/v4 与 stress 资产）；**本卡未物化新版 arrival**，
 **不得自行开始 `M1.3f-e-b`**。
 
+**✅ `M1.3f-e-b1` 已执行完成（等待人工复审）**：由已验证的 B6 policy 物化**版本化**
+外生驱动表 **v3**——`exogenous_drivers_v3.parquet`
+`07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612`、
+`singapore_2024_exogenous_v3.json`
+`5f55aaf74185ab8d1da7dea93b5da420791fa394ec1863e23d6e3e2c296214db`、
+`m13f_materialization_sources_v4.json`
+`360deef7fbd3371c191d039e7416acf43fc85633185c83b4c56a72eefe33c756`；
+`materializer_revision = 0e16b29…`。
+**PV / wind / carbon 与 v2 逐行相同**；`arrival` 用 **31.994**（shape 复用 v2 的
+48-slot template，均值精确为 1，**不继承** B5 的 1000）；诊断值
+expected `31.994`／realized `32.0204`／`rho_realized` `0.80066`（`diagnostic_only`，
+禁止反调）。**v2 三项资产逐字节未变**；`scenario/exogenous_drivers.py` 等**未修改**。
+**⛔ 下一张卡是 `M1.3f-e-b2`**（formal scenario 切换 v3、新 forecast/provenance 绑定、
+refs 新版本、`formal_splits_v5`、旧版本 superseded 登记）；**本卡未切换 formal 链**
+（仍绑定 v2），**不得自行开始 `M1.3f-e-b2`**，mapper / 训练仍未开始。
+
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
 每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与
