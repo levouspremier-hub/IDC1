@@ -33,7 +33,9 @@
 > 纯文档返修已通过人工复审**（见 §7AC）；
 > **D3/D4 已裁决（B6-INTENSITY）**：`server_seed=0`、train max 温度 33.2°C、
 > 声明持续容量 79.985 work/hour、`rho_target=0.80`、main 63.988 work/hour
-> （31.994 work/半小时），下一步 M1.3f-e-a 冻结 policy；
+> （31.994 work/半小时）；
+> **M1.3f-e-a（B6 policy 冻结）执行完成，等待人工复审**（见 §7AD），
+> canonical policy `data/manifest/m13f_arrival_intensity_policy_v1.json`；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
@@ -2082,6 +2084,53 @@ mapper 仍**只**执行 **1:1 原始 aggregate 守恒**。
 **下一张卡**：**M1.3f-e**（若人工批准 main intensity，则版本化）**或**备选 A 的
 **数据获取决策卡**；**不是** mapper 实现卡（g-e-b）。
 **g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
+
+### 7AD. M1.3f-e-a：B6 arrival-intensity policy 冻结（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §R–§T。把 B6-INTENSITY 裁决机器可读化并冻结为
+**唯一 canonical** policy manifest
+`data/manifest/m13f_arrival_intensity_policy_v1.json`
+（schema `m1.3fea-b6-arrival-intensity-policy-v1`，SHA-256 `7066a0e1…`）。
+
+**六个核心数（实测）**：
+
+| 项 | 值 |
+|---|---|
+| train max `temperature_deg_c` | **33.2** |
+| 声明持续容量 | **79.985** work/hour（未截断 `79.98519336656486`，向下截断到 3 位小数） |
+| `rho_target` | **0.80** |
+| main expected rate | **63.988** work/hour |
+| main expected amount | **31.994** work/半小时 |
+| `server_seed` | **0** |
+
+**冻结口径**：`access_limit_kw=18.0`、`base_load=0.05`、
+`max_task_load_per_server=0.80`、排除 PV/风电/BESS、均匀逐服务器负载 +
+现有 `calc_pue_and_total_power` 接入二分；`source_kind=modeled_scenario`
+（`empirical_workload_claim=false`，Azure 只贡献 shape）；
+`rho_realized` **仅诊断**、`forbid_realization_feedback=true`、seed `20240916`；
+`1000 work/半小时` 保持 `stress_candidate`；sensitivity `none`。
+
+**canonical-only（实测拒绝）**：仓库外副本、指向 canonical 的 **symlink**、
+伪造 `materializer_revision`、篡改 `canonical_parquet_sha256`、空目录（**无 fallback**）、
+`--out-dir` / `--manifest-path`（CLI 不接受任意目标）——全部 **REJECTED**。
+
+**幂等**：`--verify` 连续 3 次均 exit 0，bytes / hash / `mtime_ns` 不变，0 临时文件。
+
+**验收**：B6 focused **16 passed**、m13f/g focused **386 passed, 2 deselected**、
+`make check` exit 0（**2478 passed**）、`git diff --check` / `git status --short` 空。
+**上游六项资产 hash 全部未变**（exogenous v2 两份、refs_v3、formal_splits_v4 三份）。
+
+> **必须如实登记**：`8794318` 的 ruff 门禁修复改动了两个 B6 实现文件使 revision
+> 前移，manifest 因此在 `27f5737` **重新生成**（六个核心数未变）。
+> 另：`7e60453` 的初版测试夹具把尚未创建的 policy 也列入资产检查，16 项被 skip；
+> `dc6197e` 收紧为只检查上游资产后先红才以 `ModuleNotFoundError` 正确呈现。
+
+**范围外修改：无**（`.gitignore` 未动；`!data/manifest/*.json` 已放行新 manifest）。
+
+**⛔ 下一张卡是 M1.3f-e-b**（生成新 exogenous 版本、更新 forecast/provenance/refs、
+生成新 formal split triad；保留旧 v2/v4 与 stress 资产；canonical-only 无 fallback）。
+**本卡只冻结 policy，未物化新版 arrival**；`formal_scenario_bundle_ready` /
+`formal_training_ready` **仍为 false**；**g-e-b / g-e-c / g-e-d / g-f 仍未开始**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 

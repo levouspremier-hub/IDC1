@@ -276,6 +276,20 @@ main expected **63.988 work/hour** = **31.994 work/半小时**（`delta_t_hours=
 **下一步 M1.3f-e-a 冻结该 policy（只冻结 policy，不物化新版 arrival）；在 main
 intensity 版本化完成之前，不得开始 g-e-b / g-e / g-f。**
 
+**✅ `M1.3f-e-a` 已执行完成（等待人工复审）**：canonical policy
+`data/manifest/m13f_arrival_intensity_policy_v1.json`
+（schema `m1.3fea-b6-arrival-intensity-policy-v1`，SHA-256 `7066a0e1…`，
+`materializer_revision 3456f96…`）已冻结六个核心数
+**33.2°C / 79.985 work/hour / `rho_target` 0.80 / 63.988 work/hour /
+31.994 work/半小时 / `server_seed` 0**；
+`source_kind=modeled_scenario`、`empirical_workload_claim=false`；
+`rho_realized` 仅诊断、禁止反调；`1000` 保持 `stress_candidate`；sensitivity `none`。
+canonical-only（副本 / symlink / 伪造 revision / 篡改 hash / 空目录全部拒绝，无 fallback），
+`--verify` 连续 3 次 bytes/hash/mtime 不变。
+**⛔ 下一张卡是 `M1.3f-e-b`**（生成新 exogenous 版本、更新 forecast/provenance/refs、
+生成新 formal split triad，保留旧 v2/v4 与 stress 资产）；**本卡未物化新版 arrival**，
+**不得自行开始 `M1.3f-e-b`**。
+
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
 每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与
