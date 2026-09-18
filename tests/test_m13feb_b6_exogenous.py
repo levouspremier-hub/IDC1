@@ -364,12 +364,23 @@ def test_existing_different_output_is_still_refused(tmp_path, monkeypatch):
 BUNDLE_ENTRY = "load_verified_v3_bundle"
 
 
+def _canonical_json(payload: dict) -> str:
+    """与生产 `write_json_atomic` **逐字节一致**的序列化。
+
+    否则临时副本的字节与仓库文件不同，`source-v4` 的 SHA-256 会失配，
+    用例将「因错误的理由」被拒绝而假绿（R1 实测发现）。
+    """
+    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
 def _bundle(tmp_path, *, tamper=None, tamper_source=None, tamper_parquet=None,
             split_frozen_at=False, symlink=None) -> dict:
     """构造一份**完整**的临时 v3 bundle（三份产物 + 可选的语义篡改）。
 
     `tamper(payload)` 改 output manifest；`tamper_source(payload)` 改 source-v4；
     `tamper_parquet(frame)` 改 parquet。`symlink` 把指定产物换成 symlink。
+
+    **未篡改**时该 bundle 必须被接受（见 `test_untampered_bundle_is_accepted`）。
     """
     root = tmp_path / "repo"
     man = root / "data/manifest"
@@ -396,8 +407,8 @@ def _bundle(tmp_path, *, tamper=None, tamper_source=None, tamper_parquet=None,
         tamper_source(source_payload)
     if split_frozen_at:
         source_payload["frozen_at_utc"] = "2026-09-18T00:00:00+00:00"
-    manifest.write_text(json.dumps(payload))
-    source.write_text(json.dumps(source_payload))
+    manifest.write_text(_canonical_json(payload))
+    source.write_text(_canonical_json(source_payload))
 
     if symlink == "manifest":
         manifest.unlink()
@@ -428,6 +439,25 @@ def _arrival(tamper):
     def inner(payload):
         tamper(payload["columns"]["arrival"])
     return inner
+
+
+# --- 0. 接受性对照：**未篡改**的 bundle 必须被接受 -------------------------------
+#
+# 没有这条对照，「全部 REJECTED」可能是因为夹具本身有缺陷（例如非规范序列化
+# 导致 source hash 失配）而假绿 —— R1 实测正是如此。
+
+@needs_assets
+def test_untampered_bundle_is_accepted(tmp_path, monkeypatch):
+    m = b6_module()
+    bundle = _bundle(tmp_path)
+    _patch_v3_roots(monkeypatch, bundle)
+    verified = m.load_verified_v3_bundle()
+    assert verified["manifest"]["schema"] == m.B6_OUTPUT_SCHEMA
+    assert verified["source"]["schema"] == m.B6_SOURCE_SCHEMA
+    assert list(verified["frame"].columns) == [
+        "timestamp", "local_pv_kw", "wind_generation_kw",
+        "carbon_intensity", "arrival",
+    ]
 
 
 # --- 1–4. arrival 的冻结语义 ----------------------------------------------------
@@ -518,7 +548,7 @@ def test_coordinated_source_semantics_tamper_is_rejected(tmp_path, monkeypatch):
     # 攻击者把 output 里记录的 source hash 同步改成被篡改文件的真 hash
     payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
     payload["materialization_sources_sha256"] = _sha256(bundle["source_path"])
-    bundle["manifest_path"].write_text(json.dumps(payload))
+    bundle["manifest_path"].write_text(_canonical_json(payload))
     _patch_v3_roots(monkeypatch, bundle)
     with pytest.raises(m.B6ExogenousError):
         m.load_verified_v3_bundle()
@@ -537,7 +567,7 @@ def test_coordinated_parquet_tamper_is_rejected(tmp_path, monkeypatch):
     bundle = _bundle(tmp_path, tamper_parquet=bump)
     payload = json.loads(bundle["manifest_path"].read_text(encoding="utf-8"))
     payload["output"]["sha256"] = _sha256(bundle["parquet_path"])
-    bundle["manifest_path"].write_text(json.dumps(payload))
+    bundle["manifest_path"].write_text(_canonical_json(payload))
     _patch_v3_roots(monkeypatch, bundle)
     with pytest.raises(m.B6ExogenousError):
         m.load_verified_v3_bundle()
