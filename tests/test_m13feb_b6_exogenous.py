@@ -141,10 +141,15 @@ def test_rho_realized_is_diagnostic_only():
     assert arrival["forbid_realization_feedback"] is True
     # 生成尺度必须逐字等于 policy 的 31.994
     assert arrival["mean_arrival_work_units_per_half_hour_scale"] == B6_EXPECTED_AMOUNT
+    # **不继承** B5 的 1000 scale
+    assert arrival["b5_scale_inherited"] is False
+    assert arrival["mean_arrival_work_units_per_half_hour_scale"] != B5_LEGACY_SCALE
     # realized 只是登记，不是生成参数
     assert "realized_annual_mean" in arrival
     assert arrival["realized_annual_mean"] != arrival[
         "mean_arrival_work_units_per_half_hour_scale"]
+    # expected 恰为 31.994（template 均值 1）
+    assert arrival["expected_annual_mean"] == pytest.approx(B6_EXPECTED_AMOUNT, rel=1e-9)
 
 
 # --- 7. PV / wind / carbon 与 v2 逐行相同 ---------------------------------------

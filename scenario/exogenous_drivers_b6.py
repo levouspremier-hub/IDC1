@@ -105,7 +105,7 @@ V1_SUPERSEDED = {
 }
 
 # B6 尺度**不继承** B5 的 1000（本卡自己的冻结声明，不修改 v2 模块）
-B6_ARRIVAL_SCALE_NOT_INHERITED_FROM_B5 = True
+B5_ARRIVAL_SCALE_INHERITED = False
 
 # 本卡实现文件的**唯一** revision 源
 B6_EXOGENOUS_SOURCE_PATHS: tuple[str, ...] = (
@@ -545,7 +545,7 @@ def build_v3_output_manifest(
                 "shape_source_manifest_sha256": V2_EXOGENOUS_MANIFEST_SHA256,
                 "template_slots": int(np.asarray(template).size),
                 "template_mean": float(np.asarray(template, dtype=float).mean()),
-                "b5_scale_inherited": B6_ARRIVAL_SCALE_NOT_INHERITED_FROM_B5,
+                "b5_scale_inherited": B5_ARRIVAL_SCALE_INHERITED,
                 "mean_arrival_work_units_per_half_hour_scale": _b6_amount(policy),
                 "expected_annual_mean": float(
                     expected_arrival(
