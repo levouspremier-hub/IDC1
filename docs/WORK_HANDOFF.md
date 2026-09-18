@@ -29,8 +29,9 @@
 > **M1.3g-e-a/R2 已通过人工复审**（2026-09-18，见 §7Z–§7AB）；
 > **`D-INTENSITY` 已裁决**：当前 `1000` 保留为 `stress` 候选，
 > **返回上游 M1.3f 建立 main intensity**；
-> **M1.3f-d（arrival intensity 物理口径与场景分层审计）执行完成，等待人工裁决**
-> （见 §7AC）；**在 main intensity 获人工批准并版本化之前不得开始 g-e-b**；
+> **M1.3f-d（arrival intensity 物理口径与场景分层审计）已执行，但人工审核不通过，
+> 正在进行纯文档返修 M1.3f-d-R1**（见 §7AC）；**在 main intensity 获人工批准并
+> 版本化之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
 > v2 = `superseded_pre_canonical_path_fix`、
@@ -1984,7 +1985,14 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 **下一张卡是 M1.3f-d**（arrival intensity 物理口径与场景分层审计）。
 **g-e-b / g-e-c / g-e-d / g-f 仍未开始**；**正式 env / 训练 / 评估 / M6 仍未开始**。
 
-### 7AC. M1.3f-d：arrival intensity 物理口径与场景分层审计（**执行完成，等待人工裁决**）
+### 7AC. M1.3f-d：arrival intensity 物理口径与场景分层审计（**已执行；人工审核不通过 → R1 返修**）
+
+> ⚠️ **R1 勘误（2026-09-18）**：本节是 M1.3f-d 的原始摘要，其中把 **95.599 /
+> 4.970 / 5.1487 / 20.9242** 写成了已冻结的正式事实，**已被 M1.3f-d-R1 修正**
+> （见卡片 §O–§P 与 `docs/AUDIT_ARRIVAL_INTENSITY.md` R1 后版本）：
+> 95.599 只是 `server_seed=0`、`T_amb=28°C` 的单点探针；4.970 已**退役**为
+> `superseded_unfrozen_probe`；`rho` 已拆为 `rho_target` / `rho_realized`。
+> 以下每处已就地改为限定表述。
 
 `docs/AUDIT_ARRIVAL_INTENSITY.md`（新增）+ 卡片 §M–§N。**纯只读审计**：
 未改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置；
@@ -2007,12 +2015,13 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 
 | # | 能力 | work/hour |
 |---|---|---|
-| 1 | 理论计算上限 | **388.518** |
-| 2 | **接入受限可持续** | **95.599** |
+| 1 | 理论计算上限 | **388.518**（seed 0 探针） |
+| 2 | **接入受限可持续** | **95.599**（seed 0、28°C 探针；**不是**正式容量） |
 | 3 | 可再生+BESS 时变 | 未接线 |
 | 4 | 瞬时峰值 | **不得**作锚点 |
 
-`arrival = 2000.344 work/hour` ⇒ vs ①**5.1487×**、vs ②**20.9242×**。
+`arrival = 2000.344 work/hour` ⇒ vs ①**5.1487×**、vs ②**20.9242×**
+（**R1 勘误**：两者都是 seed 0 的示例探针，**不是**正式冻结比值）。
 `access_limit_kw = 18.0 kW` 把任务服务能力压到理论值约 **1/4**。
 
 > **额外发现**：`C_IDC` 随 `server_seed` 变化 **7.1%** ⇒ 任何 `rho` 的**分母
@@ -2025,21 +2034,26 @@ train-only 校准参数。**D1–D11 全部裁决前，不得开始任何实现�
 `rho` 为**人工预先批准的 modeled scenario 参数**。
 
 **main / stress 分层**：main 用于训练与主比较、**训练前冻结**、不按结果调整、
-需明确 `rho`；stress 保留 `1000`、明确 **4.970×**（full-action 分母）与
-**20.9242×**（可持续分母）**并写明分母**、不混入 main 统计、不包装主方法性能、
-积压与 SLA 违约**必须保留**。
+需明确 `rho_target`；stress 保留 `1000`、明确 **20.9242×**（可持续，seed 0、28°C、
+18 kW 探针）与 **5.1487×**（理论计算上限，seed 0 探针）**并写明分母与条件**、
+不混入 main 统计、不包装主方法性能、积压与 SLA 违约**必须保留**。
+**R1 勘误**：历史 `4.970×` 已**退役**为 `superseded_unfrozen_probe`。
 
-**`rho` 唯一公式**：`rho = mean arrival work per hour / declared sustainable
-service capacity (work/hour)`，配八项规定（分子 train `[0,10224)`、分母**可持续**
-95.599、含 access-limit、不含可再生/BESS、均值、不改物理约束、预先批准的场景输入）。
+**`rho` 双口径**（R1 修正）：`rho_target`（formal expected arrival 均值）与
+`rho_realized`（Poisson realization 均值），共享分母符号
+`DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`；配八项规定（分子 train `[0,10224)`、
+分母**可持续**（**不是** 95.599，那是 seed 0、28°C 的单点探针）、含 access-limit、
+不含可再生/BESS、均值、不改物理约束、预先批准的场景输入）；`rho_realized` 只作
+物化后诊断，**不得**反调 main intensity。
 
 **推荐**：在人工批准 `rho` 定义与**具体数值**之前，main intensity **继续 blocked**；
 **本审计不给任何具体 `rho` 数值**（现有资产无独立实证依据）。
 **备选 A**：先获取/批准实证依据。**备选 B**：获批后另设 sensitivity levels。
 
-**⛔ 人工裁决 D1–D11**（审计 §H）：source kind、`rho` 公式、sustainable 分母、
-**main load level（`rho` 数值）**、sensitivity levels、stress 标签、seed policy、
-train-only 统计范围、refs 更新策略、新旧资产命名/version、允许的论文表述。
+**⛔ 人工裁决 D1–D11**（审计 §H）：source kind、`rho_target` 公式、sustainable
+分母（**D3，6 项共同批准**）、**main load level（`rho_target` 数值）**、
+sensitivity levels、stress 标签、seed policy、train-only 统计范围、refs 更新策略、
+新旧资产命名/version、允许的论文表述。
 **在 main intensity 获人工批准并版本化之前，不得开始 g-e-b。**
 
 **版本化影响**（只设计）：需新版的 10 类资产/清单；旧 v2 exogenous 与 v4 split
