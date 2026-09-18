@@ -41,9 +41,9 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from scenario.formal_split_manifests import (
-    FORMAL_SPLIT_DIR,
     SplitManifestError,
     build_split_manifest,
+    canonical_split_dir,
     load_verified_split_manifest,
     utc_now,
 )
@@ -106,19 +106,21 @@ def _existing_payloads(paths: dict[str, Path]) -> dict[str, dict] | None:
     }
 
 
-def materialize_split_manifest_triad(
-    *,
-    out_dir: Path | str = FORMAL_SPLIT_DIR,
-    frozen_at_utc: str | None = None,
-) -> dict:
+def canonical_out_dir() -> Path:
+    """canonical triad 输出目录的**私有**解析器（R3：测试只能 monkeypatch 它）。"""
+    return canonical_split_dir()
+
+
+def materialize_split_manifest_triad() -> dict:
     """物化 / 校验三份正式 split manifest（**原子 triad**）。
 
-    **签名只有 `out_dir` 与冻结时间戳**：八个输入角色由
-    `scenario.formal_split_manifests` **固定**，调用者**无法**传入
-    `inputs` mapping、路径、`materializer_revision`、`expected_*` 信任根
-    或 DataFrame 注入 —— 未知关键字一律 `TypeError`。
+    **不接受任何参数**：输出目录、八个输入角色与冻结时间戳全部由
+    `scenario.formal_split_manifests` **固定**；调用者**无法**传入 `out_dir`、
+    `frozen_at_utc`、`inputs`、`materializer_revision` 或 `expected_*` 信任根
+    —— 传入任何关键字一律 `TypeError`。测试只能用**私有**的
+    `canonical_out_dir()` monkeypatch 目标目录。
     """
-    out_dir = Path(out_dir)
+    out_dir = Path(canonical_out_dir())
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if _generator_is_dirty():
@@ -133,8 +135,7 @@ def materialize_split_manifest_triad(
     # 若每个 `build_split_manifest` 各自采样墙钟，慢速首冻会写出**互不相同**
     # 的时间戳，使随后的幂等 `--verify` 以「语义不同」fail closed（实测 flake）。
     frozen_at = (
-        existing["train"]["frozen_at_utc"] if existing is not None
-        else (frozen_at_utc or utc_now())
+        existing["train"]["frozen_at_utc"] if existing is not None else utc_now()
     )
     candidates = {
         split: build_split_manifest(split, frozen_at_utc=frozen_at)
@@ -170,16 +171,20 @@ def materialize_split_manifest_triad(
     }
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """CLI 解析器。**只有** `--verify`：不存在 `--out-dir`（R3-11）。"""
     parser = argparse.ArgumentParser(
         description="物化正式 split manifest triad（M1.3g-c）")
     parser.add_argument("--verify", action="store_true",
                         help="只校验 / 幂等重跑（不改变既有文件）")
-    parser.add_argument("--out-dir", default=str(FORMAL_SPLIT_DIR))
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     try:
-        result = materialize_split_manifest_triad(out_dir=Path(args.out_dir))
+        result = materialize_split_manifest_triad()
     except (ScenarioManifestError, SplitManifestError, OSError, ValueError) as error:
         print(f"materialize_singapore_scenario_manifests: {error}", file=sys.stderr)
         return 1

@@ -52,18 +52,20 @@ from scenario.splits import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v3"
+MANIFEST_SCHEMA = "m1.3g-formal-split-manifest-v4"
 CONTRACT_VERSION = "contract-v9"
 TIMEZONE = "Asia/Singapore"
 HISTORY_STEPS = 48
 
 MANIFEST_DIR = REPO_ROOT / "data/manifest"
-# 正式 triad 的**唯一**输出目录与路径来源（R2：未来 g-e/g-f 只能读取这里）
-FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v3"
-# **已被取代**的两个位置：任何传入其中的 triad 路径都必须 fail closed
+# 正式 triad 的**唯一**输出目录与路径来源（R3：未来 g-e/g-f 只能读取这里）
+FORMAL_SPLIT_DIR = MANIFEST_DIR / "formal_splits_v4"
+# **已被取代**的三个历史位置（仅用于给出清晰的错误信息；
+# 真正的硬门禁是下面的 canonical 路径**精确相等**检查）。
 SUPERSEDED_SPLIT_DIRS: tuple[Path, ...] = (
     MANIFEST_DIR,                          # v1：superseded_pre_live_input_binding_fix
     MANIFEST_DIR / "formal_splits_v2",     # v2：superseded_pre_canonical_path_fix
+    MANIFEST_DIR / "formal_splits_v3",     # v3：superseded_pre_canonical_loader_trust_boundary_fix
 )
 CANONICAL_PARQUET = REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet"
 CANONICAL_MANIFEST = MANIFEST_DIR / "singapore_2024_half_hour.json"
@@ -259,6 +261,11 @@ def _require_git_sha40(value: object, *, field: str) -> str:
 
 # --- 构造 ---------------------------------------------------------------------
 
+def canonical_split_dir() -> Path:
+    """canonical triad 目录的**公开只读**入口（供物化器使用）。"""
+    return _canonical_split_dir()
+
+
 def default_inputs() -> dict[str, Path]:
     """正式链的**唯一**冻结输入（生产路径使用；**不可由调用者覆盖**）。"""
     return {
@@ -280,19 +287,33 @@ def production_logical_paths() -> dict[str, str]:
     }
 
 
-def _reject_superseded_location(path: Path | str, *, label: str) -> Path:
-    """**R2-5**：triad 路径落在 v1 / v2 的**位置**上一律 fail closed。
+def _require_canonical_location(path: Path | str, *, expected_split: str) -> Path:
+    """**R3 硬门禁**：路径必须**精确等于**该 split 的唯一 canonical manifest。
 
-    即使该文件的**内容**是合法的 v3，位置本身也已被取代 —— 没有 fallback。
+    在**读取 JSON 之前**完成；因此：
+
+    - 任意临时目录中的副本、仓库内其它目录、**路径别名**一律拒绝；
+    - **symlink / symlink 目录**也不能绕过 —— 比较的是**词法绝对路径**
+      （`absolute()` **不做**符号链接解析），指向 canonical 文件的 symlink
+      仍然是不等于 canonical 的路径，因此被拒绝；
+    - v1 / v2 / v3 三个历史位置给出**明确**的历史版本错误信息；
+    - split 与 canonical 文件名不匹配（例如拿 validation 的路径去读 train）拒绝。
     """
-    resolved = Path(path).resolve()
+    given = Path(path).absolute()
+    expected = canonical_manifest_path(expected_split).absolute()
+    if given == expected:
+        return expected
     for legacy in SUPERSEDED_SPLIT_DIRS:
-        if resolved.parent == legacy.resolve():
+        if given.parent == legacy.absolute():
             raise SplitManifestError(
-                f"{label} 位于已被取代的位置 {logical_repo_path(legacy)}/："
+                f"split manifest 位于已被取代的位置 {logical_repo_path(legacy)}/："
                 f"正式链只接受 {logical_repo_path(FORMAL_SPLIT_DIR)}/（无 fallback）"
             )
-    return resolved
+    raise SplitManifestError(
+        f"split manifest 路径必须是 {expected_split!r} 的**唯一 canonical** 文件 "
+        f"{logical_repo_path(expected)}；实际 {logical_repo_path(given)}"
+        "（不接受副本、别名、symlink 或其它生成版本）"
+    )
 
 
 def _require_live_binding(declared: object) -> None:
@@ -598,7 +619,7 @@ def load_verified_split_manifest(path: Path | str, *, expected_split: str) -> di
     """
     if expected_split not in SPLIT_NAMES:
         raise SplitManifestError(f"未知 split：{expected_split!r}")
-    path = _reject_superseded_location(path, label="verified split manifest")
+    path = _require_canonical_location(path, expected_split=expected_split)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -609,17 +630,40 @@ def load_verified_split_manifest(path: Path | str, *, expected_split: str) -> di
         raise
     except (KeyError, TypeError, IndexError, AttributeError) as error:
         raise SplitManifestError(f"{path} 结构畸形：{error}") from error
+    # R3：`materializer_revision` 必须**精确等于**当前实现解析出的 revision；
+    # dirty 的 formal source 一律拒绝（不得用旧 revision 为未提交代码背书）。
+    if _generator_is_dirty():
+        raise SplitManifestError(
+            "formal/materializer 实现有未提交修改：拒绝读取正式 split manifest"
+            "（未提交）"
+        )
+    expected_revision = resolve_materializer_revision()
+    if validated["materializer_revision"] != expected_revision:
+        raise SplitManifestError(
+            f"materializer_revision 必须是**当前**实现的 revision "
+            f"{expected_revision}；实际 {validated['materializer_revision']}"
+            "（伪造、历史或未知 revision 一律拒绝）"
+        )
     _verify_frozen_chain(default_inputs(), expected_split)
     return validated
 
 
-def manifest_relative_path(split: SplitName) -> str:
-    """正式 triad 的**唯一公开路径来源**：`data/manifest/formal_splits_v3/<split>.json`。
+def _canonical_split_dir() -> Path:
+    """canonical triad 目录的**私有**解析器（R3：测试只能 monkeypatch 它）。"""
+    return FORMAL_SPLIT_DIR
 
-    R2：此 helper 曾返回 `data/manifest/<split>.json` —— **superseded 的 v1**。
-    任何按文档使用它的代码都必须拿到**唯一候选**（v3）；`FORMAL_SPLIT_DIR`
-    是同一路径的目录形式，两者恒等。
-    """
+
+def canonical_manifest_path(split: str) -> Path:
+    """某个 split 的**唯一 canonical** manifest 绝对路径。"""
     if split not in SPLIT_NAMES:
         raise SplitManifestError(f"未知 split：{split!r}，必须属于 {list(SPLIT_NAMES)}")
-    return f"{logical_repo_path(FORMAL_SPLIT_DIR)}/{split}.json"
+    return _canonical_split_dir() / f"{split}.json"
+
+
+def manifest_relative_path(split: SplitName) -> str:
+    """正式 triad 的**唯一公开路径来源**：`data/manifest/formal_splits_v4/<split>.json`。
+
+    R2：此 helper 曾返回 `data/manifest/<split>.json` —— **superseded 的 v1**。
+    任何按文档使用它的代码都必须拿到**唯一候选**（v4）。
+    """
+    return logical_repo_path(canonical_manifest_path(split))
