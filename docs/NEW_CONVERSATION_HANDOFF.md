@@ -248,16 +248,25 @@ M1.3g-e-a：arrival-to-task 接口只读审计与映射契约设计
 3. **当前 arrival 是过载场景**：rate-based 下 **arrival/service ≈ 4.970**
    （另一种非物理口径为 2.485，隐含每小时服务能力翻倍，**不得**用作推荐）。
    **不**通过改容量/SOC/deadline/queue 或删任务来「修好」。
+   **R1 勘误（M1.3f-d-R1）**：该 `4.970` 的分母 `402.521 work/hour` 来自**早先
+   未冻结 `server_seed` 的旧环境实例**，已**退役**为 `superseded_unfrozen_probe`；
+   固定 `server_seed=0` 的理论 full-action 是 388.518，比值应为 **5.1487**。
 
 **✅ 人工决定 `D-INTENSITY`（已作出 2026-09-18）**：**(1)** 当前 `1000` 保留为
 明确标记的 `stress` / overload **候选**；**(2)** **返回上游 M1.3f** 为 main scenario
 建立有来源、预先批准、不得按结果调节的 intensity。
-**`M1.3f-d` 审计已完成**（`docs/AUDIT_ARRIVAL_INTENSITY.md`）：`1000` **没有任何**
-独立物理校准（唯一来源是声明的 `lambda_ref=2000`；Azure trace 只贡献**形状**，
-template 均值精确为 1）；可持续任务服务能力实测 **95.599 work/hour**
-（接入上限 18 kW 把能力压到理论值约 1/4），故 arrival 相对**可持续**能力是
-**20.9242×**、相对**理论计算上限**是 **5.1487×**。
-**⛔ 在人工批准 `rho` 定义与具体数值、并完成版本化之前，不得开始 g-e-b / g-e / g-f。**
+**`M1.3f-d` 审计已完成，但人工审核不通过，纯文档返修 `M1.3f-d-R1` 进行中**
+（`docs/AUDIT_ARRIVAL_INTENSITY.md`）：`1000` **没有任何**独立物理校准（唯一来源
+是声明的 `lambda_ref=2000`；Azure trace 只贡献**形状**，template 均值精确为 1）；
+可持续任务服务能力 **95.599 work/hour 只是 `server_seed=0`、`T_amb=28°C`、
+`access_limit_kw=18`、`base_load=0.05`、无 PV/风电/BESS 下的单点探针**（接入上限
+18 kW 把能力压到理论值约 1/4，且随温度/seed 漂移），故 arrival 相对**可持续**能力
+约 **20.9242×**、相对**理论计算上限**约 **5.1487×**——**两者都是 seed 0 的示例
+探针，不是正式冻结比值**。正式容量只用符号
+`DECLARED_SUSTAINABLE_CAPACITY_WORK_PER_HOUR`；`rho` 已拆为 `rho_target`（期望值）
+与 `rho_realized`（Poisson realization），main intensity 由 `rho_target` 决定。
+**⛔ 在人工批准 D3（容量分母 6 项）与 D4（`rho_target` 数值）并完成版本化之前，
+不得开始 g-e-b / g-e / g-f。**
 下一张卡是 **M1.3f-e**（版本化 main intensity）或数据获取决策卡，**不是** mapper 卡。
 
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
