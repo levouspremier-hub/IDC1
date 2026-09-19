@@ -351,7 +351,7 @@ ACCEPTED → REJECTED**，并有**未篡改接受性对照**；② `B6_FORMAL_SO
 最终 policy-v3 `92670333…`（revision `cda31ab…`）；**上游 hash 全部未变**；
 `make check` **2570 passed**；范围外修改**无**。
 
-**✅ `M1.3f-e-b2-a-R2` 执行完成（等待人工复审）**：审核**暂不批准**，
+**✅ `M1.3f-e-b2-a-R2` 已通过人工复审（2026-09-20）**：审核**暂不批准**，
 但**生产实现未发现新问题**——只修测试夹具的 pandas 区间越界与文档证据。
 缺陷：`_bump` 用 `frame.loc[slice(start, stop)]`，在 RangeIndex 上**两端包含**，
 故 target 实改 **5** 行 `11224..11228`、history 实改 **49** 行 `11176..11224`

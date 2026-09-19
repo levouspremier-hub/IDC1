@@ -2360,7 +2360,7 @@ B6 policy、`refs_v3`、`formal_splits_v4` 三份、`scenario/formal_scenario.py
 
 **⛔ 仍只是 candidate**；**下一张卡仍是 M1.3f-e-b2-b**；**不得自行开始**。
 
-### 7AI. M1.3f-e-b2-a-R2：mutation 半开窗口证据修复（**执行完成，等待人工复审**）
+### 7AI. M1.3f-e-b2-a-R2：mutation 半开窗口证据修复（**已通过人工复审**，2026-09-20）
 
 `docs/task_cards/M1.3f.md` §AI–§AK。**审核暂不批准**：**生产实现未发现新问题**，
 仅测试夹具的 pandas 区间越界与对应文档证据需修复。
