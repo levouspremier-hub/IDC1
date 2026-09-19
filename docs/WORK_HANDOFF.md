@@ -2335,9 +2335,11 @@ v1–v4 标 superseded 但逐字节保留、readiness 最终门禁）；**不得
   新增断言「要求集合 ⊆ 该集合」且 **dirty 与 revision 用同一集合**。
 - **P1-3**：新增**真实** future-truth mutation 回归——在仓库外构造**完整自洽**的
   临时链（canonical → canonical manifest → split manifest → policy-v2 → policy-v3
-  全部重新同步），经生产 `build_formal_scenario_b6()` 构造。实测：改
-  `[11224, 11228)` 五列后**七条 forecast 逐位相同**；改历史 `[11176, 11224)` 后
+  全部重新同步），经生产 `build_formal_scenario_b6()` 构造。实测：改 target
+  五列后**七条 forecast 逐位相同**；改历史窗口后
   price/load/temperature/**pv/wind** **全部变化**。
+  （**窗口边界以 §7AI 的 R2 证据为准**：target **4 行 `11224..11227`**、
+  history **48 行 `11176..11223`**。）
 - **P2**：改为经真实 `materialize_policy_v3()` 注入失败，断言无产物、无临时文件，
   且「已存在且不同仍拒绝覆盖」。
 
@@ -2357,6 +2359,44 @@ B6 policy、`refs_v3`、`formal_splits_v4` 三份、`scenario/formal_scenario.py
 **范围外修改：无。**
 
 **⛔ 仍只是 candidate**；**下一张卡仍是 M1.3f-e-b2-b**；**不得自行开始**。
+
+### 7AI. M1.3f-e-b2-a-R2：mutation 半开窗口证据修复（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §AI–§AK。**审核暂不批准**：**生产实现未发现新问题**，
+仅测试夹具的 pandas 区间越界与对应文档证据需修复。
+
+**缺陷**：`_bump` 用 `frame.loc[slice(start, stop), column]`。在 RangeIndex 上
+`.loc` 切片是 **label-based 且两端包含**，因此
+
+| 窗口 | 意图 | 实际（改前） |
+|---|---|---|
+| target | `[11224, 11228)` = **4** 行 | **5** 行 `11224..11228` |
+| history | `[11176, 11224)` = **48** 行 | **49** 行 `11176..11224` |
+
+**history 越界进入 target 首行 `11224`**，两窗口**重叠**；原断言只检查
+「区间内有变化」，故未暴露。
+
+**修复**：先取 `frame.index[start:stop]`（**位置**切片、半开）得到**标签**，
+再 `frame.loc[labels, column]`（显式标签集合，不含区间推断）赋值；
+新增**精确**断言「每列 changed index 严格等于 `list(range(lo, hi))`」
+（即**区间外一行也不得变化**）与「两窗口不重叠」。
+
+**修复后实测**：target 五列各 **4** 行 `11224..11227`（exact=True）；
+history 五列各 **48** 行 `11176..11223`（exact=True）；两窗口 **disjoint=True**；
+**target 后七条 forecast 逐位相同**；**history 后
+price/load/temperature/pv/wind 五条全部变化**。
+
+**生产实现未改动**：`scenario/`、`scripts/`、`data/`、`.gitignore`
+经 `git diff --quiet ee5977b..HEAD` 确认**未修改**；policy-v3 hash **仍为**
+`926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb`、
+`materializer_revision` **仍为** `cda31ab1b24f4a7da0cff456df8dae80dfd89b13`
+（**未重新生成**）；全部受保护资产 hash 未变。
+
+**验收**：candidate **51 passed**、`make check` exit 0（**2571 passed**）、
+`--verify` exit 0、`git diff --check` / `git status --short` 空。
+**范围外修改：无。**
+
+**⛔ 停止**：不开始 `M1.3f-e-b2-b`；mapper / 训练 / 评估 / M6 仍未开始。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 

@@ -345,11 +345,25 @@ train/validation/test 均可构造；tamper / **symlink** / **旧 v2 fallback** 
 ACCEPTED → REJECTED**，并有**未篡改接受性对照**；② `B6_FORMAL_SOURCE_PATHS`
 扩到 **12** 项（补回 `scenario/splits.py` 等），dirty 与 revision 用**同一集合**；
 ③ 旧「future mutation」用例**没改任何数据**，替换为**真实**回归：仓库外完整自洽
-临时链 + 生产 `build_formal_scenario_b6()`——改 target `[11224,11228)` 五列后
-**七条 forecast 逐位相同**，改历史 `[11176,11224)` 后 **price/load/temperature/pv/wind
+临时链 + 生产 `build_formal_scenario_b6()`——改 target 五列后
+**七条 forecast 逐位相同**，改历史窗口后 **price/load/temperature/pv/wind
 全部变化**；④ 原子失败改为走**真实** `materialize_policy_v3()`。
 最终 policy-v3 `92670333…`（revision `cda31ab…`）；**上游 hash 全部未变**；
 `make check` **2570 passed**；范围外修改**无**。
+
+**✅ `M1.3f-e-b2-a-R2` 执行完成（等待人工复审）**：审核**暂不批准**，
+但**生产实现未发现新问题**——只修测试夹具的 pandas 区间越界与文档证据。
+缺陷：`_bump` 用 `frame.loc[slice(start, stop)]`，在 RangeIndex 上**两端包含**，
+故 target 实改 **5** 行 `11224..11228`、history 实改 **49** 行 `11176..11224`
+并**越界进入 target 首行**（两窗口重叠）。修复为
+`labels = frame.index[start:stop]`（半开位置切片）后按标签赋值，
+并新增「changed index **严格等于** `range(lo, hi)`」与「窗口不重叠」断言。
+**修复后**：target **4** 行 `11224..11227`（exact）、history **48** 行
+`11176..11223`（exact）、disjoint=True；**target 后七序列逐位相同**、
+**history 后五序列全部变化**。**生产实现未改**：`scenario/`/`scripts/`/`data/`/
+`.gitignore` 均未修改，policy-v3 **未重新生成**（仍 `92670333…`、
+revision `cda31ab…`），受保护资产 hash 未变；`make check` **2571 passed**。
+**⛔ 停止**：不开始 `M1.3f-e-b2-b`；mapper / 训练仍未开始。
 
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
