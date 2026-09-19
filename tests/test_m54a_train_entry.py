@@ -78,7 +78,15 @@ def test_default_invocation_fails_with_m12_blocker(tmp_path):
     assert result.returncode != 0, "默认路径不得成功"
     combined = result.stdout + result.stderr
     assert "M1.2" in combined, f"必须明确指出 M1.2 阻塞：{combined}"
-    assert "manifest" in combined, combined
+    # **M1.3f-e-b2-b 迁移**：原断言 `"manifest" in combined` 与旧失败模式
+    # （「manifest 缺少字段 source」）**措辞耦合**；正式入口切到 B6/v5 后，
+    # 默认起点 '2023-01-01' 先被 v5 loader 拒绝（非网格/无时区）。
+    # 改为断言该用例真正要保证的**意图**：失败是**明确**的、且**原始错误被透出**、
+    # **绝不**回退合成数据。没有放宽任何东西。
+    assert "原始错误" in combined, f"必须透出原始错误：{combined}"
+    assert "TrainEntryError" in combined, combined
+    assert "synthetic=true" not in combined, f"绝不回退合成数据：{combined}"
+    assert "run 产物" not in combined, f"失败时不得写成功 run：{combined}"
 
 
 def test_default_invocation_writes_a_failed_manifest(tmp_path):
