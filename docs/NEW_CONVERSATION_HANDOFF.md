@@ -338,6 +338,19 @@ train/validation/test 均可构造；tamper / **symlink** / **旧 v2 fallback** 
 **下一张卡是 `M1.3f-e-b2-b`**（切换正式入口、`refs_v4`、`formal_splits_v5`、
 旧版本 superseded 登记、readiness 门禁）——**不得自行开始**；mapper / 训练仍未开始。
 
+**✅ `M1.3f-e-b2-a-R1` 执行完成（等待人工复审）**：**e-b2-a 第一轮审核不通过**
+（三项 P1 + 一项 P2）。修复：① `load_verified_policy_v3()` 改为**整体重建比对**
+（trusted constants + live hashes + live revision → 逐字段等于文件），
+`arrival_forecast_rule` / `seed_policy` / `supersedes` 等 **14 类语义伪造
+ACCEPTED → REJECTED**，并有**未篡改接受性对照**；② `B6_FORMAL_SOURCE_PATHS`
+扩到 **12** 项（补回 `scenario/splits.py` 等），dirty 与 revision 用**同一集合**；
+③ 旧「future mutation」用例**没改任何数据**，替换为**真实**回归：仓库外完整自洽
+临时链 + 生产 `build_formal_scenario_b6()`——改 target `[11224,11228)` 五列后
+**七条 forecast 逐位相同**，改历史 `[11176,11224)` 后 **price/load/temperature/pv/wind
+全部变化**；④ 原子失败改为走**真实** `materialize_policy_v3()`。
+最终 policy-v3 `92670333…`（revision `cda31ab…`）；**上游 hash 全部未变**；
+`make check` **2570 passed**；范围外修改**无**。
+
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
 每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与

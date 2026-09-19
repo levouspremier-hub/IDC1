@@ -40,8 +40,9 @@
 > 经 M1.3f-e-b1-R1 返修后已通过人工复审**（2026-09-19，见 §7AE–§7AF）：
 > v3 三资产**已是已批准候选**，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
 > **统一入口 `load_verified_v3_bundle()`** 是 v3 的唯一可信入口；
-> **M1.3f-e-b2-a（formal B6 candidate + policy-v3）执行完成，等待人工复审**
-> （见 §7AG）；**formal 链在 e-b2-b 之前仍绑定 v2**；
+> **M1.3f-e-b2-a（formal B6 candidate + policy-v3）第一轮审核不通过，
+> 经 M1.3f-e-b2-a-R1 返修后执行完成，等待人工复审**（见 §7AG–§7AH）；
+> **formal 链在 e-b2-b 之前仍绑定 v2**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
@@ -2309,6 +2310,53 @@ policy-v2 / `refs_v3` / `formal_splits_v4/` / `.gitignore` **均未修改**。
 **未生成** `refs_v4`、**未建** `formal_splits_v5`。
 **下一张卡是 M1.3f-e-b2-b**（切换正式入口、生成 `refs_v4` 与 `formal_splits_v5`、
 v1–v4 标 superseded 但逐字节保留、readiness 最终门禁）；**不得自行开始**。
+
+### 7AH. M1.3f-e-b2-a-R1：闭合 policy-v3 语义、真实 leakage 回归与 revision 覆盖（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §AF–§AH。**e-b2-a 第一轮审核不通过**（**三项 P1 + 一项 P2**）：
+
+1. **P1-1 policy-v3 语义可被伪造**（公开 loader 全部接受）：
+   `arrival_forecast_rule` / `seed_policy` / `supersedes` 的 SHA·schema·note。
+   根因：只**抽查**部分字段，**未**做整体重建比对。
+2. **P1-2 revision 覆盖不全**：`B6_FORMAL_SOURCE_PATHS` 缺 `scenario/splits.py`
+   （并缺 `scripts/materialize_singapore_forecast_policy.py`）。
+3. **P1-3 leakage 回归是假的**：旧用例**没有修改任何数据**，只是把同一输入调了两次。
+4. **P2 原子失败测试是假的**：直接调用被 mock 的 `_atomic_write_bytes`。
+
+**修复**：
+
+- **P1-1**：`load_verified_policy_v3()` 改为「canonical 位置 + 非 symlink → 顶层与
+  嵌套精确键集合 → 读 `frozen_at_utc` → 用 **trusted constants + live hashes +
+  live revision** `build_policy_v3_manifest(frozen_at_utc=该时间)` **重建完整
+  candidate** → 文件必须**逐字段等于**它」。**不再有抽查路径**；新增**未篡改
+  接受性对照**。实测：14 类语义伪造 **ACCEPTED → REJECTED**，对照 **ACCEPTED**。
+- **P1-2**：`B6_FORMAL_SOURCE_PATHS` 扩到 **12** 项（`*FORECAST_SOURCE_PATHS` +
+  splits + formal 内核 + 外生驱动 ×2 + B6 policy + 本模块 + 物化器）；
+  新增断言「要求集合 ⊆ 该集合」且 **dirty 与 revision 用同一集合**。
+- **P1-3**：新增**真实** future-truth mutation 回归——在仓库外构造**完整自洽**的
+  临时链（canonical → canonical manifest → split manifest → policy-v2 → policy-v3
+  全部重新同步），经生产 `build_formal_scenario_b6()` 构造。实测：改
+  `[11224, 11228)` 五列后**七条 forecast 逐位相同**；改历史 `[11176, 11224)` 后
+  price/load/temperature/**pv/wind** **全部变化**。
+- **P2**：改为经真实 `materialize_policy_v3()` 注入失败，断言无产物、无临时文件，
+  且「已存在且不同仍拒绝覆盖」。
+
+> **必须如实登记的调试发现**：反向控制最初用 `+50 m/s`，wind 被推过冻结功率曲线的
+> **25 m/s** 定义域而触发**保守停机 0 kW**，恰好与该窗口切入附近的基线 0 kW 相同 ⇒
+> `wind_forecast` 不变。经实测定位后改用**物理温和**的每列偏移（风 `+3.0 m/s`），
+> 使 wind 留在定义域内，并把断言收紧为五条序列**全部**必须变化。
+
+**最终 policy-v3**：`926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb`，
+`materializer_revision = cda31ab1b24f4a7da0cff456df8dae80dfd89b13`。
+**候选被替换**（`5114c80d…` → `92670333…`）；**未增加** overwrite 参数。
+
+**验收**：candidate **50 passed**、focused **386 passed, 2 deselected**、
+`make check` exit 0（**2570 passed**）、`--verify` ×3 幂等、`git diff --check` /
+`git status --short` 空。**上游 hash 全部未变**（policy-v2、exogenous v2/v3 各三项、
+B6 policy、`refs_v3`、`formal_splits_v4` 三份、`scenario/formal_scenario.py`）。
+**范围外修改：无。**
+
+**⛔ 仍只是 candidate**；**下一张卡仍是 M1.3f-e-b2-b**；**不得自行开始**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 
