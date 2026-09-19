@@ -53,7 +53,11 @@ from scenario.exogenous_drivers import (
     CARBON_KG_PER_KWH,
     arrival_template_slot,
 )
-from scenario.forecast import FORECAST_PERIOD_STEPS, build_available_exogenous_forecast
+from scenario.forecast import (
+    FORECAST_PERIOD_STEPS,
+    FORECAST_SOURCE_PATHS,
+    build_available_exogenous_forecast,
+)
 from scenario.formal_scenario import (
     FORMAL_SOURCE_KINDS,
     GHI_COLUMN,
@@ -69,7 +73,6 @@ from scenario.splits import (
     _require_dict,
     _require_exact_keys,
     _require_git_sha40,
-    _require_hex64,
     logical_repo_path,
     validate_forecast_origin,
 )
@@ -114,12 +117,15 @@ EXOGENOUS_V3_PARQUET_ROLE = "exogenous_drivers_parquet"
 # 七条序列的 source_kind：**唯一**来源是既有 formal 内核的冻结常量
 FORMAL_B6_SOURCE_KINDS: dict[str, str] = dict(FORMAL_SOURCE_KINDS)
 
-# **本模块实际执行文件**（code_revision 由这一组解析）
+# **本模块实际执行文件**（code_revision 与 dirty 检查共用这一组）。
+#
+# R1：覆盖**全部**直接影响候选语义的文件——`FORECAST_SOURCE_PATHS` 全员
+# （含 policy 物化器）、`scenario/splits.py`（origin 门禁与严格链）、
+# formal 内核（source_kind 常量与 PV/风函数）、外生驱动与其 B6 变体、
+# B6 policy、本模块与 policy-v3 物化器。
 B6_FORMAL_SOURCE_PATHS: tuple[str, ...] = (
-    "contracts/__init__.py",
-    "contracts/models.py",
-    "contracts/validators.py",
-    "scenario/forecast.py",
+    *FORECAST_SOURCE_PATHS,
+    "scenario/splits.py",
     "scenario/formal_scenario.py",
     "scenario/exogenous_drivers.py",
     "scenario/arrival_intensity_policy.py",
@@ -240,6 +246,53 @@ def canonical_policy_v3_path() -> Path:
     return _canonical_policy_v3_dir() / CANONICAL_POLICY_V3_NAME
 
 
+# --- 上游绑定的**私有**解析器 -------------------------------------------------
+#
+# 全部上游对象都经这一组解析；`build_policy_v3_manifest()` 与
+# `load_verified_policy_v3()` **共用**它们，因此「重建 candidate == 文件」
+# 是一致性断言，而不是两套规则。测试只能 monkeypatch **私有**解析器
+# （公开 API 不暴露任何 path/hash/revision 覆盖入口）。
+def _canonical_parquet_path() -> Path:
+    return REPO_ROOT / CANONICAL_PARQUET_LOGICAL
+
+
+def _canonical_manifest_path() -> Path:
+    return REPO_ROOT / CANONICAL_MANIFEST_LOGICAL
+
+
+def _split_manifest_path() -> Path:
+    return REPO_ROOT / SPLIT_MANIFEST_LOGICAL
+
+
+def _seasonal_policy_v2_path() -> Path:
+    return REPO_ROOT / POLICY_V2_LOGICAL
+
+
+def _b6_policy_path() -> Path:
+    return REPO_ROOT / B6_POLICY_LOGICAL
+
+
+def _exogenous_v3_manifest_path() -> Path:
+    return REPO_ROOT / EXOGENOUS_V3_MANIFEST_LOGICAL
+
+
+def _exogenous_v3_source_path() -> Path:
+    return REPO_ROOT / EXOGENOUS_V3_SOURCE_LOGICAL
+
+
+def _exogenous_v3_parquet_path() -> Path:
+    return REPO_ROOT / EXOGENOUS_V3_PARQUET_LOGICAL
+
+
+def _v3_template_source() -> np.ndarray:
+    """冻结 48 槽 template 的**私有**来源（生产路径 = 已验证 v3 bundle）。
+
+    测试可在临时链中改写它；生产路径下必须与 `verified_v3_template()` 恒等
+    （有专门断言），因此**不是**「mock 最终 bundle」。
+    """
+    return verified_v3_template()
+
+
 def _require_canonical_location(path: Path | str | None) -> Path:
     """路径必须**精确等于** canonical policy-v3（在读 JSON 之前）。
 
@@ -260,34 +313,33 @@ def _require_canonical_location(path: Path | str | None) -> Path:
     return expected
 
 
-def _binding_pairs() -> tuple[tuple[str, str, str], ...]:
-    """(path_field, sha_field, 冻结 logical path)。"""
-    return (
-        ("canonical_parquet_path", "canonical_parquet_sha256",
-         CANONICAL_PARQUET_LOGICAL),
-        ("canonical_manifest_path", "canonical_manifest_sha256",
-         CANONICAL_MANIFEST_LOGICAL),
-        ("split_manifest_path", "split_manifest_sha256", SPLIT_MANIFEST_LOGICAL),
-        ("seasonal_rule_source_policy_path", "seasonal_rule_source_policy_sha256",
-         POLICY_V2_LOGICAL),
-        ("b6_policy_path", "b6_policy_sha256", B6_POLICY_LOGICAL),
-        ("exogenous_v3_manifest_path", "exogenous_v3_manifest_sha256",
-         EXOGENOUS_V3_MANIFEST_LOGICAL),
-        ("exogenous_v3_source_manifest_path", "exogenous_v3_source_manifest_sha256",
-         EXOGENOUS_V3_SOURCE_LOGICAL),
-        ("exogenous_v3_parquet_path", "exogenous_v3_parquet_sha256",
-         EXOGENOUS_V3_PARQUET_LOGICAL),
-    )
+def _require_nested_keys(payload: dict) -> None:
+    """`supersedes` / `readiness` 的**精确键集合**（在读任何业务字段之前）。"""
+    try:
+        _require_exact_keys(_require_dict(payload.get("supersedes"),
+                                          field="supersedes"),
+                            field="supersedes", expected=SUPERSEDES_KEYS)
+        _require_exact_keys(_require_dict(payload.get("readiness"), field="readiness"),
+                            field="readiness", expected=READINESS_KEYS)
+    except SplitError as error:
+        raise FormalB6Error(f"policy-v3 嵌套键集合不符：{error}") from error
 
 
 def load_verified_policy_v3(path: Path | str | None = None) -> dict:
     """加载并**严格校验** canonical policy-v3（路径先于 JSON 读取）。
 
-    校验：canonical 位置与非 symlink；**精确键集合**（顶层与 `supersedes` /
-    `readiness`）；schema 与 `contract-v9`；`frequency` / `period_steps`；
-    八条绑定路径的**声明 == 冻结 logical path** 且 **SHA-256 == 实测字节**；
-    `materializer_revision` == live；arrival 规则与 `31.994`；
-    `empirical_workload_claim=False`；readiness 两项为 false。任一不符 fail closed。
+    **R1 修复**：不再「抽查部分字段」。流程是
+
+    1. canonical 位置、普通文件、**非 symlink**；
+    2. 顶层与嵌套（`supersedes` / `readiness`）**精确键集合**；
+    3. 读取文件中的 `frozen_at_utc`；
+    4. `build_policy_v3_manifest(frozen_at_utc=该时间)`——由 **trusted constants +
+       live hashes + live revision** 重建**完整** candidate；
+    5. 文件 payload 必须**逐字段等于**重建 candidate。
+
+    因此**任何**业务字段（规则文案、`seed_policy`、`supersedes` 全字段、
+    readiness、八条绑定、revision……）的伪造都会 fail closed；不存在
+    「抽查若干字段后返回 verified」的路径。
     """
     path = _require_canonical_location(path)
     try:
@@ -295,84 +347,34 @@ def load_verified_policy_v3(path: Path | str | None = None) -> dict:
     except (OSError, json.JSONDecodeError) as error:
         raise FormalB6Error(f"policy-v3 不可读：{error}") from error
     payload = _require_dict(payload, field="policy-v3")
-    # 结构校验的 SplitError 统一收敛为**本模块的明确失败**（不泄漏内建异常类型）
+
     try:
         _require_exact_keys(payload, field="policy-v3", expected=POLICY_V3_KEYS)
     except SplitError as error:
         raise FormalB6Error(f"policy-v3 顶层键集合不符：{error}") from error
+    _require_nested_keys(payload)
 
     if payload["schema"] != POLICY_V3_SCHEMA:
         raise FormalB6Error(
             f"policy-v3 schema 必须是 {POLICY_V3_SCHEMA!r}，实际 {payload['schema']!r}"
         )
-    if payload["contract_version"] != CONTRACT_VERSION:
-        raise FormalB6Error(
-            f"policy-v3 contract_version 必须是 {CONTRACT_VERSION!r}"
+    frozen_at_utc = payload["frozen_at_utc"]
+    try:
+        _require_canonical_utc(frozen_at_utc, field="frozen_at_utc")
+    except SplitError as error:
+        raise FormalB6Error(f"policy-v3 frozen_at_utc 不符：{error}") from error
+
+    # **重建**并逐字段比对：这是唯一的「verified」判据
+    rebuilt = build_policy_v3_manifest(frozen_at_utc=frozen_at_utc)
+    if rebuilt != payload:
+        differing = sorted(
+            key for key in set(rebuilt) | set(payload)
+            if rebuilt.get(key) != payload.get(key)
         )
-    if payload["frequency"] != FREQUENCY or payload["period_steps"] != \
-            FORECAST_PERIOD_STEPS:
-        raise FormalB6Error("policy-v3 的 frequency/period_steps 与冻结值不符")
-    _require_canonical_utc(payload["frozen_at_utc"], field="frozen_at_utc")
-
-    revision = _require_git_sha40(payload["materializer_revision"],
-                                  field="materializer_revision")
-    live = b6_formal_code_revision()
-    if revision != live:
         raise FormalB6Error(
-            f"policy-v3 的 materializer_revision 与 live 解析不符："
-            f"声明 {revision} live {live}"
+            f"policy-v3 与由 trusted constants + live hashes + live revision "
+            f"重建的 candidate 不符；差异字段={differing}"
         )
-
-    for path_field, sha_field, logical in _binding_pairs():
-        if payload[path_field] != logical:
-            raise FormalB6Error(
-                f"{path_field} 必须精确等于 {logical!r}，实际 {payload[path_field]!r}"
-            )
-        expected = _require_hex64(payload[sha_field], field=sha_field)
-        actual = _sha256_file(REPO_ROOT / logical)
-        if actual != expected:
-            raise FormalB6Error(
-                f"{sha_field} 与实际文件不符：声明 {expected} 实际 {actual}"
-            )
-
-    # arrival 的 B6 语义（**不信任自报**：与常量逐项比对）
-    if payload["arrival_forecast_uses_expected"] is not True:
-        raise FormalB6Error("arrival_forecast_uses_expected 必须严格为 true")
-    if payload["arrival_expected_amount_work_per_half_hour"] != \
-            B6_ARRIVAL_EXPECTED_AMOUNT:
-        raise FormalB6Error(
-            f"arrival_expected_amount_work_per_half_hour 必须是 "
-            f"{B6_ARRIVAL_EXPECTED_AMOUNT}"
-        )
-    if payload["arrival_source_kind"] != ARRIVAL_SOURCE_KIND:
-        raise FormalB6Error(f"arrival_source_kind 必须是 {ARRIVAL_SOURCE_KIND!r}")
-    if payload["empirical_workload_claim"] is not EMPIRICAL_WORKLOAD_CLAIM:
-        raise FormalB6Error("empirical_workload_claim 必须严格为 false")
-    if list(payload["available_drivers"]) != list(AVAILABLE_DRIVERS):
-        raise FormalB6Error("policy-v3 的 available_drivers 与冻结五类不符")
-    if payload["information_policy"] != INFORMATION_POLICY or \
-            payload["target_policy"] != TARGET_POLICY:
-        raise FormalB6Error("policy-v3 的 information/target policy 与冻结值不符")
-
-    readiness = _require_dict(payload["readiness"], field="readiness")
-    _require_exact_keys(readiness, field="readiness", expected=READINESS_KEYS)
-    if readiness != READINESS:
-        raise FormalB6Error(f"policy-v3 readiness 必须严格等于 {READINESS}")
-    if readiness["formal_scenario_bundle_ready"] is not False or \
-            readiness["formal_training_ready"] is not False:
-        raise FormalB6Error("policy-v3 的 readiness 必须保持 formal 两项为 false")
-
-    supersedes = _require_dict(payload["supersedes"], field="supersedes")
-    _require_exact_keys(supersedes, field="supersedes", expected=SUPERSEDES_KEYS)
-    if supersedes["policy_manifest_path"] != POLICY_V2_LOGICAL:
-        raise FormalB6Error("supersedes 必须登记 policy-v2")
-    if supersedes["status"] != "registered_not_replaced":
-        raise FormalB6Error("supersedes 必须是**只登记**（registered_not_replaced）")
-
-    # policy-v2 必须仍然在位且**未被覆盖**（supersedes 只是登记）
-    if _sha256_file(REPO_ROOT / POLICY_V2_LOGICAL) != \
-            payload["seasonal_rule_source_policy_sha256"]:
-        raise FormalB6Error("policy-v2 的字节已改变：supersedes 不得覆盖它")
     return payload
 
 
@@ -415,7 +417,7 @@ def target_timestamps_for(
     """target 的**已知日历时刻** `[origin, origin+C)`（由 canonical 时间轴导出）。"""
     global_origin = validate_forecast_origin(split, origin, forecast_cutoff)
     stamps = pd.DatetimeIndex(
-        pd.read_parquet(REPO_ROOT / CANONICAL_PARQUET_LOGICAL)["timestamp"]
+        pd.read_parquet(_canonical_parquet_path())["timestamp"]
     )
     return tuple(
         pd.Timestamp(stamps[i]).isoformat()
@@ -434,11 +436,11 @@ def _roles(
         ("canonical_manifest", canonical_manifest_path),
         ("split_manifest", split_manifest_path),
         (POLICY_V3_ROLE, policy_v3_path),
-        (SEASONAL_RULE_SOURCE_ROLE, REPO_ROOT / POLICY_V2_LOGICAL),
-        (B6_POLICY_ROLE, REPO_ROOT / B6_POLICY_LOGICAL),
-        (EXOGENOUS_V3_MANIFEST_ROLE, REPO_ROOT / EXOGENOUS_V3_MANIFEST_LOGICAL),
-        (EXOGENOUS_V3_SOURCE_ROLE, REPO_ROOT / EXOGENOUS_V3_SOURCE_LOGICAL),
-        (EXOGENOUS_V3_PARQUET_ROLE, REPO_ROOT / EXOGENOUS_V3_PARQUET_LOGICAL),
+        (SEASONAL_RULE_SOURCE_ROLE, _seasonal_policy_v2_path()),
+        (B6_POLICY_ROLE, _b6_policy_path()),
+        (EXOGENOUS_V3_MANIFEST_ROLE, _exogenous_v3_manifest_path()),
+        (EXOGENOUS_V3_SOURCE_ROLE, _exogenous_v3_source_path()),
+        (EXOGENOUS_V3_PARQUET_ROLE, _exogenous_v3_parquet_path()),
     )
     return tuple(
         ArtifactDigest(
@@ -507,7 +509,7 @@ def build_formal_scenario_b6(
         canonical_parquet_path=canonical_parquet_path,
         canonical_manifest_path=canonical_manifest_path,
         split_manifest_path=split_manifest_path,
-        policy_manifest_path=REPO_ROOT / POLICY_V2_LOGICAL,
+        policy_manifest_path=_seasonal_policy_v2_path(),
     )
     generated_at = artifact.generated_at
     target_timestamps = tuple(artifact.target_timestamps)
@@ -519,7 +521,7 @@ def build_formal_scenario_b6(
     if b6_policy["main_expected_amount_work_per_half_hour"] != \
             B6_ARRIVAL_EXPECTED_AMOUNT:
         raise FormalB6Error("B6 policy 的 expected amount 与冻结 31.994 不符")
-    template = verified_v3_template()
+    template = _v3_template_source()
 
     stamps = pd.DatetimeIndex(
         pd.read_parquet(canonical_parquet_path)["timestamp"]
@@ -619,24 +621,21 @@ def build_policy_v3_manifest(*, frozen_at_utc: str) -> dict:
         "materializer_revision": b6_formal_code_revision(),
         "frozen_at_utc": frozen_at_utc,
         "canonical_parquet_path": CANONICAL_PARQUET_LOGICAL,
-        "canonical_parquet_sha256": _sha256_file(REPO_ROOT / CANONICAL_PARQUET_LOGICAL),
+        "canonical_parquet_sha256": _sha256_file(_canonical_parquet_path()),
         "canonical_manifest_path": CANONICAL_MANIFEST_LOGICAL,
-        "canonical_manifest_sha256": _sha256_file(REPO_ROOT / CANONICAL_MANIFEST_LOGICAL),
+        "canonical_manifest_sha256": _sha256_file(_canonical_manifest_path()),
         "split_manifest_path": SPLIT_MANIFEST_LOGICAL,
-        "split_manifest_sha256": _sha256_file(REPO_ROOT / SPLIT_MANIFEST_LOGICAL),
+        "split_manifest_sha256": _sha256_file(_split_manifest_path()),
         "seasonal_rule_source_policy_path": POLICY_V2_LOGICAL,
-        "seasonal_rule_source_policy_sha256": _sha256_file(REPO_ROOT / POLICY_V2_LOGICAL),
+        "seasonal_rule_source_policy_sha256": _sha256_file(_seasonal_policy_v2_path()),
         "b6_policy_path": B6_POLICY_LOGICAL,
-        "b6_policy_sha256": _sha256_file(REPO_ROOT / B6_POLICY_LOGICAL),
+        "b6_policy_sha256": _sha256_file(_b6_policy_path()),
         "exogenous_v3_manifest_path": EXOGENOUS_V3_MANIFEST_LOGICAL,
-        "exogenous_v3_manifest_sha256": _sha256_file(
-            REPO_ROOT / EXOGENOUS_V3_MANIFEST_LOGICAL),
+        "exogenous_v3_manifest_sha256": _sha256_file(_exogenous_v3_manifest_path()),
         "exogenous_v3_source_manifest_path": EXOGENOUS_V3_SOURCE_LOGICAL,
-        "exogenous_v3_source_manifest_sha256": _sha256_file(
-            REPO_ROOT / EXOGENOUS_V3_SOURCE_LOGICAL),
+        "exogenous_v3_source_manifest_sha256": _sha256_file(_exogenous_v3_source_path()),
         "exogenous_v3_parquet_path": EXOGENOUS_V3_PARQUET_LOGICAL,
-        "exogenous_v3_parquet_sha256": _sha256_file(
-            REPO_ROOT / EXOGENOUS_V3_PARQUET_LOGICAL),
+        "exogenous_v3_parquet_sha256": _sha256_file(_exogenous_v3_parquet_path()),
         "frequency": FREQUENCY,
         "period_steps": FORECAST_PERIOD_STEPS,
         "information_policy": INFORMATION_POLICY,
@@ -651,7 +650,7 @@ def build_policy_v3_manifest(*, frozen_at_utc: str) -> dict:
         "readiness": dict(READINESS),
         "supersedes": {
             "policy_manifest_path": POLICY_V2_LOGICAL,
-            "policy_manifest_sha256": _sha256_file(REPO_ROOT / POLICY_V2_LOGICAL),
+            "policy_manifest_sha256": _sha256_file(_seasonal_policy_v2_path()),
             "policy_manifest_schema": "m1.3g0-singapore-2024-forecast-policy-v2",
             "status": "registered_not_replaced",
             "note": (

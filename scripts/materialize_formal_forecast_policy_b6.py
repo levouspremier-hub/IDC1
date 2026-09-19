@@ -102,8 +102,13 @@ def materialize_policy_v3(*, frozen_at_utc: str) -> dict:
             raise FormalB6PolicyError(
                 f"已存在的 policy-v3 不是合法 JSON：{error}"
             ) from error
-        _require_exact_keys(existing, field="已存在的 policy-v3",
-                            expected=tuple(candidate))
+        try:
+            _require_exact_keys(existing, field="已存在的 policy-v3",
+                                expected=tuple(candidate))
+        except SplitError as error:
+            raise FormalB6PolicyError(
+                f"已存在的 policy-v3 键集合不符：{error}"
+            ) from error
         if existing != candidate:
             raise FormalB6PolicyError(f"已存在的 policy-v3 与候选不同：拒绝覆盖 {manifest_path}")
         return {
