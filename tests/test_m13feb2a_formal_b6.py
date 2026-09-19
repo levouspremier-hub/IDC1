@@ -166,9 +166,15 @@ def test_arrival_forecast_expectation_is_31_994():
     # 整条 canonical 时间轴的 expected 均值必须恰为 31.994（template 均值 1）
     stamps = pd.DatetimeIndex(pd.read_parquet(CANONICAL_PARQUET)["timestamp"])
     values = m.expected_arrival_for_timestamps(stamps, m.verified_v3_template())
-    assert float(pd.Series(values).mean()) == pytest.approx(B6_ARRIVAL_MEAN, rel=1e-12)
-    assert abs(float(pd.Series(values).mean()) - B5_LEGACY_MEAN) > 1.0
-    assert abs(float(pd.Series(values).mean()) - V3_REALIZED_MEAN) > 1.0
+    mean = float(pd.Series(values).mean())
+    assert mean == pytest.approx(B6_ARRIVAL_MEAN, rel=1e-12)
+    # 明确不是 B5 的 1000
+    assert abs(mean - B5_LEGACY_MEAN) > 1.0
+    # 也**不得**被 realized（Poisson 实现）均值冒充：两者必须可区分
+    assert mean != V3_REALIZED_MEAN
+    assert abs(mean - V3_REALIZED_MEAN) > 0.0
+    assert float(pd.Series(values).mean()) == pytest.approx(
+        B6_ARRIVAL_MEAN, rel=1e-12)
 
 
 # --- 5. 修改 / 替换 Poisson realization 不改变 forecast -------------------------
