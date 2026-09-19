@@ -2460,6 +2460,60 @@ refs_v4 副本/symlink、伪造 `lambda_ref=2000`、非默认 `manifest_dir`、
 > 重算比对**，故「canonical 被改动的临时链」**不可能**满足它。正式入口对该构造器的
 > **委托**另有 spy 断言（`split`/`origin`/`forecast_cutoff` 逐项传入）。
 
+### 7AK. M1.3f-e-b2-b-R1：v5 语义信任边界、revision 覆盖与真实原子事务修复（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §AP–§AR。**b2-b 第一轮审核不批准**（三项 P1）。
+
+**P1-1 v5 语义伪造**：改前实测把 `formal_splits_v5/train.json` 的
+`time_range` 起止各平移一天（**时长不变**）即得 **`FORGED_TIME_RANGE_ACCEPTED`**
+——loader 只校验格式与持续时间。修复为**整体重建比对**（trusted inputs +
+live hashes + live revision），差异时**输出差异顶层字段**。实测：
+
+```text
+CONTROL untampered                 ACCEPTED
+time_range / frozen_at_utc / split_rows / candidate_origins / readiness /
+input path-sha / materializer_revision / undeclared field / history_steps
+                                  全部 REJECTED
+```
+
+> **额外收紧**：`frozen_at_utc` 若可自由填写，则「只改它」在重建比对下自洽。
+> 现把 triad 的冻结时刻**锚定到已验签的 `refs_v4` 的 `frozen_at_utc`**，
+> loader 重建用**锚点**而非文件自报值 ⇒ 任何不符即被拒绝。
+> **⇒ 必须先物化 refs_v4 再物化 v5。**
+
+**P1-2 revision 覆盖**：两集合各扩到 **9 项**，补入 `scenario/scenario.py`
+（public cutover）与两个 materializer；新增断言「required ⊆ 集合」
+与「dirty/revision 传给 git 的路径逐项相等」。
+
+**P1-3 真实原子事务**：删除伪事务测试，改为真实调用
+`materialize_refs_v4()` / `materialize_split_manifest_triad_v5()` 并在
+**第 1/2/3 次**原子写入注入失败 —— 四份产物全不存在、**零临时文件**；
+「已存在且不同」仍拒绝覆盖；四个 materializer **无** overwrite 参数。
+> 顺带修掉一个真实缺陷：triad materializer 读畸形既存文件会**泄漏 `KeyError`**，
+> 现改为结构化校验后只抛 `SplitManifestV5Error`。
+
+**候选替换后的四项产物**：
+
+| 资产 | SHA-256 |
+|---|---|
+| `configs/frozen_refs/refs_v4.json` | `b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7` |
+| `formal_splits_v5/train.json` | `8608372fba5c560ba458c8903cc10746a4e21254b2c3e29a2c2cd3001d6233c7` |
+| `formal_splits_v5/validation.json` | `3f16ad3af4d8b5ab86982550bda86e03af8bab4d9a8ff94b67ec2a0799a4851b` |
+| `formal_splits_v5/test.json` | `aaacd459ed4e1154ea538ba4c3164e67b04094a044f2d96c52a1312553f09835` |
+
+`materializer_revision` 两者同为 `577f1db4d5ca78553aa1be866f643ebeb7e8cb13`；
+共享 `frozen_at_utc = 2026-09-19T17:15:19+00:00`。
+
+**验收**：candidate **61 passed**、另一组 focused **223 passed**、
+`make check` exit 0（**2632 passed**）、`make smoke` exit 0、
+`make train` **exit 2**、`--verify` 各 ×3 均 exit 0 且 bytes/hash/`mtime_ns`
+不变、`git diff --check` / `git status --short` 空。
+**旧资产全部逐字节未变**（`git diff --quiet 80ab2ae..HEAD` 逐项确认）。
+**范围外修改：无。**
+
+> **mutation 回归的范围声明（§AN.8）原样保留**：public-entry mutation 回归
+> **仍未被实现**，本卡**不**把 underlying-builder leakage 回归冒充成它。
+
 **⛔ 下一张卡是 M1.3g-e-b**（mapper）——但**在 env 接线/训练之前**；
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
 readiness **仍为 false**；**不得自行开始** mapper / env 接线 / 训练 / 评估 / M6。
