@@ -44,6 +44,9 @@ _SERIES_TO_FIELD = {key: f"{key}_forecast" for key in SERIES_KEYS}
 
 _REQUIRED_MANIFEST_FIELDS = ("source", "units", "sha256")
 
+# 正式 B6 链的 manifest 目录（**唯一**合法值；用于拒绝绕过入口）。
+_DEFAULT_MANIFEST_DIR = "data/manifest"
+
 # 非正式（synthetic / oracle_debug）路径**没有**真实时间轴：`start` 在这些调用里只是
 # 一个标签（历史测试里甚至是 "s"）。因此这两条路径的 provenance 使用一个显式、固定、
 # 非物理的 dev 锚点，绝不冒充 canonical 时间轴 —— 正式时间轴只能来自 split manifest。
@@ -270,46 +273,52 @@ def _generator_revision() -> str:
 def _build_from_manifest(
     split: str, start: str, horizon: int, forecast_cutoff: int, manifest_dir: str
 ) -> ScenarioBundle:
-    manifest_path = Path(manifest_dir) / f"{split}.json"
-    if not manifest_path.exists():
-        raise FileNotFoundError(
-            f"正式模式无数据：缺少 manifest {manifest_path}"
-            "（M1.2 raw freeze 已完成；M1.3 正式数据集/split manifest 尚未完成）。"
-            "正式 causal forecast / ScenarioBundle 接线属 M1.3g，绝不回退到合成数据。"
-        )
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    for field in _REQUIRED_MANIFEST_FIELDS:
-        if field not in manifest:
-            raise ValueError(f"manifest 缺少字段 {field!r}（需单位/来源/hash）")
-    # M1.3g-b：正式路径交给 `scenario.formal_scenario` 的 causal 内核。
-    # **只有**在正式 split manifest 存在时才会走到这里（缺失已在上面 fail closed）。
-    from scenario.formal_scenario import build_formal_scenario
+    """**B6 formal 链**的唯一正式入口（M1.3f-e-b2-b 切换）。
 
-    required = (
-        "origin_index", "horizon", "forecast_cutoff",
-        "canonical_parquet_path", "canonical_manifest_path",
-        "policy_manifest_path", "exogenous_manifest_path",
-        "exogenous_source_manifest_path",
-    )
-    missing = [field for field in required if field not in manifest]
-    if missing:
-        raise ValueError(
-            f"正式 split manifest 缺少字段 {missing}（M1.3g-c 负责生成完整 schema）"
-        )
+    - **只**读取 `formal_splits_v5` 的 verified manifest（canonical-only）；
+    - `start` 必须是 canonical 30 分钟网格上的带时区 ISO 时间，
+      精确映射到该 split 的**本地 origin**（越界 / 非网格 / 非候选 origin 一律失败）；
+    - 实际构造交给生产 `build_formal_scenario_b6()`；
+    - **`manifest_dir` 不是绕过入口**：正式链的路径由 v5 loader **固定**，
+      非默认值一律 fail closed。
+    """
     if split not in ("train", "validation", "test"):
         raise ValueError(f"未知 split：{split!r}（必须是 train/validation/test）")
     validated_split: SplitName = cast(SplitName, split)
-    return build_formal_scenario(
+
+    from scenario.b6_split_manifests import (
+        canonical_manifest_path_v5,
+        load_verified_split_manifest_v5,
+        local_origin_from_start,
+    )
+
+    # `manifest_dir` 不得成为正式链绕过入口：只接受默认值
+    if manifest_dir != _DEFAULT_MANIFEST_DIR:
+        raise ValueError(
+            f"正式 B6 链的 manifest 目录由 formal_splits_v5 固定为 "
+            f"{_DEFAULT_MANIFEST_DIR!r}（M1.3）；"
+            f"传入 {manifest_dir!r} 属于绕过入口，必须显式失败。"
+            "绝不回退到合成数据或旧版本 manifest。"
+        )
+
+    manifest_path = canonical_manifest_path_v5(validated_split)
+    manifest = load_verified_split_manifest_v5(manifest_path,
+                                               expected_split=validated_split)
+    origin = local_origin_from_start(validated_split, start)
+
+    from scenario.formal_scenario_b6 import build_formal_scenario_b6
+
+    return build_formal_scenario_b6(
         validated_split,
-        origin=int(manifest["origin_index"]),
-        forecast_cutoff=int(manifest["forecast_cutoff"]),
-        horizon=int(manifest["horizon"]),
-        canonical_parquet_path=REPO_ROOT / manifest["canonical_parquet_path"],
-        canonical_manifest_path=REPO_ROOT / manifest["canonical_manifest_path"],
-        split_manifest_path=manifest_path,
-        policy_manifest_path=REPO_ROOT / manifest["policy_manifest_path"],
-        exogenous_manifest_path=REPO_ROOT / manifest["exogenous_manifest_path"],
-        exogenous_source_manifest_path=(
-            REPO_ROOT / manifest["exogenous_source_manifest_path"]
+        origin=origin,
+        forecast_cutoff=forecast_cutoff,
+        horizon=horizon,
+        canonical_parquet_path=REPO_ROOT / manifest["inputs"]["canonical_parquet"]["path"],
+        canonical_manifest_path=(
+            REPO_ROOT / manifest["inputs"]["canonical_manifest"]["path"]
+        ),
+        split_manifest_path=REPO_ROOT / manifest["inputs"]["split_manifest"]["path"],
+        policy_manifest_path=(
+            REPO_ROOT / manifest["inputs"]["forecast_policy_manifest"]["path"]
         ),
     )

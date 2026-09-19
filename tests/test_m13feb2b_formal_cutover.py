@@ -219,10 +219,10 @@ def test_invalid_start_fails_closed(start):
 
 @needs_assets
 def test_non_candidate_origin_fails_closed():
-    """train 的 origin 47 只有 47 步历史 → 不是候选 origin。"""
+    """train 的首行 global 0 → 本地 origin 0，**不在**候选集合 `[48, 10224)` 内。"""
     m = split_module()
     with pytest.raises(ValueError):
-        m.local_origin_from_start("train", "2023-12-31T23:30:00+08:00")
+        m.local_origin_from_start("train", "2024-01-01T00:00:00+08:00")
 
 
 # --- 4. 拒绝矩阵 ----------------------------------------------------------------
