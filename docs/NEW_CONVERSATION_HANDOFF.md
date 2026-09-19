@@ -323,6 +323,21 @@ manifest `31cb241c…`、source-v4 `73f75cef…`，`materializer_revision = 34f2
 `load_verified_v3_bundle()` 是 v3 的**唯一**可信入口；**v3 三资产为已批准候选**；
 **formal 链仍绑定 v2**，readiness **仍为 false**。
 
+**✅ `M1.3f-e-b2-a` 执行完成（等待人工复审）**：新增**独立候选**入口
+`build_formal_scenario_b6(...)`（`scenario/formal_scenario_b6.py`）与 **policy-v3**
+`data/manifest/singapore_2024_forecast_policy_v3.json`
+（`5114c80d…`，`materializer_revision = bf5f7dd…`）。policy-v3 绑定 policy-v2
+（**仅** seasonal 规则）、B6 policy、exogenous v3 三项、canonical 三项，
+`contract-v9` / `30min` / `period_steps=48`，`supersedes` **只登记**、**不覆盖**，
+readiness **保持 false**。候选：seasonal 复用 M1.3e provider、PV/风复用同一物理函数、
+carbon `0.402`、**arrival = `template[slot] × 31.994`（期望值，不读 realization）**；
+train/validation/test 均可构造；tamper / **symlink** / **旧 v2 fallback** / dirty
+全部 **REJECTED**；`--verify` ×3 幂等；`make check` **2547 passed**。
+**旧资产 hash 全部未变**；**范围外修改无**。
+**⛔ 本卡只是 candidate**，现有 formal 入口**仍**用 policy-v2；
+**下一张卡是 `M1.3f-e-b2-b`**（切换正式入口、`refs_v4`、`formal_splits_v5`、
+旧版本 superseded 登记、readiness 门禁）——**不得自行开始**；mapper / 训练仍未开始。
+
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
 每个任务 `workload ∈ [w_min, w_max]`；分割算法必须**同时**满足每任务上下界与

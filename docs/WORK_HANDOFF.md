@@ -40,7 +40,8 @@
 > 经 M1.3f-e-b1-R1 返修后已通过人工复审**（2026-09-19，见 §7AE–§7AF）：
 > v3 三资产**已是已批准候选**，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
 > **统一入口 `load_verified_v3_bundle()`** 是 v3 的唯一可信入口；
-> **formal 链在 e-b2 之前仍绑定 v2**；
+> **M1.3f-e-b2-a（formal B6 candidate + policy-v3）执行完成，等待人工复审**
+> （见 §7AG）；**formal 链在 e-b2-b 之前仍绑定 v2**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
@@ -2259,6 +2260,55 @@ bytes/hash/`mtime_ns` 不变、`git diff --check` / `git status --short` 空。
 （另两个 loader 只是薄委托）；**账本勘误**：§AA.1 写「R1 共 7 个提交」漏掉了记录提交
 `e5d260a` 自身，`1853d4b..e5d260a` 实为 **8 个**（回滚命令本身**正确**，已含它）；
 **v3 三项成为已批准候选**；**formal 链仍绑定 v2**，readiness **仍为 false**。
+
+### 7AG. M1.3f-e-b2-a：formal B6 scenario 候选与 policy-v3（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §AC–§AE。新增**独立**候选入口
+`scenario/formal_scenario_b6.py` 的 `build_formal_scenario_b6(...)` 与
+**policy-v3** `data/manifest/singapore_2024_forecast_policy_v3.json`
+（SHA-256 `5114c80dde6f4f37c3b278d92a46c1b7cbbb58a76287b3e19c0f37f3db815408`，
+`materializer_revision = bf5f7ddb144097d64a658c7790fb0c358dde4ee6`）。
+
+**policy-v3 信任链**：绑定 policy-v2（`ef4dd58a…`，**仅**复用五类 seasonal 规则）、
+B6 policy（`7066a0e1…`）、exogenous v3 三项（`31cb241c…`/`73f75cef…`/`07b648f0…`）、
+canonical 三项；`contract-v9`、`30min`、`period_steps=48`；
+`arrival_forecast_uses_expected=true`、`arrival_source_kind=modeled_scenario`、
+`empirical_workload_claim=false`；`supersedes` **只登记** policy-v2
+（`registered_not_replaced`），**不覆盖**它；readiness **保持 formal 两项 false**。
+
+**候选语义**：五类 seasonal **复用** M1.3e 因果 provider；PV/风**复用**同一物理函数；
+carbon 仍 `0.402`；**arrival = `template[slot] × 31.994`（期望值）**。
+实测：template 均值 `1.0`、expected 均值 `31.994000000000003`、
+bundle(t=48,C=4) `[31.1394…, 28.7448…, 29.8443…, 28.9444…]`。
+**不是** B5 的 `1000`，**也不是** v3 的 realized 均值 `32.02037795992714`；
+**替换 v3 的 Poisson realization 后 forecast 逐位不变**（有专门回归）。
+
+**train / validation / test 的合法 origin 均可构造**；future-truth mutation
+不影响可见 forecast；`C` 变长时**前缀**不变。
+
+**拒绝**（实测）：B6 policy 篡改、v3 bundle 篡改、policy-v3 副本、
+**canonical symlink**、旧 **policy-v2 fallback**、dirty source、
+materializer 的 `--out-dir`/`--manifest-path`/`--revision`。
+
+**幂等**：`--verify` 连续 3 次 exit 0，bytes/hash/`mtime_ns` 不变，0 临时文件；
+原子失败无半成品。**验收**：candidate **27 passed**、focused **455 passed,
+2 deselected**、`make check` exit 0（**2547 passed**）、`git diff --check` /
+`git status --short` 空。
+
+**旧资产 hash 全部未变**（policy-v2、exogenous v2 三项 / v3 三项、B6 policy、
+`refs_v3`、`formal_splits_v4` 三份、`scenario/formal_scenario.py`）；
+`git diff --quiet` 逐项确认 `formal_scenario.py` / `formal_split_manifests.py` /
+policy-v2 / `refs_v3` / `formal_splits_v4/` / `.gitignore` **均未修改**。
+**范围外修改：无。**
+
+> **必须如实登记**：`80e3fe1` 的初版 policy-v3（`ae26e5a3…`）在 `bf5f7dd` 修正
+> 实现后 revision 前移，故 `d90376d` **重新生成**为 `5114c80d…`（候选尚未送审）。
+
+**⛔ 本卡只是 candidate**：现有 formal 入口**仍**使用 policy-v2；
+`formal_scenario_bundle_ready` / `formal_training_ready` **仍为 false**；
+**未生成** `refs_v4`、**未建** `formal_splits_v5`。
+**下一张卡是 M1.3f-e-b2-b**（切换正式入口、生成 `refs_v4` 与 `formal_splits_v5`、
+v1–v4 标 superseded 但逐字节保留、readiness 最终门禁）；**不得自行开始**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 
