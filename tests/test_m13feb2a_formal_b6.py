@@ -643,20 +643,34 @@ def _global_window() -> tuple[int, int]:
     return 10224 + VALIDATION_ORIGIN, 10224 + VALIDATION_ORIGIN + VALIDATION_CUTOFF
 
 
+# 每列的偏移量：刻意取「物理上温和」的值，使**风**也留在冻结功率曲线的定义域
+# （1.0–25.0 m/s）内。否则 `+50 m/s` 会越过 25 m/s 而触发**保守停机 0 kW**，
+# 与基线在切入附近的 0 kW 相同，wind_forecast 恰好不变——那会让反向控制
+# 「看起来没生效」，因此必须避免。
+COLUMN_DELTA = {
+    "price_sgd_per_kwh": 0.5,
+    "system_load_mw": 200.0,
+    "temperature_deg_c": 5.0,
+    "ghi_w_per_m2": 100.0,
+    "wind_speed_10m_mps": 3.0,
+}
+
+
+def _bump(frame, window: slice) -> None:
+    for column in TARGET_COLUMNS:
+        frame.loc[window, column] = frame.loc[window, column] + COLUMN_DELTA[column]
+
+
 def _mutate_target(frame) -> None:
     """修改全局 `[origin, origin+C)` 的**未来真值**（五列全部改变）。"""
     start, stop = _global_window()
-    for offset, column in enumerate(TARGET_COLUMNS):
-        window = slice(start, stop)
-        frame.loc[window, column] = frame.loc[window, column] + (10.0 * (offset + 1))
+    _bump(frame, slice(start, stop))
 
 
 def _mutate_history(frame) -> None:
     """反向控制：修改 `[origin-48, origin)` 的**历史窗口**。"""
     start, _ = _global_window()
-    for offset, column in enumerate(TARGET_COLUMNS):
-        window = slice(start - 48, start)
-        frame.loc[window, column] = frame.loc[window, column] + (10.0 * (offset + 1))
+    _bump(frame, slice(start - 48, start))
 
 
 @needs_assets
@@ -695,7 +709,10 @@ def test_history_mutation_changes_the_transformed_forecasts(tmp_path, monkeypatc
                     == after.loc[start - 48:start - 1, column].to_numpy()).all(), column
 
     mutated = _build(hist_chain)
-    for field in ("price_forecast", "load_forecast", "temperature_forecast"):
+    # 所有由历史窗口导出的序列都**必须**变化（含由因果驱动 forecast 变换而来的
+    # pv / wind —— 否则反向控制就没有证明「mutation 真的进入了链」）
+    for field in ("price_forecast", "load_forecast", "temperature_forecast",
+                  "pv_forecast", "wind_forecast"):
         assert list(getattr(mutated, field)) != list(getattr(baseline, field)), field
 
 
