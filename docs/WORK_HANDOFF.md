@@ -41,8 +41,9 @@
 > v3 三资产**已是已批准候选**，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
 > **统一入口 `load_verified_v3_bundle()`** 是 v3 的唯一可信入口；
 > **M1.3f-e-b2-a（formal B6 candidate + policy-v3）第一轮审核不通过，
-> 经 M1.3f-e-b2-a-R1 返修后执行完成，等待人工复审**（见 §7AG–§7AH）；
-> **formal 链在 e-b2-b 之前仍绑定 v2**；
+> 经 R1/R2 返修后已通过人工复审**（见 §7AG–§7AH）；
+> **M1.3f-e-b2-b（B6 formal 链正式切换、refs_v4 与 formal_splits_v5）
+> 执行完成，等待人工复审**（见 §7AJ）——**正式入口已切到 B6/v3/v5**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、
@@ -2397,6 +2398,71 @@ price/load/temperature/pv/wind 五条全部变化**。
 **范围外修改：无。**
 
 **⛔ 停止**：不开始 `M1.3f-e-b2-b`；mapper / 训练 / 评估 / M6 仍未开始。
+
+### 7AJ. M1.3f-e-b2-b：B6 formal 链正式切换、refs_v4 与 formal_splits_v5（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3f.md` §AM–§AO。**正式入口已从 v2 切到 B6/v3/v5**：
+
+```text
+build_scenario(synthetic=False)
+  → manifest_dir 必须为 "data/manifest"（否则显式失败）
+  → load_verified_split_manifest_v5（canonical-only，九角色 path+sha 绑定）
+  → local_origin_from_start（start→split-local origin 精确映射）
+  → build_formal_scenario_b6（生产 B6 构造器）
+```
+
+**新增产物**：
+
+| 资产 | SHA-256 |
+|---|---|
+| `configs/frozen_refs/refs_v4.json` | `1a53f0495bbb6a52c4972bf76e15d1ff5d78de5489f0b8ba7d13549e2894acba` |
+| `formal_splits_v5/train.json` | `95c007dfae5c408105bee5f51a21c56ce3a327837dddc4414013c49d4c61d9d2` |
+| `formal_splits_v5/validation.json` | `7e03dcc3a4ddd915c12e6c1d2bd815c85f7d6e0a229d4179390e5a9b01cbe01f` |
+| `formal_splits_v5/test.json` | `9fe8087d0e8260536d0bd81a167e95276000545b8a17e4f0d98b7b8e20068dd7` |
+
+schema：refs_v4 = `m1.3feb2b-frozen-refs-v1`、v5 = `m1.3feb2b-formal-split-manifest-v5`
+（**已 bump**）；`materializer_revision` 两者同为 `e21b19349bdde390ca5dbd240ededb9544df8057`；
+v5 三份**共享** `frozen_at_utc = 2026-09-19T16:43:34+00:00`。
+
+**`lambda_ref = 63.988 work-units/hour`**（`decision_id = B6-INTENSITY`），
+**不继承旧的 2000**；train 推导值 `price_ref=4.5`、`pv_ref_kw=350.90737`、
+`wind_ref_kw=262.317861`、`carbon_factor_ref=0.402`。
+
+**拒绝矩阵（实测）**：v1–v4 目录/位置、v5 副本、v5 symlink、伪造
+`inputs.frozen_refs.sha256`、伪造 revision、`refs_v3`/`refs.json` 当作 refs_v4、
+refs_v4 副本/symlink、伪造 `lambda_ref=2000`、非默认 `manifest_dir`、
+非法/越界/非候选 `start` —— **全部 REJECTED**。
+
+**幂等**：refs / splits 的 `--verify` 各连续 3 次均 exit 0，bytes/hash/`mtime_ns`
+不变、0 临时文件；原子失败无半成品；既存不同拒绝覆盖。
+
+**验收**：candidate **40 passed**、focused **423 passed, 2 deselected**、
+`make check` exit 0（**2611 passed**）、`make smoke` exit 0、
+`make train` **exit 2** 且不回退 synthetic、`git diff --check` / `git status --short` 空。
+
+**既有资产逐字节未变**（`git diff --quiet 61543a9..HEAD` 逐项确认）：
+`refs_v3`/`refs.json`、policy-v2/v3、B6 policy、exogenous v2/v3 各三项、
+`formal_splits_v4/`、`data/processed/`、canonical manifest、truth split、
+`scenario/formal_scenario.py`、`scenario/formal_split_manifests.py`、`envs/`、`safe_rl_v2/`。
+
+> **必须如实登记的两处**：
+> 1. **`.gitignore`** 新增两行**只**放行 `data/manifest/formal_splits_v5/`
+>    （独立提交）；v1–v4 既有规则一行未动。
+> 2. **既有测试迁移 1 处**：`test_m54a_train_entry.py` 的
+>    `assert "manifest" in combined` 与切换前的失败措辞耦合，已改为断言
+>    **真正的意图**（失败明确 + 透出原始错误 + **绝不**回退合成 + 不写成功 run），
+>    **未放宽任何东西**。其余 formal-path 用例传入的都是**非法 `start`**，
+>    切换后仍 fail closed，**无需迁移**。
+>
+> **mutation 回归的范围**：经 **`build_formal_scenario_b6()`**（正式入口所委托的
+> 生产构造器）执行，**不是**直接经 `build_scenario()`——因为 refs_v4 与 v5 的验证
+> 都会调用 `load_verified_v3_bundle()`，而它按设计把 v3 驱动表**对生产 canonical
+> 重算比对**，故「canonical 被改动的临时链」**不可能**满足它。正式入口对该构造器的
+> **委托**另有 spy 断言（`split`/`origin`/`forecast_cutoff` 逐项传入）。
+
+**⛔ 下一张卡是 M1.3g-e-b**（mapper）——但**在 env 接线/训练之前**；
+`make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
+readiness **仍为 false**；**不得自行开始** mapper / env 接线 / 训练 / 评估 / M6。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 
