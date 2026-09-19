@@ -1,0 +1,213 @@
+{
+  "frozen_at_utc": "2026-09-19T16:43:33+00:00",
+  "materializer_revision": "e21b19349bdde390ca5dbd240ededb9544df8057",
+  "note": "B6 train-only 归一化参考值：四个尺度由 canonical+exogenous v3 的 train 行实际重算；lambda_ref 绑定 B6 批准的 63.988 work-units/hour（decision_id=B6-INTENSITY，**不继承旧的 2000**）；其余保持声明物理尺度。冻结后所有方法共享，禁止按测试日重算（AGENTS §1.4）。",
+  "references": {
+    "carbon_factor_ref": {
+      "binding": [
+        "canonical_parquet",
+        "split_manifest",
+        "exogenous_parquet"
+      ],
+      "decision_id": null,
+      "derived_from": "carbon_intensity",
+      "method": "max",
+      "source_kind": "train_derived",
+      "training_range": "train",
+      "unit": "kgCO2/kWh",
+      "value": 0.402
+    },
+    "carbon_ref": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "kgCO2",
+      "value": 15.0
+    },
+    "cost_ref": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "SGD",
+      "value": 60.0
+    },
+    "grid_power_limit_kW": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "kW",
+      "value": 18.0
+    },
+    "lambda_ref": {
+      "binding": [
+        "b6_intensity_policy",
+        "forecast_policy_manifest"
+      ],
+      "decision_id": "B6-INTENSITY",
+      "derived_from": "b6_intensity_policy",
+      "method": "b6_approved_main_expected_rate",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "work-units/hour",
+      "value": 63.988
+    },
+    "peak_power_ref_kW": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "kW",
+      "value": 10.0
+    },
+    "peak_power_threshold_kW": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "kW",
+      "value": 18.0
+    },
+    "price_ref": {
+      "binding": [
+        "canonical_parquet",
+        "canonical_manifest",
+        "split_manifest"
+      ],
+      "decision_id": null,
+      "derived_from": "price_sgd_per_kwh",
+      "method": "max_abs",
+      "source_kind": "train_derived",
+      "training_range": "train",
+      "unit": "SGD/kWh",
+      "value": 4.5
+    },
+    "pv_ref_kw": {
+      "binding": [
+        "canonical_parquet",
+        "split_manifest",
+        "exogenous_parquet"
+      ],
+      "decision_id": null,
+      "derived_from": "local_pv_kw",
+      "method": "max",
+      "source_kind": "train_derived",
+      "training_range": "train",
+      "unit": "kW",
+      "value": 350.9073696124661
+    },
+    "queue_capacity_ref": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "work-units",
+      "value": 6000.0
+    },
+    "queue_ref": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "work-units",
+      "value": 6000.0
+    },
+    "sla_penalty_ref": {
+      "binding": [],
+      "decision_id": null,
+      "derived_from": "declared_physical_scale",
+      "method": "declared_physical_scale",
+      "source_kind": "declared_physical_scale",
+      "training_range": "not_applicable",
+      "unit": "SGD",
+      "value": 50.0
+    },
+    "wind_ref_kw": {
+      "binding": [
+        "canonical_parquet",
+        "split_manifest",
+        "exogenous_parquet"
+      ],
+      "decision_id": null,
+      "derived_from": "wind_generation_kw",
+      "method": "max",
+      "source_kind": "train_derived",
+      "training_range": "train",
+      "unit": "kW",
+      "value": 262.3178613166015
+    }
+  },
+  "schema_version": "m1.3feb2b-frozen-refs-v1",
+  "sources": {
+    "b6_intensity_policy": {
+      "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+      "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+    },
+    "canonical_manifest": {
+      "path": "data/manifest/singapore_2024_half_hour.json",
+      "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+    },
+    "canonical_parquet": {
+      "path": "data/processed/singapore_2024/half_hour.parquet",
+      "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+    },
+    "exogenous_manifest": {
+      "path": "data/manifest/singapore_2024_exogenous_v3.json",
+      "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+    },
+    "exogenous_parquet": {
+      "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+      "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "exogenous_source_manifest": {
+      "path": "data/manifest/m13f_materialization_sources_v4.json",
+      "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+    },
+    "forecast_policy_manifest": {
+      "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+      "sha256": "926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb"
+    },
+    "split_manifest": {
+      "path": "data/manifest/singapore_2024_splits.json",
+      "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+    }
+  },
+  "training_range": {
+    "end_exclusive": "2024-08-01T00:00:00+08:00",
+    "row_end_exclusive": 10224,
+    "row_start": 0,
+    "split": "train",
+    "start": "2024-01-01T00:00:00+08:00"
+  },
+  "units": {
+    "carbon_factor_ref": "kgCO2/kWh",
+    "carbon_ref": "kgCO2",
+    "cost_ref": "SGD",
+    "grid_power_limit_kW": "kW",
+    "lambda_ref": "work-units/hour",
+    "peak_power_ref_kW": "kW",
+    "peak_power_threshold_kW": "kW",
+    "price_ref": "SGD/kWh",
+    "pv_ref_kw": "kW",
+    "queue_capacity_ref": "work-units",
+    "queue_ref": "work-units",
+    "sla_penalty_ref": "SGD",
+    "wind_ref_kw": "kW"
+  }
+}

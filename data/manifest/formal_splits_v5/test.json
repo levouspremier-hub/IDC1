@@ -1,0 +1,65 @@
+{
+  "candidate_origins": {
+    "end_exclusive": 4416,
+    "start": 0
+  },
+  "contract_version": "contract-v9",
+  "frequency": "30min",
+  "frozen_at_utc": "2026-09-19T16:43:34+00:00",
+  "history_steps": 48,
+  "inputs": {
+    "b6_intensity_policy": {
+      "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+      "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+    },
+    "canonical_manifest": {
+      "path": "data/manifest/singapore_2024_half_hour.json",
+      "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+    },
+    "canonical_parquet": {
+      "path": "data/processed/singapore_2024/half_hour.parquet",
+      "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+    },
+    "exogenous_manifest": {
+      "path": "data/manifest/singapore_2024_exogenous_v3.json",
+      "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+    },
+    "exogenous_parquet": {
+      "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+      "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "exogenous_source_manifest": {
+      "path": "data/manifest/m13f_materialization_sources_v4.json",
+      "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+    },
+    "forecast_policy_manifest": {
+      "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+      "sha256": "926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb"
+    },
+    "frozen_refs": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "1a53f0495bbb6a52c4972bf76e15d1ff5d78de5489f0b8ba7d13549e2894acba"
+    },
+    "split_manifest": {
+      "path": "data/manifest/singapore_2024_splits.json",
+      "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+    }
+  },
+  "materializer_revision": "e21b19349bdde390ca5dbd240ededb9544df8057",
+  "readiness": {
+    "formal_env_ready": false,
+    "formal_training_ready": false
+  },
+  "schema": "m1.3feb2b-formal-split-manifest-v5",
+  "split": "test",
+  "split_rows": {
+    "count": 4416,
+    "end_exclusive": 17568,
+    "start": 13152
+  },
+  "time_range": {
+    "end_exclusive": "2025-01-01T00:00:00+08:00",
+    "start": "2024-10-01T00:00:00+08:00",
+    "timezone": "Asia/Singapore"
+  }
+}
