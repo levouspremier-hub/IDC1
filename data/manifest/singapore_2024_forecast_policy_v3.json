@@ -25,9 +25,9 @@
   "exogenous_v3_source_manifest_path": "data/manifest/m13f_materialization_sources_v4.json",
   "exogenous_v3_source_manifest_sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557",
   "frequency": "30min",
-  "frozen_at_utc": "2026-09-19T12:04:17+00:00",
+  "frozen_at_utc": "2026-09-19T15:14:51+00:00",
   "information_policy": "closed_open_[origin-48, origin)",
-  "materializer_revision": "bf5f7ddb144097d64a658c7790fb0c358dde4ee6",
+  "materializer_revision": "b4e5833a22f4bfeaf86708d23027e95b88ac4c02",
   "period_steps": 48,
   "readiness": {
     "available_driver_forecasts_ready": true,
