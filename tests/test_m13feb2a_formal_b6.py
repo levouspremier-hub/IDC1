@@ -153,7 +153,7 @@ def test_arrival_forecast_is_expected_template_times_b6_scale():
     kwargs = _chain_kwargs(origin=48)
     bundle = m.build_formal_scenario_b6(**kwargs)
     template = m.verified_v3_template()
-    target = m.target_timestamps_for(**kwargs)
+    target = m.target_timestamps_for("train", origin=48, forecast_cutoff=4)
     from scenario.exogenous_drivers import arrival_template_slot
     slots = arrival_template_slot(pd.DatetimeIndex(target))
     expected = [float(template[int(s)]) * B6_ARRIVAL_MEAN for s in slots]
@@ -177,10 +177,12 @@ def test_arrival_forecast_expectation_is_31_994():
 def test_poisson_realization_does_not_change_the_forecast(tmp_path, monkeypatch):
     """把 v3 parquet 的 arrival 列整体替换（realization 改变）→ forecast 不变。"""
     m = b6_formal()
+    import scenario.exogenous_drivers_b6 as exo
+
     baseline = m.build_formal_scenario_b6(**_chain_kwargs(origin=48))
 
-    # 直接在**已验签**的 bundle 之上替换 realization：forecast 必须不变
-    real_loader = m.load_verified_v3_bundle
+    # 替换**已验签** bundle 里的 realization：forecast 必须不变
+    real_loader = exo.load_verified_v3_bundle
 
     def forged_loader():
         verified = real_loader()
@@ -189,7 +191,7 @@ def test_poisson_realization_does_not_change_the_forecast(tmp_path, monkeypatch)
         verified["frame"] = frame
         return verified
 
-    monkeypatch.setattr(m, "load_verified_v3_bundle", forged_loader)
+    monkeypatch.setattr(exo, "load_verified_v3_bundle", forged_loader)
     after = m.build_formal_scenario_b6(**_chain_kwargs(origin=48))
     assert list(after.arrival_forecast) == list(baseline.arrival_forecast)
 
@@ -302,7 +304,7 @@ def test_provenance_source_digests_match_live_files():
     m = b6_formal()
     bundle = m.build_formal_scenario_b6(**_chain_kwargs(origin=48))
     prov = bundle.forecast_provenance
-    series = getattr(prov, m.FORMAL_B6_SOURCE_KINDS[0])
+    series = getattr(prov, next(iter(m.FORMAL_B6_SOURCE_KINDS)))
     by_role = {d.role: d for d in series.sources}
     for role, path, expected in (
         ("b6_intensity_policy", B6_POLICY, _sha256(B6_POLICY)),

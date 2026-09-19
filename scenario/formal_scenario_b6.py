@@ -63,6 +63,7 @@ from scenario.formal_scenario import (
     wind_forecast,
 )
 from scenario.splits import (
+    SplitError,
     SplitName,
     _require_canonical_utc,
     _require_dict,
@@ -294,7 +295,11 @@ def load_verified_policy_v3(path: Path | str | None = None) -> dict:
     except (OSError, json.JSONDecodeError) as error:
         raise FormalB6Error(f"policy-v3 不可读：{error}") from error
     payload = _require_dict(payload, field="policy-v3")
-    _require_exact_keys(payload, field="policy-v3", expected=POLICY_V3_KEYS)
+    # 结构校验的 SplitError 统一收敛为**本模块的明确失败**（不泄漏内建异常类型）
+    try:
+        _require_exact_keys(payload, field="policy-v3", expected=POLICY_V3_KEYS)
+    except SplitError as error:
+        raise FormalB6Error(f"policy-v3 顶层键集合不符：{error}") from error
 
     if payload["schema"] != POLICY_V3_SCHEMA:
         raise FormalB6Error(
