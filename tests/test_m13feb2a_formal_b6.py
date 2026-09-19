@@ -656,21 +656,31 @@ COLUMN_DELTA = {
 }
 
 
-def _bump(frame, window: slice) -> None:
+def _bump(frame, start: int, stop: int) -> None:
+    """把**半开**位置窗口 `[start, stop)` 的五列各自加上 `COLUMN_DELTA`。
+
+    **R2 修复**：`frame.loc[slice(start, stop), column]` 在 RangeIndex 上是
+    label-based 且**两端包含**，曾使 target 改 5 行（`11224..11228`）、
+    history 改 49 行（`11176..11224`）并**越界进入 target 首行**。
+    这里先用 `frame.index[start:stop]` 取**标签**（位置切片，半开），
+    再按显式标签列表赋值——`Series.loc[labels]` 是**集合**语义，不含区间推断。
+    """
+    labels = frame.index[start:stop]
+    assert len(labels) == stop - start, "半开窗口必须恰好取到 stop - start 个标签"
     for column in TARGET_COLUMNS:
-        frame.loc[window, column] = frame.loc[window, column] + COLUMN_DELTA[column]
+        frame.loc[labels, column] = frame.loc[labels, column] + COLUMN_DELTA[column]
 
 
 def _mutate_target(frame) -> None:
     """修改全局 `[origin, origin+C)` 的**未来真值**（五列全部改变）。"""
     start, stop = _global_window()
-    _bump(frame, slice(start, stop))
+    _bump(frame, start, stop)
 
 
 def _mutate_history(frame) -> None:
     """反向控制：修改 `[origin-48, origin)` 的**历史窗口**。"""
     start, _ = _global_window()
-    _bump(frame, slice(start - 48, start))
+    _bump(frame, start - 48, start)
 
 
 def _changed_rows(base: pd.DataFrame, mutated: pd.DataFrame) -> dict[str, list[int]]:
