@@ -588,6 +588,9 @@ def _temp_chain(tmp_path, monkeypatch, *, mutate=None) -> dict:
     sp = json.loads(SPLIT_MANIFEST.read_text(encoding="utf-8"))
     sp["canonical_parquet_sha256"] = _sha256(parquet)
     sp["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    # 临时链在仓库之外，因此逻辑路径声明为 <external>/（M1.3d 的既有约定）
+    sp["canonical_parquet_path"] = "<external>/half_hour.parquet"
+    sp["canonical_manifest_path"] = "<external>/singapore_2024_half_hour.json"
     sp["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
     if mutate is not None:
         sp["train_only_statistics"] = splits_module.train_only_statistics(

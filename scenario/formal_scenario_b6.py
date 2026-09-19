@@ -484,14 +484,15 @@ def build_formal_scenario_b6(
     policy_v3_path = _require_canonical_location(policy_manifest_path)
 
     policy = load_verified_policy_v3(policy_v3_path)
-    # 声明的上游对象必须等于本次调用**实际使用**的对象
-    for field, actual in (("canonical_parquet_path", canonical_parquet_path),
-                          ("canonical_manifest_path", canonical_manifest_path),
-                          ("split_manifest_path", split_manifest_path)):
-        if policy[field] != logical_repo_path(actual):
+    # 声明的上游对象必须是**冻结的 canonical 逻辑路径**（其 SHA-256 已由
+    # `load_verified_policy_v3` 对着 resolver 解析出的**实际文件**逐条校验）。
+    for field, logical in (("canonical_parquet_path", CANONICAL_PARQUET_LOGICAL),
+                           ("canonical_manifest_path", CANONICAL_MANIFEST_LOGICAL),
+                           ("split_manifest_path", SPLIT_MANIFEST_LOGICAL)):
+        if policy[field] != logical:
             raise FormalB6Error(
-                f"policy-v3 的 {field} 与实际提供的对象不符："
-                f"声明={policy[field]!r} 实际={logical_repo_path(actual)!r}"
+                f"policy-v3 的 {field} 必须精确等于 {logical!r}，"
+                f"实际 {policy[field]!r}"
             )
 
     global_origin = validate_forecast_origin(split, origin, forecast_cutoff)
