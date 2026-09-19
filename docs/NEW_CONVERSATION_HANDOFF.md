@@ -197,7 +197,9 @@ queue_capacity_ref=6000, cost_ref=60   declared physical scales
 
 **B6 正式链只可用目录 `data/manifest/formal_splits_v5/`**
 （schema `m1.3feb2b-formal-split-manifest-v5`，**已 bump**）。
-v1–v4 **全部 superseded**，逐字节保留但不得 fallback。
+
+
+**✅ `M1.3f-e-b2-b` / `-R1` 执行完成（等待人工复审）**：b2-b 第一轮审核不批准，R1 修三项 P1——① v5 loader 改为**整体重建比对**（改前改 `time_range` 起止即得 `FORGED_TIME_RANGE_ACCEPTED`），差异时输出差异顶层字段；② `frozen_at_utc` **锚定到已验签 refs_v4**（⇒ 必须先物化 refs_v4 再物化 v5）；③ revision 两集合各扩到 **9 项**（补入 `scenario/scenario.py` 与两个 materializer）；④ 伪事务测试换成**真实** `materialize_*()` 三阶段注入（四产物全不存在、零临时文件）。R1 后四产物：refs_v4 `b5b64ef2…`、v5 train `8608372f…` / validation `3f16ad3a…` / test `aaacd459…`；`materializer_revision = 577f1db…`；共享 `frozen_at_utc 2026-09-19T17:15:19+00:00`。`make check` **2632 passed**；**旧资产逐字节未变**。**public-entry mutation 回归仍未实现**（范围声明未改）。v1–v4 **全部 superseded**，逐字节保留但不得 fallback。
 
 ~~只可用目录 data/manifest/formal_splits_v4/~~（历史）
 
