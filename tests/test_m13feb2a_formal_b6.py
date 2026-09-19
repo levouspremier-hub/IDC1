@@ -14,6 +14,7 @@ import importlib
 import json
 import pathlib
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -367,21 +368,46 @@ def test_verify_is_idempotent():
     assert leftovers == []
 
 
-# --- 13. 原子失败无半成品 -------------------------------------------------------
+# --- 13. 原子失败无半成品（**R1：走真实 materializer 事务**） --------------------
+
+def _empty_policy_dir(tmp_path) -> Path:
+    d = tmp_path / "repo" / "data" / "manifest"
+    d.mkdir(parents=True)
+    return d
+
 
 @needs_assets
-def test_first_write_failure_leaves_nothing(tmp_path, monkeypatch):
+def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch):
+    """在**真实** `materialize_policy_v3()` 事务中注入写入失败。"""
     mod = materializer()
-    target = tmp_path / "policy_v3.json"
+    m = b6_formal()
+    manifest_dir = _empty_policy_dir(tmp_path)
+    monkeypatch.setattr(m, "_canonical_policy_v3_dir", lambda: manifest_dir)
+    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
 
     def boom(path, body):
-        raise RuntimeError("injected")
+        raise RuntimeError("injected write failure")
 
-    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
     monkeypatch.setattr(mod, "_atomic_write_bytes", boom)
     with pytest.raises(RuntimeError):
-        mod._atomic_write_bytes(target, b"{}")  # noqa: SLF001
-    assert list(tmp_path.iterdir()) == []
+        mod.materialize_policy_v3(frozen_at_utc="2026-09-19T00:00:00+00:00")
+
+    assert not (manifest_dir / "singapore_2024_forecast_policy_v3.json").exists()
+    assert [p for p in manifest_dir.iterdir() if p.name.startswith(".")] == []
+
+
+@needs_assets
+def test_existing_different_policy_v3_is_still_refused(tmp_path, monkeypatch):
+    """R1 **不得**削弱「已存在且不同则拒绝覆盖」。"""
+    mod = materializer()
+    m = b6_formal()
+    manifest_dir = _empty_policy_dir(tmp_path)
+    monkeypatch.setattr(m, "_canonical_policy_v3_dir", lambda: manifest_dir)
+    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
+    target = manifest_dir / "singapore_2024_forecast_policy_v3.json"
+    target.write_text('{"schema": "forged"}')
+    with pytest.raises(mod.FormalB6PolicyError):
+        mod.materialize_policy_v3(frozen_at_utc="2026-09-19T00:00:00+00:00")
 
 
 # --- 14. 旧资产 hash 不变 -------------------------------------------------------
@@ -395,3 +421,285 @@ def test_protected_assets_are_untouched():
     assert FORMAL_SCENARIO.is_file()
     assert POLICY_V2.is_file()
     assert V4_TRAIN.is_file()
+
+
+# =============================================================================
+# M1.3f-e-b2-a-R1：policy-v3 语义、revision 覆盖与真实 leakage 回归
+# =============================================================================
+
+def _canonical_json(payload: dict) -> str:
+    """与生产 `_canonical_json` **逐字节一致**的序列化（防止夹具假绿）。"""
+    return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def _forged_policy_v3(tmp_path, monkeypatch, mutate) -> Path:
+    """把 policy-v3 复制到临时 canonical 目录并篡改，monkeypatch 私有 resolver。"""
+    m = b6_formal()
+    d = tmp_path / "canonical_dir"
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / "singapore_2024_forecast_policy_v3.json"
+    payload = json.loads(POLICY_V3.read_text(encoding="utf-8"))
+    mutate(payload)
+    target.write_text(_canonical_json(payload))
+    monkeypatch.setattr(m, "_canonical_policy_v3_dir", lambda: d)
+    return target
+
+
+# --- R1-1. 未篡改接受性对照（防止全部 REJECTED 是夹具假绿） ----------------------
+
+@needs_assets
+def test_untampered_policy_v3_is_accepted(tmp_path, monkeypatch):
+    m = b6_formal()
+    d = tmp_path / "canonical_dir"
+    d.mkdir(parents=True)
+    target = d / "singapore_2024_forecast_policy_v3.json"
+    shutil.copy(POLICY_V3, target)
+    monkeypatch.setattr(m, "_canonical_policy_v3_dir", lambda: d)
+    verified = m.load_verified_policy_v3()
+    assert verified["schema"] == m.POLICY_V3_SCHEMA
+
+
+# --- R1-2. policy-v3 语义伪造（改前 ACCEPTED，改后必须 REJECTED） ---------------
+
+@needs_assets
+@pytest.mark.parametrize("mutate", [
+    pytest.param(lambda p: p.update(arrival_forecast_rule="lambda_t = 1000"),
+                 id="arrival_forecast_rule"),
+    pytest.param(lambda p: p.update(seed_policy=20240916), id="seed_policy"),
+    pytest.param(lambda p: p.update(method="forged"), id="extra_business_field"),
+    pytest.param(lambda p: p["supersedes"].update(policy_manifest_sha256="0" * 64),
+                 id="supersedes_sha"),
+    pytest.param(lambda p: p["supersedes"].update(policy_manifest_schema="forged"),
+                 id="supersedes_schema"),
+    pytest.param(lambda p: p["supersedes"].update(note="forged"), id="supersedes_note"),
+    pytest.param(lambda p: p["supersedes"].update(status="replaced"), id="supersedes_status"),
+    pytest.param(lambda p: p["readiness"].update(formal_b6_scenario_candidate_ready=False),
+                 id="candidate_ready"),
+    pytest.param(lambda p: p.update(information_policy="forged"), id="information_policy"),
+    pytest.param(lambda p: p.update(target_policy="forged"), id="target_policy"),
+    pytest.param(lambda p: p.update(arrival_forecast_uses_expected=False),
+                 id="uses_expected"),
+    pytest.param(lambda p: p.update(empirical_workload_claim=True), id="empirical_claim"),
+    pytest.param(lambda p: p.update(contract_version="contract-v8"), id="contract"),
+    pytest.param(lambda p: p.update(period_steps=47), id="period_steps"),
+    pytest.param(lambda p: p.update(frequency="1h"), id="frequency"),
+])
+def test_forged_policy_v3_semantics_are_rejected(tmp_path, monkeypatch, mutate):
+    m = b6_formal()
+    target = _forged_policy_v3(tmp_path, monkeypatch, mutate)
+    with pytest.raises(m.FormalB6Error):
+        m.load_verified_policy_v3(target)
+
+
+@needs_assets
+def test_policy_v3_must_equal_the_rebuilt_candidate(tmp_path, monkeypatch):
+    """整体重建比对：任何未抽查字段的伪造都会被逐字段相等拒绝。"""
+    m = b6_formal()
+    target = _forged_policy_v3(
+        tmp_path, monkeypatch,
+        lambda p: p.update(arrival_forecast_rule="lambda_t = template * 1000"))
+    with pytest.raises(m.FormalB6Error):
+        m.load_verified_policy_v3(target)
+
+
+# --- R1-3. revision 覆盖 --------------------------------------------------------
+
+REQUIRED_REVISION_PATHS = {
+    "contracts/__init__.py",
+    "contracts/models.py",
+    "contracts/validators.py",
+    "scenario/forecast.py",
+    "scripts/materialize_singapore_forecast_policy.py",
+    "scenario/splits.py",
+    "scenario/formal_scenario.py",
+    "scenario/exogenous_drivers.py",
+    "scenario/arrival_intensity_policy.py",
+    "scenario/exogenous_drivers_b6.py",
+    "scenario/formal_scenario_b6.py",
+    "scripts/materialize_formal_forecast_policy_b6.py",
+}
+
+
+@needs_assets
+def test_revision_paths_cover_every_semantic_implementation_file():
+    m = b6_formal()
+    missing = REQUIRED_REVISION_PATHS - set(m.B6_FORMAL_SOURCE_PATHS)
+    assert missing == set(), f"B6_FORMAL_SOURCE_PATHS 缺少 {sorted(missing)}"
+
+
+@needs_assets
+def test_dirty_check_and_revision_use_the_same_path_set(monkeypatch):
+    """dirty 检查与 revision 必须由**同一**集合驱动。"""
+    m = b6_formal()
+    seen: list[tuple] = []
+    real_git = m._git
+
+    def spy(*args):
+        seen.append(args)
+        return real_git(*args)
+
+    monkeypatch.setattr(m, "_git", spy)
+    m.b6_formal_code_revision()
+    m._generator_is_dirty()
+    assert len(seen) == 2
+    rev_paths = tuple(seen[0])[-len(m.B6_FORMAL_SOURCE_PATHS):]
+    dirty_paths = tuple(seen[1])[-len(m.B6_FORMAL_SOURCE_PATHS):]
+    assert rev_paths == tuple(m.B6_FORMAL_SOURCE_PATHS)
+    assert dirty_paths == tuple(m.B6_FORMAL_SOURCE_PATHS)
+
+
+# --- R1-4. 真实 future-truth mutation 回归 ---------------------------------------
+
+VALIDATION_ORIGIN = 1000
+VALIDATION_CUTOFF = 4
+TARGET_COLUMNS = ("price_sgd_per_kwh", "system_load_mw", "temperature_deg_c",
+                  "ghi_w_per_m2", "wind_speed_10m_mps")
+
+
+def _temp_chain(tmp_path, monkeypatch, *, mutate=None) -> dict:
+    """构造**完整自洽**的临时链：canonical / split / policy-v2 / policy-v3。
+
+    `mutate(frame)` 就地修改 canonical；随后 canonical manifest、split manifest、
+    policy-v2、policy-v3 的 path/hash **全部重新同步**，因此生产入口看到的是
+    一条真实、自洽且**已改变**的链。
+    """
+    m = b6_formal()
+    import scenario.splits as splits_module
+    from scripts.materialize_singapore_forecast_policy import build_forecast_policy_manifest
+
+    root = tmp_path / "repo"
+    man = root / "data/manifest"
+    proc = root / "data/processed/singapore_2024"
+    man.mkdir(parents=True)
+    proc.mkdir(parents=True)
+
+    frame = pd.read_parquet(CANONICAL_PARQUET)
+    if mutate is not None:
+        mutate(frame)
+    parquet = proc / "half_hour.parquet"
+    frame.to_parquet(parquet, index=False)
+
+    canonical_manifest = man / "singapore_2024_half_hour.json"
+    cm = json.loads(CANONICAL_MANIFEST.read_text(encoding="utf-8"))
+    cm["output_parquet_sha256"] = _sha256(parquet)
+    canonical_manifest.write_text(_canonical_json(cm))
+
+    split_manifest = man / "singapore_2024_splits.json"
+    sp = json.loads(SPLIT_MANIFEST.read_text(encoding="utf-8"))
+    sp["canonical_parquet_sha256"] = _sha256(parquet)
+    sp["canonical_manifest_sha256"] = _sha256(canonical_manifest)
+    sp["train_only_statistics_source"]["canonical_parquet_sha256"] = _sha256(parquet)
+    if mutate is not None:
+        sp["train_only_statistics"] = splits_module.train_only_statistics(
+            frame.iloc[: sp["splits"]["train"]["row_end_exclusive"]])
+    split_manifest.write_text(_canonical_json(sp))
+
+    policy_v2 = man / "singapore_2024_forecast_policy_v2.json"
+    p2 = build_forecast_policy_manifest(
+        canonical_parquet_path=parquet,
+        canonical_manifest_path=canonical_manifest,
+        split_manifest_path=split_manifest,
+        frozen_at_utc="2026-09-18T00:00:00+00:00",
+    )
+    policy_v2.write_text(_canonical_json(p2))
+
+    # 把**生产入口**的私有 resolver 指向临时链
+    monkeypatch.setattr(m, "_canonical_policy_v3_dir", lambda: man)
+    monkeypatch.setattr(m, "_canonical_parquet_path", lambda: parquet)
+    monkeypatch.setattr(m, "_canonical_manifest_path", lambda: canonical_manifest)
+    monkeypatch.setattr(m, "_split_manifest_path", lambda: split_manifest)
+    monkeypatch.setattr(m, "_seasonal_policy_v2_path", lambda: policy_v2)
+
+    policy_v3 = man / "singapore_2024_forecast_policy_v3.json"
+    p3 = m.build_policy_v3_manifest(frozen_at_utc="2026-09-18T00:00:00+00:00")
+    policy_v3.write_text(_canonical_json(p3))
+
+    return {
+        "canonical_parquet_path": parquet,
+        "canonical_manifest_path": canonical_manifest,
+        "split_manifest_path": split_manifest,
+        "policy_manifest_path": policy_v3,
+        "frame": frame,
+    }
+
+
+def _build(chain: dict):
+    return b6_formal().build_formal_scenario_b6(
+        split="validation",
+        origin=VALIDATION_ORIGIN,
+        forecast_cutoff=VALIDATION_CUTOFF,
+        canonical_parquet_path=chain["canonical_parquet_path"],
+        canonical_manifest_path=chain["canonical_manifest_path"],
+        split_manifest_path=chain["split_manifest_path"],
+        policy_manifest_path=chain["policy_manifest_path"],
+    )
+
+
+def _global_window() -> tuple[int, int]:
+    """validation 的 `origin=1000` 对应的全局行区间与 target 窗口。"""
+    return 10224 + VALIDATION_ORIGIN, 10224 + VALIDATION_ORIGIN + VALIDATION_CUTOFF
+
+
+def _mutate_target(frame) -> None:
+    """修改全局 `[origin, origin+C)` 的**未来真值**（五列全部改变）。"""
+    start, stop = _global_window()
+    for offset, column in enumerate(TARGET_COLUMNS):
+        window = slice(start, stop)
+        frame.loc[window, column] = frame.loc[window, column] + (10.0 * (offset + 1))
+
+
+def _mutate_history(frame) -> None:
+    """反向控制：修改 `[origin-48, origin)` 的**历史窗口**。"""
+    start, _ = _global_window()
+    for offset, column in enumerate(TARGET_COLUMNS):
+        window = slice(start - 48, start)
+        frame.loc[window, column] = frame.loc[window, column] + (10.0 * (offset + 1))
+
+
+@needs_assets
+def test_target_future_mutation_leaves_all_seven_forecasts_unchanged(
+        tmp_path, monkeypatch):
+    """**真实** mutation：改 `[origin, origin+C)` 的未来真值 → 七条 forecast 逐位不变。"""
+    base_chain = _temp_chain(tmp_path / "base", monkeypatch)
+    baseline = _build(base_chain)
+
+    mutated_chain = _temp_chain(tmp_path / "mut", monkeypatch, mutate=_mutate_target)
+    # mutation 必须**真的**改了数据（否则用例无意义）
+    start, stop = _global_window()
+    before = pd.read_parquet(base_chain["canonical_parquet_path"])
+    after = pd.read_parquet(mutated_chain["canonical_parquet_path"])
+    for column in TARGET_COLUMNS:
+        assert not (before.loc[start:stop - 1, column].to_numpy()
+                    == after.loc[start:stop - 1, column].to_numpy()).all(), column
+
+    mutated = _build(mutated_chain)
+    for field in b6_formal().FORMAL_B6_SOURCE_KINDS:
+        assert list(getattr(mutated, field)) == list(getattr(baseline, field)), field
+
+
+@needs_assets
+def test_history_mutation_changes_the_transformed_forecasts(tmp_path, monkeypatch):
+    """**反向控制**：改 `[origin-48, origin)` → 对应 forecast **必须变化**。"""
+    base_chain = _temp_chain(tmp_path / "base", monkeypatch)
+    baseline = _build(base_chain)
+
+    hist_chain = _temp_chain(tmp_path / "hist", monkeypatch, mutate=_mutate_history)
+    start, _ = _global_window()
+    before = pd.read_parquet(base_chain["canonical_parquet_path"])
+    after = pd.read_parquet(hist_chain["canonical_parquet_path"])
+    for column in TARGET_COLUMNS:
+        assert not (before.loc[start - 48:start - 1, column].to_numpy()
+                    == after.loc[start - 48:start - 1, column].to_numpy()).all(), column
+
+    mutated = _build(hist_chain)
+    for field in ("price_forecast", "load_forecast", "temperature_forecast"):
+        assert list(getattr(mutated, field)) != list(getattr(baseline, field)), field
+
+
+# --- R1-5. template 源经私有解析器，但生产路径下恒等 -----------------------------
+
+@needs_assets
+def test_template_source_resolver_matches_the_production_bundle():
+    """`_v3_template_source()` 在生产路径下必须与 verified v3 template **恒等**。"""
+    m = b6_formal()
+    assert (m._v3_template_source() == m.verified_v3_template()).all()
