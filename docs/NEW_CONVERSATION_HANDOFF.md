@@ -172,7 +172,11 @@ scenario/formal_scenario.py 的 formal kernel 已构造七条 forecast：
 
 ### 8.1 Refs
 
-只可用 configs/frozen_refs/refs_v3.json。
+**B6 正式链只可用 `configs/frozen_refs/refs_v4.json`**
+（schema `m1.3feb2b-frozen-refs-v1`，SHA-256 `1a53f049…`）。
+
+`refs_v3.json` 与 `refs.json`（v2）**逐字节保留**但**不得**被正式链使用（无 fallback）。
+**`lambda_ref = 63.988 work-units/hour`**（`decision_id=B6-INTENSITY`），**不继承旧的 2000**。
 
 configs/frozen_refs/refs.json 是历史 v2，标记 superseded_pre_trust_boundary_fix，保留但不可被 g-c/e/f 使用。
 
@@ -191,7 +195,11 @@ queue_capacity_ref=6000, cost_ref=60   declared physical scales
 
 ### 8.2 Formal split triad
 
-只可用目录 data/manifest/formal_splits_v4/。
+**B6 正式链只可用目录 `data/manifest/formal_splits_v5/`**
+（schema `m1.3feb2b-formal-split-manifest-v5`，**已 bump**）。
+v1–v4 **全部 superseded**，逐字节保留但不得 fallback。
+
+~~只可用目录 data/manifest/formal_splits_v4/~~（历史）
 
 schema 是 m1.3g-formal-split-manifest-v4；三个文件共享一个 frozen_at_utc，并以 triad 原子物化。
 
