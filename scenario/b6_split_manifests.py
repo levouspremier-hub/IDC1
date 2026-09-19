@@ -349,12 +349,25 @@ def expected_candidate_origins(split: str, split_rows: dict) -> dict[str, int]:
     return {"start": CANDIDATE_ORIGIN_START[split], "end_exclusive": end - start}
 
 
+def _refs_v4_frozen_at_utc() -> str:
+    """v5 triad 的**唯一**冻结时刻锚点：`refs_v4` 的 `frozen_at_utc`。
+
+    **R1**：`frozen_at_utc` 若可自由填写，则「改它」在重建比对下**自洽**，
+    无法被发现。这里把它**绑到一个 live 锚点**（已验签的 `refs_v4`），
+    使任何与锚点不符的取值都被重建比对拒绝。
+    """
+    from scenario.b6_refs import load_verified_refs_v4
+
+    return str(load_verified_refs_v4()["frozen_at_utc"])
+
+
 def build_split_manifest_v5(split: str, *,
                             frozen_at_utc: str | None = None) -> dict:
     """构造候选 v5 manifest（**只读**上游，逐层严格校验）。
 
     **公开签名只接受 `split` 与冻结时间戳**：输入路径由本模块**固定**，
     不存在 `inputs` mapping、`expected_*` 信任根、DataFrame 注入或 `**kwargs`。
+    `frozen_at_utc` 省略时取 **`refs_v4` 的冻结时刻**（唯一锚点）。
     """
     if split not in SPLIT_NAMES:
         raise SplitManifestV5Error(
@@ -390,7 +403,7 @@ def build_split_manifest_v5(split: str, *,
         },
         "readiness": dict(READINESS),
         "materializer_revision": resolve_materializer_revision(),
-        "frozen_at_utc": frozen_at_utc or utc_now(),
+        "frozen_at_utc": frozen_at_utc or _refs_v4_frozen_at_utc(),
     }
     text = json.dumps(manifest, ensure_ascii=False)
     if "/Users/" in text or str(REPO_ROOT) in text:
@@ -541,7 +554,7 @@ def load_verified_split_manifest_v5(path: Path | str | None = None, *,
     # 因此「时长不变、但起止时刻被改」的伪造（以及 frozen_at_utc、split_rows、
     # candidate_origins、readiness、九角色 path/sha……）可以**静默通过**。
     rebuilt = build_split_manifest_v5(
-        expected_split, frozen_at_utc=validated["frozen_at_utc"])
+        expected_split, frozen_at_utc=_refs_v4_frozen_at_utc())
     if rebuilt != validated:
         differing = sorted(
             key for key in set(rebuilt) | set(validated)
@@ -636,7 +649,12 @@ def materialize_split_manifest_triad_v5(*, frozen_at_utc: str | None = None) -> 
         existing.append(payload)
     if existing and len({p["frozen_at_utc"] for p in existing}) != 1:
         raise SplitManifestV5Error("既有的 v5 manifest 之间 frozen_at_utc 不一致")
-    stamp = frozen_at_utc or (existing[0]["frozen_at_utc"] if existing else utc_now())
+    anchor = _refs_v4_frozen_at_utc()
+    stamp = frozen_at_utc or (existing[0]["frozen_at_utc"] if existing else anchor)
+    if stamp != anchor:
+        raise SplitManifestV5Error(
+            f"v5 triad 的 frozen_at_utc 必须是 refs_v4 的冻结时刻 {anchor!r}；"
+            f"实际 {stamp!r}")
 
     written: list[Path] = []
     try:
