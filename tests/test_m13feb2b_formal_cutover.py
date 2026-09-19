@@ -380,21 +380,27 @@ class _Patch:
 
 
 def _temp_chain(tmp_path, patch: _Patch, *, mutate=None) -> dict:
-    """完整自洽的临时 B6 链：canonical → split → policy-v2 → policy-v3 → refs_v4 → v5。"""
+    """完整自洽的**临时 canonical→policy 链**（用于 mutation 回归）。
+
+    **范围声明（必须如实）**：本 fixture 覆盖 `build_formal_scenario_b6()` 读取的
+    全部输入（canonical / split / policy-v2 / policy-v3 / B6 policy / 冻结 template）。
+
+    **不覆盖** `refs_v4` 与 `formal_splits_v5`：二者都会调用
+    `load_verified_v3_bundle()`，而该入口按其设计把 v3 驱动表**对生产 canonical
+    重算并逐列比对**——因此「canonical 被改动的临时链」**不可能**同时满足它。
+    这是**架构约束**，不是夹具偷懒；v3 驱动表自身的语义验证由
+    M1.3f-e-b1-R1 的回归覆盖，本卡不再重复。
+    """
     import scenario.splits as splits_module
     from scripts.materialize_singapore_forecast_policy import (
         build_forecast_policy_manifest,
     )
 
     m = formal_module()
-    refs = refs_module()
-    splits = split_module()
-
     root = tmp_path / "repo"
     man = root / "data/manifest"
     proc = root / "data/processed/singapore_2024"
-    refs_dir = root / "configs/frozen_refs"
-    for d in (man, proc, refs_dir):
+    for d in (man, proc):
         d.mkdir(parents=True, exist_ok=True)
 
     frame = pd.read_parquet(CANONICAL_PARQUET)
@@ -442,47 +448,30 @@ def _temp_chain(tmp_path, patch: _Patch, *, mutate=None) -> dict:
     policy_v3.write_text(cj(m.build_policy_v3_manifest(
         frozen_at_utc="2026-09-19T00:00:00+00:00")))
 
-    patch.set(refs, "_data_root", lambda: root)
-    patch.set(splits, "_data_root", lambda: root)
-    patch.set(m, "_exogenous_v3_manifest_path",
-              lambda: REPO_ROOT / "data/manifest/singapore_2024_exogenous_v3.json")
-    patch.set(m, "_exogenous_v3_source_path",
-              lambda: REPO_ROOT / "data/manifest/m13f_materialization_sources_v4.json")
-    patch.set(m, "_exogenous_v3_parquet_path",
-              lambda: REPO_ROOT
-              / "data/processed/singapore_2024/exogenous_drivers_v3.parquet")
-
-    refs_v4 = refs_dir / "refs_v4.json"
-    refs_v4.write_text(cj(refs.build_refs_v4(frozen_at_utc="2026-09-19T00:00:00+00:00")))
-
-    v5_dir = man / "formal_splits_v5"
-    v5_dir.mkdir(parents=True, exist_ok=True)
-    for split in ("train", "validation", "test"):
-        payload = splits.build_split_manifest_v5(
-            split, frozen_at_utc="2026-09-19T00:00:00+00:00")
-        (v5_dir / f"{split}.json").write_text(cj(payload))
-
     return {
         "root": root,
+        "canonical_manifest_path": canonical_manifest,
+        "split_manifest_path": split_manifest,
         "canonical_parquet_path": parquet,
         "policy_manifest_path": policy_v3,
-        "refs_v4_path": refs_v4,
-        "v5_dir": v5_dir,
     }
 
 
+def _build_temp(chain: dict):
+    return formal_module().build_formal_scenario_b6(
+        "validation", origin=VALIDATION_ORIGIN, forecast_cutoff=VALIDATION_CUTOFF,
+        canonical_parquet_path=chain["canonical_parquet_path"],
+        canonical_manifest_path=chain["canonical_manifest_path"],
+        split_manifest_path=chain["split_manifest_path"],
+        policy_manifest_path=chain["policy_manifest_path"])
+
+
 @needs_assets
-def test_target_future_mutation_leaves_all_seven_forecasts_unchanged(
-        tmp_path):
+def test_target_future_mutation_leaves_all_seven_forecasts_unchanged(tmp_path):
     base_patch = _Patch()
     try:
         base = _temp_chain(tmp_path / "base", base_patch)
-        baseline = formal_module().build_formal_scenario_b6(
-            "validation", origin=VALIDATION_ORIGIN, forecast_cutoff=VALIDATION_CUTOFF,
-            canonical_parquet_path=base["canonical_parquet_path"],
-            canonical_manifest_path=base["root"] / "data/manifest/singapore_2024_half_hour.json",
-            split_manifest_path=base["root"] / "data/manifest/singapore_2024_splits.json",
-            policy_manifest_path=base["policy_manifest_path"])
+        baseline = _build_temp(base)
     finally:
         base_patch.undo()
 
@@ -492,15 +481,9 @@ def test_target_future_mutation_leaves_all_seven_forecasts_unchanged(
         before = pd.read_parquet(base["canonical_parquet_path"])
         after = pd.read_parquet(mut["canonical_parquet_path"])
         start, stop = _global_window()
-        changed = _changed_rows(before, after)
-        for column, rows in changed.items():
+        for column, rows in _changed_rows(before, after).items():
             assert rows == list(range(start, stop)), column
-        mutated = formal_module().build_formal_scenario_b6(
-            "validation", origin=VALIDATION_ORIGIN, forecast_cutoff=VALIDATION_CUTOFF,
-            canonical_parquet_path=mut["canonical_parquet_path"],
-            canonical_manifest_path=mut["root"] / "data/manifest/singapore_2024_half_hour.json",
-            split_manifest_path=mut["root"] / "data/manifest/singapore_2024_splits.json",
-            policy_manifest_path=mut["policy_manifest_path"])
+        mutated = _build_temp(mut)
         for field in formal_module().FORMAL_B6_SOURCE_KINDS:
             assert list(getattr(mutated, field)) == list(getattr(baseline, field)), field
     finally:
@@ -512,12 +495,7 @@ def test_history_mutation_changes_the_five_derived_forecasts(tmp_path):
     base_patch = _Patch()
     try:
         base = _temp_chain(tmp_path / "base", base_patch)
-        baseline = formal_module().build_formal_scenario_b6(
-            "validation", origin=VALIDATION_ORIGIN, forecast_cutoff=VALIDATION_CUTOFF,
-            canonical_parquet_path=base["canonical_parquet_path"],
-            canonical_manifest_path=base["root"] / "data/manifest/singapore_2024_half_hour.json",
-            split_manifest_path=base["root"] / "data/manifest/singapore_2024_splits.json",
-            policy_manifest_path=base["policy_manifest_path"])
+        baseline = _build_temp(base)
     finally:
         base_patch.undo()
 
@@ -527,20 +505,37 @@ def test_history_mutation_changes_the_five_derived_forecasts(tmp_path):
         before = pd.read_parquet(base["canonical_parquet_path"])
         after = pd.read_parquet(hist["canonical_parquet_path"])
         start, _ = _global_window()
-        changed = _changed_rows(before, after)
-        for column, rows in changed.items():
+        for column, rows in _changed_rows(before, after).items():
             assert rows == list(range(start - 48, start)), column
-        mutated = formal_module().build_formal_scenario_b6(
-            "validation", origin=VALIDATION_ORIGIN, forecast_cutoff=VALIDATION_CUTOFF,
-            canonical_parquet_path=hist["canonical_parquet_path"],
-            canonical_manifest_path=hist["root"] / "data/manifest/singapore_2024_half_hour.json",
-            split_manifest_path=hist["root"] / "data/manifest/singapore_2024_splits.json",
-            policy_manifest_path=hist["policy_manifest_path"])
+        mutated = _build_temp(hist)
         for field in ("price_forecast", "load_forecast", "temperature_forecast",
                       "pv_forecast", "wind_forecast"):
             assert list(getattr(mutated, field)) != list(getattr(baseline, field)), field
     finally:
         hist_patch.undo()
+
+
+@needs_assets
+def test_cutover_delegates_to_the_b6_builder(monkeypatch):
+    """正式入口必须**真正**调用生产 `build_formal_scenario_b6()`。"""
+    import scenario.formal_scenario_b6 as builder
+    import scenario.scenario as entry
+
+    seen = {}
+    real = builder.build_formal_scenario_b6
+
+    def spy(split, **kwargs):
+        seen["split"] = split
+        seen.update(kwargs)
+        return real(split, **kwargs)
+
+    monkeypatch.setattr(builder, "build_formal_scenario_b6", spy)
+    monkeypatch.setattr(entry, "_build_from_manifest", entry._build_from_manifest)
+    bundle = _split_chain("train", "2024-01-02T00:00:00+08:00")
+    assert bundle.mode == "formal"
+    assert seen["split"] == "train"
+    assert seen["origin"] == 48
+    assert seen["forecast_cutoff"] == 4
 
 
 def _mutate_target(frame) -> None:
