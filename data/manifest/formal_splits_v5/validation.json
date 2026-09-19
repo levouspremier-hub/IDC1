@@ -5,7 +5,7 @@
   },
   "contract_version": "contract-v9",
   "frequency": "30min",
-  "frozen_at_utc": "2026-09-19T16:43:34+00:00",
+  "frozen_at_utc": "2026-09-19T17:15:19+00:00",
   "history_steps": 48,
   "inputs": {
     "b6_intensity_policy": {
@@ -38,14 +38,14 @@
     },
     "frozen_refs": {
       "path": "configs/frozen_refs/refs_v4.json",
-      "sha256": "1a53f0495bbb6a52c4972bf76e15d1ff5d78de5489f0b8ba7d13549e2894acba"
+      "sha256": "b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7"
     },
     "split_manifest": {
       "path": "data/manifest/singapore_2024_splits.json",
       "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
     }
   },
-  "materializer_revision": "e21b19349bdde390ca5dbd240ededb9544df8057",
+  "materializer_revision": "577f1db4d5ca78553aa1be866f643ebeb7e8cb13",
   "readiness": {
     "formal_env_ready": false,
     "formal_training_ready": false

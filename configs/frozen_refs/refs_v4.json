@@ -1,6 +1,6 @@
 {
-  "frozen_at_utc": "2026-09-19T16:43:33+00:00",
-  "materializer_revision": "e21b19349bdde390ca5dbd240ededb9544df8057",
+  "frozen_at_utc": "2026-09-19T17:15:19+00:00",
+  "materializer_revision": "577f1db4d5ca78553aa1be866f643ebeb7e8cb13",
   "note": "B6 train-only 归一化参考值：四个尺度由 canonical+exogenous v3 的 train 行实际重算；lambda_ref 绑定 B6 批准的 63.988 work-units/hour（decision_id=B6-INTENSITY，**不继承旧的 2000**）；其余保持声明物理尺度。冻结后所有方法共享，禁止按测试日重算（AGENTS §1.4）。",
   "references": {
     "carbon_factor_ref": {

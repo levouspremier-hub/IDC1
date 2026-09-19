@@ -605,9 +605,9 @@ def test_real_v5_triad_transaction_rolls_back_every_stage(
         real_write(path, text)
 
     monkeypatch.setattr(splits, "_atomic_write_text", failing_write)
+    # 冻结时刻由 refs_v4 锚定（不得自由填写）
     with pytest.raises(RuntimeError):
-        splits.materialize_split_manifest_triad_v5(
-            frozen_at_utc="2026-09-20T00:00:00+00:00")
+        splits.materialize_split_manifest_triad_v5()
 
     for split in ("train", "validation", "test"):
         assert not (target_dir / f"{split}.json").exists(), split
@@ -633,8 +633,7 @@ def test_real_materializers_still_refuse_to_overwrite(tmp_path, monkeypatch):
     monkeypatch.setattr(splits, "_canonical_split_dir", lambda: v5_dir)
     monkeypatch.setattr(splits, "_generator_is_dirty", lambda: False)
     with pytest.raises(splits.SplitManifestV5Error):
-        splits.materialize_split_manifest_triad_v5(
-            frozen_at_utc="2026-09-20T00:00:00+00:00")
+        splits.materialize_split_manifest_triad_v5()
 
     import inspect
 
