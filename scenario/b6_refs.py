@@ -131,13 +131,21 @@ NOTE = (
     "禁止按测试日重算（AGENTS §1.4）。"
 )
 
-# 本模块实现文件（dirty 检查与 revision 使用**同一**集合）
+# 本模块实现文件（dirty 检查与 revision 使用**同一**集合）。
+#
+# R1：覆盖**全部**直接或经 B6 formal chain 影响正式语义的实现文件——
+# 本模块、B6 构造器、B6 policy、v3 驱动表、splits、v5 triad 实现、
+# **public cutover**（`scenario/scenario.py`）与**两个 materializer CLI**。
 B6_REFS_SOURCE_PATHS: tuple[str, ...] = (
     "scenario/b6_refs.py",
+    "scenario/b6_split_manifests.py",
+    "scenario/scenario.py",
     "scenario/formal_scenario_b6.py",
     "scenario/arrival_intensity_policy.py",
     "scenario/exogenous_drivers_b6.py",
     "scenario/splits.py",
+    "scripts/materialize_b6_refs.py",
+    "scripts/materialize_b6_split_manifests.py",
 )
 
 

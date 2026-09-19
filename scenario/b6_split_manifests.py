@@ -104,14 +104,20 @@ FORBIDDEN_FIELD_TOKENS: tuple[str, ...] = (
     "forecast", "origin_index", "future", "truth", "default_curve",
 )
 
-# 本模块实现文件（dirty 检查与 revision 使用**同一**集合）
+# 本模块实现文件（dirty 检查与 revision 使用**同一**集合）。
+#
+# R1：与 `B6_REFS_SOURCE_PATHS` **同一覆盖面**——本模块、refs 实现、
+# **public cutover**、B6 构造器、B6 policy、v3 驱动表、splits、两个 materializer。
 B6_SPLIT_SOURCE_PATHS: tuple[str, ...] = (
     "scenario/b6_split_manifests.py",
     "scenario/b6_refs.py",
+    "scenario/scenario.py",
     "scenario/formal_scenario_b6.py",
     "scenario/arrival_intensity_policy.py",
     "scenario/exogenous_drivers_b6.py",
     "scenario/splits.py",
+    "scripts/materialize_b6_refs.py",
+    "scripts/materialize_b6_split_manifests.py",
 )
 
 
@@ -530,7 +536,21 @@ def load_verified_split_manifest_v5(path: Path | str | None = None, *,
             f"materializer_revision 必须是**当前**实现的 revision {live}；"
             f"实际 {validated['materializer_revision']}"
         )
-    _verify_frozen_chain(default_inputs(), expected_split)
+
+    # **R1 修复**：整体**重建比对**。此前只校验 time_range 的格式与持续时间，
+    # 因此「时长不变、但起止时刻被改」的伪造（以及 frozen_at_utc、split_rows、
+    # candidate_origins、readiness、九角色 path/sha……）可以**静默通过**。
+    rebuilt = build_split_manifest_v5(
+        expected_split, frozen_at_utc=validated["frozen_at_utc"])
+    if rebuilt != validated:
+        differing = sorted(
+            key for key in set(rebuilt) | set(validated)
+            if rebuilt.get(key) != validated.get(key)
+        )
+        raise SplitManifestV5Error(
+            f"v5 manifest 与由 trusted inputs + live hashes + live revision "
+            f"重建的 candidate 不符；差异顶层字段={differing}"
+        )
     return validated
 
 
@@ -592,11 +612,28 @@ def materialize_split_manifest_triad_v5(*, frozen_at_utc: str | None = None) -> 
         raise SplitManifestV5Error(
             "生成器有未提交修改：拒绝用旧 revision 为未提交代码背书")
 
-    existing = [
-        json.loads((out_dir / f"{split}.json").read_text(encoding="utf-8"))
-        for split in SPLIT_NAMES
-        if (out_dir / f"{split}.json").is_file()
-    ]
+    # **R1**：既有的 v5 文件必须先**干净地**失败（不得泄漏 KeyError/TypeError）。
+    existing: list[dict] = []
+    for split in SPLIT_NAMES:
+        path = out_dir / f"{split}.json"
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict) or "frozen_at_utc" not in payload:
+                raise SplitManifestV5Error(
+                    f"既有的 {path} 不是合法的 v5 manifest（顶层或 frozen_at_utc 缺失）："
+                    "拒绝覆盖"
+                )
+            _require_canonical_utc(payload["frozen_at_utc"], field="frozen_at_utc")
+        except (OSError, json.JSONDecodeError) as error:
+            raise SplitManifestV5Error(
+                f"既有的 {path} 不可读或不是合法 JSON：{error}") from error
+        except SplitManifestV5Error:
+            raise
+        except (KeyError, TypeError, IndexError, AttributeError) as error:
+            raise SplitManifestV5Error(f"既有的 {path} 结构畸形：{error}") from error
+        existing.append(payload)
     if existing and len({p["frozen_at_utc"] for p in existing}) != 1:
         raise SplitManifestV5Error("既有的 v5 manifest 之间 frozen_at_utc 不一致")
     stamp = frozen_at_utc or (existing[0]["frozen_at_utc"] if existing else utc_now())
