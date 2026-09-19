@@ -43,7 +43,8 @@
 > **M1.3f-e-b2-a（formal B6 candidate + policy-v3）第一轮审核不通过，
 > 经 R1/R2 返修后已通过人工复审**（见 §7AG–§7AH）；
 > **M1.3f-e-b2-b（B6 formal 链正式切换、refs_v4 与 formal_splits_v5）
-> 执行完成，等待人工复审**（见 §7AJ）——**正式入口已切到 B6/v3/v5**；
+> 第一轮审核不批准，经 M1.3f-e-b2-b-R1 返修后执行完成，等待人工复审**
+> （见 §7AJ–§7AK）——**正式入口已切到 B6/v3/v5**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
 > v1 = `superseded_pre_live_input_binding_fix`、

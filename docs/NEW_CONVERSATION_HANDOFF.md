@@ -173,7 +173,7 @@ scenario/formal_scenario.py 的 formal kernel 已构造七条 forecast：
 ### 8.1 Refs
 
 **B6 正式链只可用 `configs/frozen_refs/refs_v4.json`**
-（schema `m1.3feb2b-frozen-refs-v1`，SHA-256 `1a53f049…`）。
+（schema `m1.3feb2b-frozen-refs-v1`，SHA-256 `b5b64ef2…`；R1 后重新物化）。
 
 `refs_v3.json` 与 `refs.json`（v2）**逐字节保留**但**不得**被正式链使用（无 fallback）。
 **`lambda_ref = 63.988 work-units/hour`**（`decision_id=B6-INTENSITY`），**不继承旧的 2000**。
