@@ -37,9 +37,9 @@
 > **M1.3f-e-a（B6 policy 冻结）已通过人工复审**（见 §7AD），
 > canonical policy `data/manifest/m13f_arrival_intensity_policy_v1.json`；
 > **M1.3f-e-b1（由 B6 policy 物化 exogenous v3）第一轮审核不通过，
-> 经 M1.3f-e-b1-R1 返修后执行完成，等待人工复审**（见 §7AE–§7AF）：
-> v3 三资产已冻结，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
-> **R1 新增统一入口 `load_verified_v3_bundle()`**（语义信任边界已闭合）；
+> 经 M1.3f-e-b1-R1 返修后已通过人工复审**（2026-09-19，见 §7AE–§7AF）：
+> v3 三资产**已是已批准候选**，PV/wind/carbon 与 v2 逐行相同、arrival 用 31.994；
+> **统一入口 `load_verified_v3_bundle()`** 是 v3 的唯一可信入口；
 > **formal 链在 e-b2 之前仍绑定 v2**；
 > **在 main intensity 版本化完成之前不得开始 g-e-b**；
 > **v4 triad（`data/manifest/formal_splits_v4/`）是唯一候选**：
@@ -2197,7 +2197,7 @@ refs 新版本、`formal_splits_v5`、canonical-only 与旧版本 superseded 登
 `formal_scenario_bundle_ready` / `formal_training_ready` **仍为 false**；
 **mapper / env 接线 / 正式训练 / 评估 / M6 均未开始**。
 
-### 7AF. M1.3f-e-b1-R1：闭合 v3 bundle 的语义信任边界（**执行完成，等待人工复审**）
+### 7AF. M1.3f-e-b1-R1：闭合 v3 bundle 的语义信任边界（**已通过人工复审**，2026-09-19）
 
 `docs/task_cards/M1.3f.md` §Y–§AA。**e-b1 第一轮审核不通过**：现有
 `load_verified_v3_manifest()` 只校验结构与上游绑定，**不**校验嵌套业务语义。
@@ -2253,6 +2253,12 @@ bytes/hash/`mtime_ns` 不变、`git diff --check` / `git status --short` 空。
 加审核收口 `7f8fae9` 共 **9 个**。
 
 **⛔ 下一张卡仍是 M1.3f-e-b2**；**不得自行开始**；mapper / 训练 / 评估 / M6 未开始。
+
+**审核收口（2026-09-19，卡片 §AB）**：**R1 已通过人工复审**；
+**假绿夹具修正获认可**；**`load_verified_v3_bundle()` 是 v3 bundle 的唯一可信入口**
+（另两个 loader 只是薄委托）；**账本勘误**：§AA.1 写「R1 共 7 个提交」漏掉了记录提交
+`e5d260a` 自身，`1853d4b..e5d260a` 实为 **8 个**（回滚命令本身**正确**，已含它）；
+**v3 三项成为已批准候选**；**formal 链仍绑定 v2**，readiness **仍为 false**。
 
 ### 7AB. M1.3g-e-a-R2：补齐 Task schema、profile 可行域与固定点守恒契约（**已通过人工复审**，2026-09-18）
 

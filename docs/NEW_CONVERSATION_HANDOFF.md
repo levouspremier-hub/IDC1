@@ -307,7 +307,7 @@ expected `31.994`／realized `32.0204`／`rho_realized` `0.80066`（`diagnostic_
 refs 新版本、`formal_splits_v5`、旧版本 superseded 登记）；**本卡未切换 formal 链**
 （仍绑定 v2），**不得自行开始 `M1.3f-e-b2`**，mapper / 训练仍未开始。
 
-**✅ `M1.3f-e-b1-R1` 执行完成（等待人工复审）**：**e-b1 第一轮审核不通过**——
+**✅ `M1.3f-e-b1-R1` 已通过人工复审（2026-09-19）**：**e-b1 第一轮审核不通过**——
 旧 loader 只校验结构与上游绑定，**接受被伪造的嵌套业务语义**
 （实测 `FORGED_SEMANTICS_ACCEPTED True 1000.0 False`）。新增**统一生产入口**
 `load_verified_v3_bundle()`（`--verify` **只**调用它）：三份产物非 symlink、
@@ -320,6 +320,8 @@ predecessor、readiness **全部由 policy 与重算结果导出**，不信任 J
 未篡改对照 **ACCEPTED**。最终 v3：parquet `07b648f0…`（**字节未变**）、
 manifest `31cb241c…`、source-v4 `73f75cef…`，`materializer_revision = 34f2de0…`。
 **上游 hash 全部未变**；`make check` **2520 passed**。
+`load_verified_v3_bundle()` 是 v3 的**唯一**可信入口；**v3 三资产为已批准候选**；
+**formal 链仍绑定 v2**，readiness **仍为 false**。
 
 **R2 追加（Task schema / 可行域 / 固定点守恒）**：mapper 输出必须覆盖
 `idc_model.task.Task` 的 **11 个必填字段**（含 `name`、`load_profile`）；
