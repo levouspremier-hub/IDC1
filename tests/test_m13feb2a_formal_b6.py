@@ -673,6 +673,49 @@ def _mutate_history(frame) -> None:
     _bump(frame, slice(start - 48, start))
 
 
+def _changed_rows(base: pd.DataFrame, mutated: pd.DataFrame) -> dict[str, list[int]]:
+    """每列**实际改变**的行标签（用于精确校验窗口边界）。"""
+    return {
+        column: mutated.index[
+            mutated[column].to_numpy() != base[column].to_numpy()
+        ].tolist()
+        for column in TARGET_COLUMNS
+    }
+
+
+@needs_assets
+def test_mutation_windows_are_exactly_half_open():
+    """**R2 回归**：mutation 必须**精确**落在半开窗口内，区间外一行也不得改变。
+
+    改前 `frame.loc[slice(start, stop)]` 在 RangeIndex 上是 label-based 且
+    **两端包含**：target 改 5 行（`11224..11228`）、history 改 49 行
+    （`11176..11224`），后者**越界进入 target 首行**。
+    """
+    base = pd.read_parquet(CANONICAL_PARQUET)
+    start, stop = _global_window()
+
+    target = base.copy()
+    _mutate_target(target)
+    target_changed = _changed_rows(base, target)
+    for column, rows in target_changed.items():
+        assert rows == list(range(start, stop)), (
+            f"target 的 {column} 必须**精确**改变 range({start}, {stop})"
+            f"（{stop - start} 行），实际 {len(rows)} 行 {rows[:1]}..{rows[-1:]}"
+        )
+
+    history = base.copy()
+    _mutate_history(history)
+    history_changed = _changed_rows(base, history)
+    for column, rows in history_changed.items():
+        assert rows == list(range(start - 48, start)), (
+            f"history 的 {column} 必须**精确**改变 range({start - 48}, {start})"
+            f"（48 行），实际 {len(rows)} 行 {rows[:1]}..{rows[-1:]}"
+        )
+
+    # 两个窗口**不得重叠**
+    assert not (set(range(start - 48, start)) & set(range(start, stop)))
+
+
 @needs_assets
 def test_target_future_mutation_leaves_all_seven_forecasts_unchanged(
         tmp_path, monkeypatch):
