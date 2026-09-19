@@ -97,6 +97,10 @@
 # M1.3g-c-R3：唯一候选 triad 移到 formal_splits_v4/，同样显式放行该子目录。
 !data/manifest/formal_splits_v4/
 !data/manifest/formal_splits_v4/*.json
+# M1.3f-e-b2-b：B6 正式链只接受 formal_splits_v5/（同一条「只解开直接子级」限制），
+# 因此显式放行该子目录；v1–v4 仍按既有规则保留。
+!data/manifest/formal_splits_v5/
+!data/manifest/formal_splits_v5/*.json
 !report_tools/
 !report_tools/*.py
 !legacy/
