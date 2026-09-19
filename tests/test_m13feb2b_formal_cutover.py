@@ -13,6 +13,7 @@ import importlib
 import json
 import pathlib
 import shutil
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -567,30 +568,205 @@ def test_verify_is_idempotent():
 
 
 @needs_assets
-@pytest.mark.parametrize("which", ["refs", "splits"])
-def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch, which):
+def test_real_refs_materializer_transaction_leaves_nothing(tmp_path, monkeypatch):
+    """**真实** `materialize_refs_v4()`：注入原子写失败 → 无产物、零临时文件。"""
     refs = refs_module()
-    splits = split_module()
-    if which == "refs":
-        target_dir = tmp_path / "configs/frozen_refs"
-        target_dir.mkdir(parents=True)
-        mod, name = refs, "refs_v4.json"
-        monkeypatch.setattr(refs, "_canonical_refs_dir", lambda: target_dir)
-    else:
-        target_dir = tmp_path / "manifest"
-        target_dir.mkdir(parents=True)
-        mod, name = splits, "train.json"
-        monkeypatch.setattr(splits, "_canonical_split_dir", lambda: target_dir)
+    target_dir = tmp_path / "frozen_refs"
+    target_dir.mkdir(parents=True)
+    monkeypatch.setattr(refs, "_canonical_refs_dir", lambda: target_dir)
+    monkeypatch.setattr(refs, "_generator_is_dirty", lambda: False)
+    monkeypatch.setattr(refs, "_atomic_write_text", _boom)
 
-    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
-    monkeypatch.setattr(mod, "_atomic_write_text", _boom)
     with pytest.raises(RuntimeError):
-        mod._atomic_write_text(target_dir / name, "{}")
+        refs.materialize_refs_v4(frozen_at_utc="2026-09-20T00:00:00+00:00")
+
+    assert not (target_dir / "refs_v4.json").exists()
     assert list(target_dir.iterdir()) == []
 
 
-def _boom(path, text):
-    raise RuntimeError("injected write failure")
+@needs_assets
+@pytest.mark.parametrize("fail_at", [1, 2, 3])
+def test_real_v5_triad_transaction_rolls_back_every_stage(
+        tmp_path, monkeypatch, fail_at):
+    """**真实** triad 事务：在**第 1/2/3 次**原子写入失败 → 三文件全不存在。"""
+    splits = split_module()
+    target_dir = tmp_path / "formal_splits_v5"
+    target_dir.mkdir(parents=True)
+    monkeypatch.setattr(splits, "_canonical_split_dir", lambda: target_dir)
+    monkeypatch.setattr(splits, "_generator_is_dirty", lambda: False)
+
+    calls = {"n": 0}
+    real_write = splits._atomic_write_text
+
+    def failing_write(path, text):
+        calls["n"] += 1
+        if calls["n"] == fail_at:
+            raise RuntimeError(f"injected failure at write #{fail_at}")
+        real_write(path, text)
+
+    monkeypatch.setattr(splits, "_atomic_write_text", failing_write)
+    with pytest.raises(RuntimeError):
+        splits.materialize_split_manifest_triad_v5(
+            frozen_at_utc="2026-09-20T00:00:00+00:00")
+
+    for split in ("train", "validation", "test"):
+        assert not (target_dir / f"{split}.json").exists(), split
+    assert list(target_dir.iterdir()) == []
+
+
+@needs_assets
+def test_real_materializers_still_refuse_to_overwrite(tmp_path, monkeypatch):
+    """「已存在且不同」仍拒绝覆盖，且**没有**新增公开 overwrite 参数。"""
+    refs = refs_module()
+    splits = split_module()
+    refs_dir = tmp_path / "frozen_refs"
+    refs_dir.mkdir()
+    (refs_dir / "refs_v4.json").write_text('{"schema_version": "forged"}')
+    monkeypatch.setattr(refs, "_canonical_refs_dir", lambda: refs_dir)
+    monkeypatch.setattr(refs, "_generator_is_dirty", lambda: False)
+    with pytest.raises(refs.RefsV4Error):
+        refs.materialize_refs_v4(frozen_at_utc="2026-09-20T00:00:00+00:00")
+
+    v5_dir = tmp_path / "formal_splits_v5"
+    v5_dir.mkdir()
+    (v5_dir / "train.json").write_text('{"schema": "forged"}')
+    monkeypatch.setattr(splits, "_canonical_split_dir", lambda: v5_dir)
+    monkeypatch.setattr(splits, "_generator_is_dirty", lambda: False)
+    with pytest.raises(splits.SplitManifestV5Error):
+        splits.materialize_split_manifest_triad_v5(
+            frozen_at_utc="2026-09-20T00:00:00+00:00")
+
+    import inspect
+
+    for fn in (refs.materialize_refs_v4, splits.materialize_split_manifest_triad_v5):
+        params = set(inspect.signature(fn).parameters)
+        assert not ({"out_path", "out_dir", "overwrite", "replace",
+                     "force", "manifest_path"} & params), (fn.__name__, params)
+
+
+# --- R1-1. v5 语义伪造（改前 ACCEPTED，改后必须 REJECTED） ----------------------
+
+def _forged_v5(tmp_path, monkeypatch, mutate) -> Path:
+    m = split_module()
+    temp_dir = tmp_path / "canonical_v5"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    target = temp_dir / "train.json"
+    payload = json.loads((SPLITS_V5 / "train.json").read_text(encoding="utf-8"))
+    mutate(payload)
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True,
+                                 ensure_ascii=False) + "\n")
+    monkeypatch.setattr(m, "_canonical_split_dir", lambda: temp_dir)
+    monkeypatch.setattr(m, "_generator_is_dirty", lambda: False)
+    return target
+
+
+@needs_assets
+def test_untampered_v5_copy_is_accepted(tmp_path, monkeypatch):
+    """**接受性对照**：未篡改的副本（经私有 resolver 视为 canonical）必须通过。"""
+    m = split_module()
+    assert m.load_verified_split_manifest_v5(
+        _forged_v5(tmp_path, monkeypatch, lambda _p: None),
+        expected_split="train")["split"] == "train"
+
+
+@needs_assets
+@pytest.mark.parametrize("mutate", [
+    pytest.param(lambda p: p["time_range"].update(
+        start="2024-01-02T00:00:00+08:00",
+        end_exclusive="2024-08-02T00:00:00+08:00"), id="time_range"),
+    pytest.param(lambda p: p.update(frozen_at_utc="2026-01-01T00:00:00+00:00"),
+                 id="frozen_at_utc"),
+    pytest.param(lambda p: p["split_rows"].update(count=10223), id="split_rows"),
+    pytest.param(lambda p: p["candidate_origins"].update(start=49),
+                 id="candidate_origins"),
+    pytest.param(lambda p: p["readiness"].update(formal_env_ready=True),
+                 id="readiness"),
+    pytest.param(lambda p: p["inputs"]["canonical_parquet"].update(
+        sha256="0" * 64), id="input_path_sha"),
+    pytest.param(lambda p: p["inputs"]["frozen_refs"].update(
+        path="configs/frozen_refs/refs_v3.json"), id="input_role_path"),
+    pytest.param(lambda p: p.update(materializer_revision="0" * 40),
+                 id="materializer_revision"),
+    pytest.param(lambda p: p.update(extra=1), id="undeclared_field"),
+    pytest.param(lambda p: p.update(history_steps=47), id="history_steps"),
+    pytest.param(lambda p: p.update(contract_version="contract-v8"), id="contract"),
+])
+def test_forged_v5_semantics_are_rejected(tmp_path, monkeypatch, mutate):
+    m = split_module()
+    target = _forged_v5(tmp_path, monkeypatch, mutate)
+    with pytest.raises(m.SplitManifestV5Error):
+        m.load_verified_split_manifest_v5(target, expected_split="train")
+
+
+@needs_assets
+def test_v5_rebuild_mismatch_names_the_differing_field(tmp_path, monkeypatch):
+    m = split_module()
+    target = _forged_v5(tmp_path, monkeypatch, lambda p: p["time_range"].update(
+        start="2024-01-02T00:00:00+08:00", end_exclusive="2024-08-02T00:00:00+08:00"))
+    with pytest.raises(m.SplitManifestV5Error) as excinfo:
+        m.load_verified_split_manifest_v5(target, expected_split="train")
+    assert "time_range" in str(excinfo.value)
+
+
+# --- R1-2. revision 覆盖 --------------------------------------------------------
+
+REQUIRED_B6_PATHS = {
+    "scenario/b6_refs.py",
+    "scenario/b6_split_manifests.py",
+    "scenario/scenario.py",
+    "scenario/formal_scenario_b6.py",
+    "scenario/arrival_intensity_policy.py",
+    "scenario/exogenous_drivers_b6.py",
+    "scenario/splits.py",
+    "scripts/materialize_b6_refs.py",
+    "scripts/materialize_b6_split_manifests.py",
+}
+
+
+@needs_assets
+def test_b6_revision_paths_cover_every_formal_semantics_file():
+    refs = refs_module()
+    splits = split_module()
+    assert REQUIRED_B6_PATHS - set(refs.B6_REFS_SOURCE_PATHS) == set()
+    assert REQUIRED_B6_PATHS - set(splits.B6_SPLIT_SOURCE_PATHS) == set()
+
+
+@needs_assets
+@pytest.mark.parametrize("which", ["refs", "splits"])
+def test_dirty_and_revision_use_identical_path_tuples(monkeypatch, which):
+    mod = refs_module() if which == "refs" else split_module()
+    seen: list[tuple] = []
+    real_git = mod._git
+
+    def spy(*args):
+        seen.append(args)
+        return real_git(*args)
+
+    monkeypatch.setattr(mod, "_git", spy)
+    mod.resolve_materializer_revision() if which == "splits" else mod.refs_code_revision()
+    mod._generator_is_dirty()
+    paths = tuple(getattr(mod, "B6_SPLIT_SOURCE_PATHS" if which == "splits"
+                         else "B6_REFS_SOURCE_PATHS"))
+    assert tuple(seen[0])[-len(paths):] == paths
+    assert tuple(seen[1])[-len(paths):] == paths
+
+
+@needs_assets
+@pytest.mark.parametrize("which", ["refs", "splits"])
+def test_materializer_or_cutover_change_invalidates_the_old_revision(
+        tmp_path, monkeypatch, which):
+    """改动 public cutover / materializer → 旧 revision **必须**被拒绝。"""
+    mod = refs_module() if which == "refs" else split_module()
+    monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
+    monkeypatch.setattr(mod, "_git", lambda *a: "0" * 40)
+    if which == "refs":
+        with pytest.raises(mod.RefsV4Error):
+            mod.load_verified_refs_v4()
+    else:
+        with pytest.raises(mod.SplitManifestV5Error):
+            mod.load_verified_split_manifest_v5(expected_split="train")
+
+
 
 
 # --- 7. old assets byte-identical + readiness ----------------------------------
@@ -622,3 +798,8 @@ def test_make_train_still_exits_two_without_synthetic_fallback():
     assert result.returncode == 2
     assert "synthetic" not in result.stdout.lower() or "回退" in result.stdout
     assert not list(REPO_ROOT.glob("runs/*/checkpoint*.pt"))
+
+
+def _boom(path, text):
+    """注入的原子写失败（真实事务测试用）。"""
+    raise RuntimeError("injected write failure")
