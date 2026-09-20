@@ -2461,7 +2461,7 @@ refs_v4 副本/symlink、伪造 `lambda_ref=2000`、非默认 `manifest_dir`、
 > 重算比对**，故「canonical 被改动的临时链」**不可能**满足它。正式入口对该构造器的
 > **委托**另有 spy 断言（`split`/`origin`/`forecast_cutoff` 逐项传入）。
 
-### 7AK. M1.3f-e-b2-b-R1：v5 语义信任边界、revision 覆盖与真实原子事务修复（**执行完成，等待人工复审**）
+### 7AK. M1.3f-e-b2-b-R1：v5 语义信任边界、revision 覆盖与真实原子事务修复（**已通过人工复审**，2026-09-20）
 
 `docs/task_cards/M1.3f.md` §AP–§AR。**b2-b 第一轮审核不批准**（三项 P1）。
 
