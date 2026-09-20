@@ -581,3 +581,97 @@ def test_tampered_refs_chain_is_rejected_by_the_public_entry(tmp_path, monkeypat
     monkeypatch.setattr(refs_mod, "_canonical_refs_dir", lambda: refs_dir)
     with pytest.raises(ValueError):
         _stream(horizon=2)
+
+
+# =============================================================================
+# M1.3g-e-b-R2：容量来源 revision 覆盖 + 全范围逐槽守恒
+# =============================================================================
+
+CAPACITY_SOURCE = "idc_model/task_model.py"
+
+
+@needs_assets
+def test_capacity_source_is_in_the_mapper_revision_set():
+    """`task_model.py` 决定 `C_IDC_base` ⇒ **必须**在统一 source 集合内。"""
+    m = mapper()
+    assert CAPACITY_SOURCE in m.ARRIVAL_MAPPER_SOURCE_PATHS
+    # 该集合同时驱动 dirty 检查与 revision
+    assert len(set(m.ARRIVAL_MAPPER_SOURCE_PATHS)) == len(m.ARRIVAL_MAPPER_SOURCE_PATHS)
+
+
+@needs_assets
+def test_dirty_and_revision_use_the_identical_source_set(monkeypatch):
+    m = mapper()
+    seen: list[tuple] = []
+    real_git = m._git
+
+    def spy(*args):
+        seen.append(args)
+        return real_git(*args)
+
+    monkeypatch.setattr(m, "_git", spy)
+    m.mapper_code_revision()
+    m._generator_is_dirty()
+    paths = tuple(m.ARRIVAL_MAPPER_SOURCE_PATHS)
+    assert len(seen) == 2
+    assert tuple(seen[0])[-len(paths):] == paths
+    assert tuple(seen[1])[-len(paths):] == paths
+    assert CAPACITY_SOURCE in tuple(seen[0])
+
+
+@needs_assets
+@pytest.mark.parametrize("split,row_start,row_end", [
+    ("train", 0, 10224),
+    ("validation", 10224, 13152),
+    ("test", 13152, 17568),
+])
+def test_every_slot_in_every_split_is_covered(split, row_start, row_end):
+    """**全范围**逐槽覆盖验证。
+
+    **只加载一次** payload / chain / aggregate（避免重新引入性能回归）。
+    validation / test **只作覆盖验证**，不参与选参。
+    """
+    m = mapper()
+    payload = m.load_verified_mapper_manifest()          # 一次
+    chain = m.load_verified_mapper_chain("train")        # 一次
+    aggregate = m._aggregate_from_verified_chain(chain)  # 一次
+    lo, hi = m._bounds_micro(payload)                    # 一次
+    scale = int(payload["work_unit_scale"])
+    max_tasks = int(payload["max_tasks_per_slot"])
+
+    covered = 0
+    for slot in range(row_start, row_end):
+        units = int(aggregate[slot])
+        assert units > 0, slot
+        parts = m.split_slot_aggregate_micro(units * scale, payload=payload)
+        assert 1 <= len(parts) <= max_tasks, (slot, len(parts))
+        assert sum(parts) == units * scale, slot
+        assert all(lo <= p <= hi for p in parts), slot
+        covered += 1
+    assert covered == row_end - row_start
+
+
+@needs_assets
+def test_full_range_coverage_counts_match_the_frozen_splits():
+    m = mapper()
+    payload = m.load_verified_mapper_manifest()
+    chain = m.load_verified_mapper_chain("train")
+    aggregate = m._aggregate_from_verified_chain(chain)
+    scale = int(payload["work_unit_scale"])
+    lo, hi = m._bounds_micro(payload)
+
+    counts = {"train": 0, "validation": 0, "test": 0}
+    task_totals = {"train": 0, "validation": 0, "test": 0}
+    bounds = {"train": (0, 10224), "validation": (10224, 13152),
+              "test": (13152, 17568)}
+    for name, (start, stop) in bounds.items():
+        for slot in range(start, stop):
+            parts = m.split_slot_aggregate_micro(int(aggregate[slot]) * scale,
+                                                 payload=payload)
+            assert all(lo <= p <= hi for p in parts)
+            counts[name] += 1
+            task_totals[name] += len(parts)
+    assert counts == {"train": 10224, "validation": 2928, "test": 4416}
+    assert sum(counts.values()) == 17568
+    # 本数据集每个槽恰为 **1** 个 E 任务（max ≤ 59 work ≤ E 上界）
+    assert task_totals == counts
