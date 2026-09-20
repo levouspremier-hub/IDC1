@@ -547,6 +547,34 @@ manifest `efea87f2…`、`source_revision a8065990…`。`make check` **2687 pas
 > **R1 账本勘误**：R1 实际 **16 个**提交（上轮写「15 个」——计数错误）。
 > 两条完整回滚见 `docs/WORK_HANDOFF.md` §7AQ 与 `docs/task_cards/M1.3g.md` §as.7–§as.8。
 
+## 9.2 **正式 env 注入已接线（M1.3g-e-c，2026-09-20）**
+
+`scenario/env_injection.py` + `envs/idc_price_env.py` 接线：
+
+```python
+inj = build_verified_formal_env_injection(split, start=..., horizon=..., forecast_cutoff=...)
+env = IDCPriceEnv20D(..., delta_t_hours=0.5, formal_injection=inj)
+```
+
+- **唯一**信任链：mapper chain（B6 policy / v3 bundle / `refs_v4` / v5）→
+  origin 映射 → mapper Tasks + 整数账本 → B6 causal forecast → episode 切片；
+  **不接受**调用方传入 truth/forecast/refs/task stream，非法输入 **fail closed**；
+- **formal 分支**：`reset` **不**调用 demo/random；`delta_t_hours=0.5`；
+  planned capacity `rate × 0.5` → **work/step**；`lambda_ref = 31.994 work/step`；
+  `queue_ref`/`queue_capacity_ref` = 6000（**存量**，不缩放）；
+  observation 的 arrival 通道只用 **causal forecast**；`info` 不含完整未来 truth；
+- **legacy 路径行为完全不变**（既有测试全过）。
+
+**验收**：新测试 **20 passed**、相关 focused **506 passed**、`make check`
+**2707 passed**、`make smoke` exit 0、`make train` **exit 2**（无 fallback/成功 run/
+checkpoint）；冻结资产逐字节未变；**范围外修改无**；readiness **仍为 false**。
+
+**回滚**：`git revert 5333d69 9a8ddb8 a204e2a 3656c6b 960c8f0 0d978c1 044ab69`
+→ `== 044ab69^{tree}`。
+
+> ## ⛔ **g-e-c 完成即停，等待人工复审。**
+> **未开始** g-e-d（回归）、g-f（训练门禁）、训练、评估、M6。
+
 ## 10. 后续顺序
 
 ~~~
