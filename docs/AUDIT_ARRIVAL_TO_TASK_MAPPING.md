@@ -1264,3 +1264,150 @@ checkpoint；未修改任何 `.py` / 测试 / manifest / refs / parquet / raw / 
 ### ah.8.1 本审计的范围外修改
 
 **无。** 只新增/修改四份 markdown。
+
+---
+
+# M1.3f-e-b-c：A 路线 micro-task 参数候选与人工签核表
+
+> 任务卡：`docs/task_cards/M1.3f.md` §AT–§AU
+> 强制起点 SHA：`dfce1a80da57bd96e50a4d7d952946809b79374f`
+> 性质：**只读 + 纯文档**。**不**冻结、**不**实现、**不**猜测任何未获人工批准的参数。
+
+## au.1 人工决定的状态
+
+| 项 | 状态 |
+|---|---|
+| **路线 A 已被人工选择** | ✅ **已选定**（通过 modeled micro-task/profile 参数解决可行域缺口） |
+| **13 项具体参数** | ⛔ **全部 `PENDING`** —— 路线 A 的选择 **不等于** 13 个参数获批 |
+| **g-e-b mapper** | ⛔ **仍 BLOCKED**（直到 13 项**逐项**签核） |
+
+> **警示**：选定路线 A 只确定**用哪一类手段**；**没有**确定任何**具体数值**。
+> 在 13 项全部获得人工批准值之前，**不得**开始 mapper、env 接线、训练、评估或 M6。
+
+## au.2 数学必要条件（**候选的硬约束**）
+
+以下全部由**已冻结资产**重算（同 §ah），**只用 train**。
+
+### au.2.1 物理常量
+
+```text
+C_IDC_base = _task_workload_capacity_ref() = 485.646896875418349 work/hour
+delta_t_hours = 0.5
+K := C_IDC_base x delta_t_hours = 242.823448437709 work per (load_rate x step)
+```
+
+### au.2.2 train 的 realized aggregate（**唯一**可用于选参数的 split）
+
+```text
+n = 10,224   min = 12   max = 59   mean = 32.019757
+严格正槽 = 10,224（**全部为正**）  零槽 = 0
+最低正 aggregate = 12 work
+```
+
+> **validation / test 不得参与选参数**；它们只用于**最终覆盖验证**（§au.5）。
+
+### au.2.3 每个候选 profile 必须满足的条件
+
+| # | 条件 | 形式化 |
+|---|---|---|
+| 1 | `workload` **严格大于 0** | `duration_steps >= 1` 且 `load_min > 0` |
+| 2 | **最小**合法 workload 覆盖 train 最低正 aggregate | `duration_steps_min x load_min x K <= 12` |
+| 3 | `load_profile` 各元素落在 `[load_min, load_max]` | §G.4 |
+| 4 | `duration` / `deadline` 为**物理小时** | `steps = round_half_up(hours / 0.5)`，`deadline_steps >= duration_steps` |
+| 5 | 不缩放 / 不合并 / 不移动 / 不丢弃 arrival | §G.7 不变式 1/9/13 |
+| 6 | 不以 **forecast** 替代 **realized aggregate** | §ah.3 |
+
+### au.2.4 由条件 2 导出的**可行区间**（**不选定任何值**）
+
+覆盖 train 最低正 aggregate（12 work）所要求的 `(duration_steps, load_min)`：
+
+| `duration_steps` | 物理时长 | `load_min` **必须 ≤** |
+|---:|---|---:|
+| 1 | 0.5 h | `0.049418621131` |
+| 2 | 1.0 h | `0.024709310565` |
+| 3 | 1.5 h | `0.016472873710` |
+| 4 | 2.0 h | `0.012354655283` |
+
+反向：若**一个**任务要**单独**承载 train 最高 aggregate（59 work）：
+
+| `duration_steps` | `load_max` **必须 ≥** |
+|---:|---:|
+| 1 | `0.242974887226` |
+| 2 | `0.121487443613` |
+| 3 | `0.080991629075` |
+| 4 | `0.060743721807` |
+
+**train 的 max/min 比 = 4.916667**：若**单个** profile 要覆盖整个 train 幅度，
+同 `duration_steps` 下需 `load_max / load_min >= 4.916667`；
+否则需要**多个** profile/任务共同覆盖（由 §G.2 的有界分割算法决定）。
+
+### au.2.5 现状缺口（对照）
+
+```text
+现有 profile 的最小 w_min = 2 steps x 0.08 x K = 38.851751750033 work
+train 最低正 aggregate     = 12 work
+=> 现有最小任务比最低槽**大 3.237646 倍** ⇒ 86.0030% 的槽无合法分割（§ah）
+```
+
+## au.3 **人工签核表**（13 项，**全部 `PENDING`**）
+
+> **状态一律 `PENDING`**。本审计**不**写 `APPROVED`，**不**暗选任何值。
+> 「候选值」列给的是**可行区间/选项**，不是推荐。
+
+| # | 参数 | **当前值** | **候选值（区间/选项，未选定）** | **来源与物理理由** | **影响** | **状态** |
+|---|---|---|---|---|---|---|
+| 1 | **profile 名称** | `A_inference` / `B_rl_training` / `C_dl_training` / `D_preprocess` | 新增 micro 键名（如 `E_micro_inference` 等）或复用既有键名；**命名方案由人工定** | modeled scenario；名称只作标识，但**复用旧键名会改变既有 profile 的可行域** | 决定 mapper 的 profile 枚举与 provenance 键 | **PENDING** |
+| 2 | **duration（物理小时）** | A `1–2`、B `2–5`、C `4–8`、D `1–4`（**小时**） | 需含**最小 0.5 h**（=1 step）方能满足 §au.2.3 条件 2；上界由人工定 | 业务时长；`steps = round_half_up(h / 0.5)` | 直接决定 `w_min`/`w_max` 与任务数 | **PENDING** |
+| 3 | **load range `[load_min, load_max]`** | A `0.08–0.18`、B `0.14–0.30`、C `0.22–0.45`、D `0.08–0.20` | 必须满足 §au.2.4 的 `duration_steps_min x load_min <= 13/…`；具体区间由人工定 | 无量纲负载率；乘 `K` 得 work | 决定可行域能否覆盖最低槽 | **PENDING** |
+| 4 | **deadline（物理小时）** | A `2–4`、B `8–16`、C `14–24`、D `5–10` | 需满足 `deadline_steps >= duration_steps`；上界由人工定 | 业务时限；0.5 h 步长换算 | 影响违约统计与调度排序 | **PENDING** |
+| 5 | **priority** | A `2.6–3.4`、B `1.8–2.5`、C `1.2–2.0`、D `0.8–1.6` | 区间由人工定；须覆盖新 profile | modeled scenario；决定分配器排序 | 影响任务完成顺序与 SLA | **PENDING** |
+| 6 | **interruptible / parallelizable** | A `F/F`、B `T/T`、C `T/T`、D `T/F` | 布尔组合由人工定 | 语义开关，非数值 | 影响可中断/可并行的执行语义 | **PENDING** |
+| 7 | **扩展现有 profile vs 新增** | 无 | **扩展**（改动既有可行域，须说明对既有场景的影响）**vs 新增**（不动既有） | 版本隔离 | 决定是否改变既有 profile 语义 | **PENDING** |
+| 8 | **`MAX_TASKS_PER_SLOT`** | 未定义（§G.2 要求冻结） | 正整数上界，由人工定 | §G.2 的**冻结终止条件** | 决定单槽最大任务数与 fail-closed 阈值 | **PENDING** |
+| 9 | **`MAX_GROWTH_ROUNDS`（迭代上限）** | 未定义 | 正整数上界，由人工定 | §G.2 的第二个**冻结终止条件** | 决定确定性迭代的收敛/失败边界 | **PENDING** |
+| 10 | **`work_unit_scale`** | 未定义 | 如 `1 work = 10^6 micro-work`，由人工定 | §G.6 固定点整数账本精度 | 决定守恒账本的精确表示 | **PENDING** |
+| 11 | **`ABS_TOL_WORK` / `REL_TOL_WORK`** | 未定义 | 例 `1e-9` / `1e-12`，**必须冻结并登记**，由人工定 | §G.4/§G.6 的 float 重构容差 | 决定「float 对象 vs 整数账本」比对口径 | **PENDING** |
+| 12 | **profile / type 确定性顺序** | 未定义（现按 `type_probability` 抽样） | 冻结的**确定性**顺序，由人工定 | §G.2 第 1 步；**不得**按结果调节 | 决定分割的确定性与可复现性 | **PENDING** |
+| 13 | **modeled-scenario 来源声明** | 现有 profile 自述为仿真设定 | 显式声明为 **modeled scenario**（**不是** 2024 task labels） | §H / D11 红线 | 决定论文表述与 provenance | **PENDING** |
+
+**表中没有任何一项被选定。** 任何 `APPROVED` 字样都必须来自**人工**，不得由实现写入。
+
+## au.4 供人工**一次性签核**的模板
+
+> 收到以下 13 行（每行「批准值 + 理由」）后，方可开 mapper 卡。
+
+```text
+1  profile 名称            : <值>   理由: <…>
+2  duration（物理小时）      : <值>   理由: <…>
+3  load range [min,max]    : <值>   理由: <…>
+4  deadline（物理小时）      : <值>   理由: <…>
+5  priority                : <值>   理由: <…>
+6  interruptible/parallelizable : <值> 理由: <…>
+7  扩展现有 vs 新增          : <值>   理由: <…>
+8  MAX_TASKS_PER_SLOT       : <值>   理由: <…>
+9  MAX_GROWTH_ROUNDS        : <值>   理由: <…>
+10 work_unit_scale          : <值>   理由: <…>
+11 ABS_TOL_WORK / REL_TOL_WORK : <值> 理由: <…>
+12 profile/type 确定性顺序   : <值>   理由: <…>
+13 modeled-scenario 来源声明  : <值>   理由: <…>
+```
+
+## au.5 覆盖验证（**签核之后、mapper 之前**）
+
+签核完成后，**先用 train 复核**（选参数阶段已用的口径），
+**再用 validation / test 做覆盖验证**——**仅验证、不得回头改参数**：
+
+```text
+对每个 split：核对 每个槽 aggregate ∈ [Σ w_min, Σ w_max]（§G.2 步骤 3）
+若任一分片不覆盖 -> 回到人工重新签核（不得在 mapper 内绕过）
+```
+
+## au.6 停止条件
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED。**
+> 在 **13 项逐项**获得人工批准值之前，**不得**开始：
+> **g-e-b mapper**、**g-e-c env 接线**、**g-e-d 回归**、**g-f 训练**、
+> 训练、评估或 **M6**。readiness 保持 **false**。
+
+**本卡未修改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置 /
+`.gitignore`；未创建 mapper、fixture、参数 manifest、Task、run 或 checkpoint。**
