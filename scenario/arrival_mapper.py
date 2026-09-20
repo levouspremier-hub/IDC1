@@ -138,6 +138,7 @@ def _sha256_file(path: Path | str) -> str:
 # --- 已验证的正式链 -------------------------------------------------------------
 
 def load_verified_mapper_chain(
+    split: str = "train",
     *,
     split_manifest_path: Path | str | None = None,
     refs_path: Path | str | None = None,
@@ -160,14 +161,10 @@ def load_verified_mapper_chain(
     bundle = load_verified_v3_bundle()
     refs = load_verified_refs_v4(refs_path) if refs_path is not None \
         else load_verified_refs_v4()
+    # 只验证**本次实际使用**的 split；mapper manifest 另行按 hash 绑定三份 v5。
     splits = {
-        name: load_verified_split_manifest_v5(
-            split_manifest_path if split_manifest_path is not None else None,
-            expected_split=name)
-        for name in ("train", "validation", "test")
-    } if split_manifest_path is None else {
-        "train": load_verified_split_manifest_v5(
-            split_manifest_path, expected_split="train")
+        split: load_verified_split_manifest_v5(
+            split_manifest_path, expected_split=split)
     }
     return {"b6_policy": b6_policy, "bundle": bundle, "refs": refs, "splits": splits}
 
@@ -452,7 +449,7 @@ def build_arrival_task_stream(
     origin = local_origin_from_start(split, start)
     global_origin = validate_episode_origin(split, origin, horizon)
 
-    chain = load_verified_mapper_chain()
+    chain = load_verified_mapper_chain(split)
     aggregate = _aggregate_from_verified_chain(chain)
     scale = int(payload["work_unit_scale"])
     prof = _profile(payload, "E_micro_inference")
@@ -594,16 +591,9 @@ def canonical_content_hash(stream: ArrivalTaskStream) -> str:
 
 def build_mapper_manifest(*, frozen_at_utc: str,
                           c_idc_base_work_per_hour: float) -> dict:
-    from scenario.arrival_intensity_policy import load_verified_b6_policy
-    from scenario.b6_refs import load_verified_refs_v4
-    from scenario.b6_split_manifests import load_verified_split_manifest_v5
-
-    # 逐层调用正式 loader：链不通过即 fail closed（值本身由 mapper 读取时再取）
-    load_verified_b6_policy()
+    # **只**按字节 hash 绑定上游；**链的语义验证**由 `load_verified_mapper_chain()`
+    # 与 `load_verified_mapper_manifest()` 各自完成（避免同一重验证反复嵌套）。
     refs_path = REPO_ROOT / "configs/frozen_refs/refs_v4.json"
-    load_verified_refs_v4(refs_path)
-    for name in ("train", "validation", "test"):
-        load_verified_split_manifest_v5(expected_split=name)
     C = float(c_idc_base_work_per_hour)
     d = 0.5
     lo, hi = 1 * 0.04 * C * d, 1 * 0.25 * C * d
