@@ -346,7 +346,8 @@ def _bounds_micro(payload: dict, key: str = "E_micro_inference") -> tuple[int, i
     """
     scale = int(payload["work_unit_scale"])
     prof = _profile(payload, key)
-    C = c_idc_base_work_per_hour()
+    # 已验签的 payload 里就带着 live-verified 的 C_IDC_base，**不**重复加载 manifest
+    C = float(payload["c_idc_base_work_per_hour"])
     d = float(payload["delta_t_hours"])
     steps = int(prof["duration_steps"])
     lo, hi = float(prof["load_range"][0]), float(prof["load_range"][1])
