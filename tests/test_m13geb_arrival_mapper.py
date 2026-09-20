@@ -230,15 +230,23 @@ def test_same_inputs_give_the_same_stream_and_hash():
 def test_future_slot_mutation_does_not_change_the_prefix(monkeypatch):
     m = mapper()
     base = _stream(horizon=8)
-    real = m.verified_realized_aggregate
+    real = m._aggregate_from_verified_chain
 
-    def mutated():
-        arr = np.asarray(real(), dtype=np.int64).copy()
-        # 改**未来** slot（最后一个）——此前 slot 的 Task 必须逐位不变
-        arr[base.slots[-1].slot_index] += 1000
+    def mutated(chain):
+        arr = np.asarray(real(chain), dtype=np.int64).copy()
+        # 改**未来** slot（最后一个）——此前 slot 的 Task 必须逐位不变。
+        # 取一个**仍可覆盖**的值（62 work 需要 2 个 E 任务，≤ MAX_TASKS_PER_SLOT=4），
+        # 否则注入本身会 fail closed 而掩盖 prefix 断言。
+        arr[base.slots[-1].slot_index] = 62
         return arr
 
-    monkeypatch.setattr(m, "verified_realized_aggregate", mutated)
+    monkeypatch.setattr(m, "_aggregate_from_verified_chain", mutated)
+
+    # **非空洞性**：注入必须**真的**生效——覆盖被改槽的 stream 必须与基线不同
+    widened = _stream(horizon=8)
+    assert widened.slots[-1].aggregate_micro != base.slots[-1].aggregate_micro
+    assert widened.slots[-1].tasks != base.slots[-1].tasks
+
     after = _stream(horizon=7)
     assert [t.task_id for s in after.slots for t in s.tasks] == \
            [t.task_id for s in base.slots[:-1] for t in s.tasks]
@@ -258,6 +266,7 @@ def test_forecast_is_never_used_as_task_truth(monkeypatch):
         return arr + 1000.0
 
     monkeypatch.setattr(m, "expected_arrival_forecast", bogus)
+    # 说明：Task 构造**不**读取 forecast；下面的对照断言因此必须成立。
     after = _stream(horizon=6)
     assert after.content_hash == base.content_hash
 
@@ -286,12 +295,14 @@ def test_beyond_four_task_coverage_fails_closed(monkeypatch):
     with pytest.raises(m.ArrivalMapperError):
         m.split_slot_aggregate_micro(huge)
     # 通过公开入口注入超大 aggregate 也必须 fail closed
-    real = m.verified_realized_aggregate
-    base = np.asarray(real(), dtype=np.int64).copy()
+    real = m._aggregate_from_verified_chain
+    base = np.asarray(real(m.load_verified_mapper_chain("validation")),
+                      dtype=np.int64).copy()
     base[10224] = 10_000  # validation 的首个槽（origin=0 -> 全局 10224）
-    monkeypatch.setattr(m, "verified_realized_aggregate", lambda: base)
+    monkeypatch.setattr(m, "_aggregate_from_verified_chain", lambda chain: base)
     with pytest.raises(m.ArrivalMapperError):
-        _stream(horizon=8, start="2024-08-01T00:00:00+08:00", split="validation")
+        m.build_arrival_task_stream(
+            "validation", start="2024-08-01T00:00:00+08:00", horizon=8, seed=1)
 
 
 @needs_assets
