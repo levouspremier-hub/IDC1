@@ -354,7 +354,8 @@ def test_dirty_source_is_rejected(monkeypatch):
 
 @needs_assets
 def test_demo_and_random_generators_are_never_called(monkeypatch):
-    import idc_model.task_model as tm
+    # 动态导入：mypy 不会跟进，避免把含既有类型错误的模块拉进 make check
+    tm = importlib.import_module("idc_model.task_model")
 
     def boom(*a, **k):
         raise AssertionError("mapper 不得调用 demo/random task generator")

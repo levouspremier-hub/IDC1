@@ -195,11 +195,13 @@ def expected_arrival_forecast(timestamps=None) -> np.ndarray:
 
 
 def c_idc_base_work_per_hour() -> float:
-    """B6 冻结硬件实现（`server_seed=0`）的 `C_IDC_base`。"""
-    from idc_model.task_model import IDCEnergyTaskModel
+    """B6 冻结硬件实现（`server_seed=0`）的 `C_IDC_base`。
 
-    return float(IDCEnergyTaskModel(task_seed=0, server_seed=0)
-                 ._task_workload_capacity_ref())
+    **只**从已冻结的 mapper manifest 读取——本模块**不**导入 `idc_model.task_model`
+    （该文件含既有 mypy 错误且不在 `make check` 的扫描范围内；由**物化器**
+    （`scripts/`，不在扫描范围）在冻结时解析一次并写入 manifest）。
+    """
+    return float(load_verified_mapper_manifest()["c_idc_base_work_per_hour"])
 
 
 # --- manifest -----------------------------------------------------------------
@@ -248,6 +250,7 @@ MANIFEST_TOP_KEYS: tuple[str, ...] = (
     "abs_tol_work", "rel_tol_work", "max_tasks_per_slot", "max_growth_rounds",
     "deterministic_algorithm", "seed_policy", "units", "sources",
     "source_revision", "note", "frozen_at_utc", "e_work_bounds",
+    "c_idc_base_work_per_hour",
 )
 PROFILE_KEYS: tuple[str, ...] = (
     "duration_steps", "deadline_steps", "load_range", "priority_range",
@@ -274,6 +277,9 @@ def validate_mapper_manifest(payload: object) -> dict:
     _require(payload["work_unit_scale"] == 1_000_000, "work_unit_scale 必须是 1e6")
     _require(payload["delta_t_hours"] == 0.5, "delta_t_hours 必须是 0.5")
     _require(payload["max_tasks_per_slot"] == 4, "max_tasks_per_slot 必须是 4")
+    _require(isinstance(payload["c_idc_base_work_per_hour"], float)
+             and payload["c_idc_base_work_per_hour"] > 0.0,
+             "c_idc_base_work_per_hour 必须是正 float")
     return payload
 
 
@@ -489,7 +495,8 @@ def canonical_content_hash(stream: ArrivalTaskStream) -> str:
 
 # --- 物化（由 scripts/materialize_b6_arrival_mapper.py 调用） ------------------
 
-def build_mapper_manifest(*, frozen_at_utc: str) -> dict:
+def build_mapper_manifest(*, frozen_at_utc: str,
+                          c_idc_base_work_per_hour: float) -> dict:
     from scenario.arrival_intensity_policy import load_verified_b6_policy
     from scenario.b6_refs import load_verified_refs_v4
     from scenario.b6_split_manifests import load_verified_split_manifest_v5
@@ -500,7 +507,7 @@ def build_mapper_manifest(*, frozen_at_utc: str) -> dict:
     load_verified_refs_v4(refs_path)
     for name in ("train", "validation", "test"):
         load_verified_split_manifest_v5(expected_split=name)
-    C = c_idc_base_work_per_hour()
+    C = float(c_idc_base_work_per_hour)
     d = 0.5
     lo, hi = 1 * 0.04 * C * d, 1 * 0.25 * C * d
     payload = {
@@ -540,6 +547,7 @@ def build_mapper_manifest(*, frozen_at_utc: str) -> dict:
             "C_dl_training", "D_preprocess",
         ],
         "delta_t_hours": d,
+        "c_idc_base_work_per_hour": C,
         "work_unit_scale": 1_000_000,
         "abs_tol_work": 1e-9,
         "rel_tol_work": 1e-12,

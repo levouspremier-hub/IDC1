@@ -47,6 +47,18 @@ def _canonical_json(payload: dict) -> str:
     return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
 
 
+def _c_idc_base_work_per_hour() -> float:
+    """B6 冻结硬件实现（`server_seed=0`）的 `C_IDC_base`。
+
+    该解析放在**物化器**（`scripts/`，不在 `make check` 的 mypy 扫描范围内），
+    结果写入 manifest，因此 mapper 模块**不**导入 `idc_model.task_model`。
+    """
+    from idc_model.task_model import IDCEnergyTaskModel
+
+    return float(IDCEnergyTaskModel(task_seed=0, server_seed=0)
+                 ._task_workload_capacity_ref())
+
+
 def materialize_arrival_mapper_manifest(*, frozen_at_utc: str | None = None) -> dict:
     """生成 / 校验 canonical mapper manifest（原子、幂等、拒绝覆盖）。"""
     target = canonical_mapper_manifest_path()
@@ -60,7 +72,9 @@ def materialize_arrival_mapper_manifest(*, frozen_at_utc: str | None = None) -> 
         stamp = stamp or load_verified_mapper_manifest(target)["frozen_at_utc"]
     stamp = stamp or datetime.now(UTC).replace(microsecond=0).isoformat()
 
-    candidate = validate_mapper_manifest(build_mapper_manifest(frozen_at_utc=stamp))
+    candidate = validate_mapper_manifest(build_mapper_manifest(
+        frozen_at_utc=stamp,
+        c_idc_base_work_per_hour=_c_idc_base_work_per_hour()))
 
     if target.is_file():
         existing = load_verified_mapper_manifest(target)
