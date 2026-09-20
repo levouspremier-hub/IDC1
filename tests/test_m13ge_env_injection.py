@@ -370,12 +370,13 @@ def test_formal_forecast_arrays_are_the_b6_causal_forecasts():
     env, inj = _daylight_env()
     env.reset(seed=7)
     for attr in ("price_forecast_t", "temperature_forecast_t", "pv_forecast_t",
-                 "wind_forecast_t", "carbon_forecast_t", "arrival_forecast_t"):
+                 "wind_forecast_t", "carbon_forecast_t"):
         assert hasattr(env, attr), attr
-    assert [float(v) for v in env.arrival_forecast_t] == list(inj.arrival_forecast)
     # realized 与 forecast **不得**是同一套数组
     assert not np.allclose(env.pv_forecast_t, env.pv_t)
     assert not np.allclose(env.price_forecast_t, env.price_t)
+    # 注意：carbon 当前 **不能** 这样断言 —— canonical carbon 与它的 causal forecast
+    # 都是冻结常量 0.402，`np.allclose` 恒等，断言会**空过**（见 R2-1/R2-2）。
 
 
 @needs_assets
@@ -499,3 +500,117 @@ def test_provenance_hash_covers_realized_forecast_refs_and_tasks():
         type(inj)(**{**inj.__dict__, "price_sgd_per_kwh": tuple(
             v + 1.0 for v in inj.price_sgd_per_kwh)}))
     assert changed != inj.provenance_hash
+
+
+# =============================================================================
+# M1.3g-e-c-R2：formal carbon 观测通道分离（+ P3 清理）
+#
+# 改前缺陷（本段在实现前必须为红）：
+# - `_get_forecast_features` 的 carbon 分组读 **realized** `carbon_factor_t`，
+#   而读入了正确 causal 值的 `carbon_forecast_t` **全仓库无人读取**（死代码）；
+# - 死属性 `arrival_forecast_t` 从未被读取。
+#
+# ⚠️ canonical carbon 与它的 causal forecast **当前恒等**（同为冻结常量 0.402），
+# 因此本段**不得**依赖「二者天然不同」；一律在 reset 后对目标数组做**明确 mutation**
+# 来检验读取路径，并附**非空洞性断言**证明 mutation 确实生效。
+# =============================================================================
+
+# `_get_forecast_features` 的固定分组顺序（M3.10b）。
+FORECAST_GROUP_ORDER = ("price", "temperature", "arrival", "pv", "wind", "carbon",
+                        "sin", "cos")
+
+
+def _forecast_groups(features, horizon: int) -> dict:
+    """按固定顺序把 forecast observation 切成 8 组，便于逐组比较。"""
+    assert features.shape[0] == len(FORECAST_GROUP_ORDER) * horizon
+    return {name: features[k * horizon:(k + 1) * horizon]
+            for k, name in enumerate(FORECAST_GROUP_ORDER)}
+
+
+# --- R2-1. realized carbon mutation 不得影响 formal forecast observation ---------
+
+@needs_assets
+@pytest.mark.leakage
+def test_formal_carbon_observation_ignores_realized_carbon_mutation():
+    """formal 下改 **realized** carbon → forecast observation **逐位不变**。"""
+    env, _ = _daylight_env()
+    env.reset(seed=7)
+    base = env._get_forecast_features().copy()
+
+    realized_before = np.asarray(env.carbon_factor_t, dtype=np.float64).copy()
+    # 只改**可见窗口内**的 realized carbon
+    env.carbon_factor_t[:env.forecast_cutoff] += 5.0
+    # --- 非空洞性：mutation 必须真的改到目标数组 ---
+    assert not np.array_equal(realized_before, env.carbon_factor_t), \
+        "mutation 未生效：realized carbon 数组没变，本用例无意义"
+    assert float(env.carbon_factor_t[0]) == float(realized_before[0]) + 5.0
+
+    assert np.array_equal(base, env._get_forecast_features()), \
+        "formal forecast observation 不得读取 realized carbon_factor_t"
+
+
+# --- R2-2. causal carbon forecast mutation 必须影响 carbon 分组 ------------------
+
+@needs_assets
+@pytest.mark.leakage
+def test_formal_carbon_observation_follows_the_causal_carbon_forecast():
+    """formal 下改**可见窗口内** causal carbon → carbon 分组必变，其余分组不变。"""
+    env, _ = _daylight_env()
+    env.reset(seed=7)
+    horizon = env.horizon
+    base = env._get_forecast_features().copy()
+    base_groups = _forecast_groups(base, horizon)
+
+    causal_before = np.asarray(env.carbon_forecast_t, dtype=np.float64).copy()
+    env.carbon_forecast_t[:env.forecast_cutoff] += 5.0
+    # --- 非空洞性：mutation 必须真的改到目标数组 ---
+    assert not np.array_equal(causal_before, env.carbon_forecast_t), \
+        "mutation 未生效：causal carbon 数组没变，本用例无意义"
+    assert float(env.carbon_forecast_t[0]) == float(causal_before[0]) + 5.0
+
+    after_groups = _forecast_groups(env._get_forecast_features(), horizon)
+
+    assert not np.allclose(base_groups["carbon"], after_groups["carbon"]), \
+        "carbon 观测分组必须读 causal carbon_forecast_t（当前读的是 realized 死值）"
+    for name in ("price", "temperature", "arrival", "pv", "wind", "sin", "cos"):
+        assert np.allclose(base_groups[name], after_groups[name]), \
+            f"{name} 分组不得受 carbon forecast mutation 影响"
+
+
+# --- R2-3. 窗口外 carbon forecast mutation 不影响当前 observation（反向控制）-----
+
+@needs_assets
+@pytest.mark.leakage
+def test_formal_carbon_observation_ignores_out_of_window_carbon_forecast():
+    """只改可见窗口**之外**的 causal carbon → 当前 observation 不变。"""
+    env, _ = _daylight_env()          # horizon=8, cutoff=4 → 可见窗口 [0, 4)
+    env.reset(seed=7)
+    base = env._get_forecast_features().copy()
+
+    t = int(env.current_step)
+    lo, hi = t + env.forecast_cutoff, env.horizon
+    assert lo > t, "可见窗口为空 → 本用例无意义"
+    assert hi > lo, "可见窗口之外的区间为空 → 反向控制无意义"
+
+    target_before = np.asarray(env.carbon_forecast_t, dtype=np.float64).copy()
+    env.carbon_forecast_t[lo:hi] += 1000.0
+    # --- 非空洞性：mutation 必须真的改到**窗口外**那一段 ---
+    target_after = np.asarray(env.carbon_forecast_t, dtype=np.float64)
+    assert not np.array_equal(target_before, target_after), \
+        "mutation 未生效：窗口外 carbon forecast 没变，本用例无意义"
+    assert np.array_equal(target_after[lo:hi], target_before[lo:hi] + 1000.0)
+
+    assert np.array_equal(base, env._get_forecast_features()), \
+        "可见窗口之外的 carbon forecast 不得影响当前 observation"
+
+
+# --- R2-4. P3 清理：死属性 arrival_forecast_t 必须删除 --------------------------
+
+@needs_assets
+def test_arrival_forecast_has_no_dead_attribute():
+    """arrival 的 causal forecast 唯一来源是 `task_arrival_forecast`。"""
+    env, inj = _daylight_env()
+    env.reset(seed=7)
+    assert not hasattr(env, "arrival_forecast_t"), \
+        "arrival_forecast_t 从未被读取，必须删除；观测只走 task_arrival_forecast"
+    assert [float(v) for v in env.task_arrival_forecast] == list(inj.arrival_forecast)
