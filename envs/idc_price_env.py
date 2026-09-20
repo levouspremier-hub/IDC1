@@ -2039,15 +2039,26 @@ class IDCPriceEnv20D(gym.Env):
         visible = np.zeros(self.horizon, dtype=np.float64)
         visible[start:end] = 1.0
 
-        # M1.3g-e-c-R1：formal 路径的观测通道只读 **causal forecast**；
-        # legacy 路径行为不变（其 forecast 数组就是原数组的副本）。
-        price_24h = np.asarray(self.price_forecast_t, dtype=np.float64) / max(self.price_ref, eps) * visible
-        T_amb_24h = np.asarray(self.temperature_forecast_t, dtype=np.float64) / 40.0 * visible
+        # M1.3g-e-c-R1：**formal** 路径的观测通道只读 **causal forecast**；
+        # **legacy 路径逐字保持原行为**（直接读 `price_t`/`T_amb`/`pv_t`/`wt_t`），
+        # 否则会破坏既有的 leakage 回归（它们正是靠「改真值 → 观测变」来验证可见性）。
+        if self.formal:
+            price_src = self.price_forecast_t
+            temp_src = self.temperature_forecast_t
+            pv_src = self.pv_forecast_t
+            wind_src = self.wind_forecast_t
+        else:
+            price_src = self.price_t
+            temp_src = self.T_amb
+            pv_src = self.pv_t
+            wind_src = self.wt_t
+        price_24h = np.asarray(price_src, dtype=np.float64) / max(self.price_ref, eps) * visible
+        T_amb_24h = np.asarray(temp_src, dtype=np.float64) / 40.0 * visible
         lambda_24h = np.asarray(
             self.task_arrival_forecast, dtype=np.float64
         ) / max(self.lambda_ref, eps) * visible
-        pv_24h = np.asarray(self.pv_forecast_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
-        wind_24h = np.asarray(self.wind_forecast_t, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
+        pv_24h = np.asarray(pv_src, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
+        wind_24h = np.asarray(wind_src, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
         carbon_24h = (
             np.asarray(self.carbon_factor_t, dtype=np.float64)
             / max(self.carbon_factor_ref, eps)
