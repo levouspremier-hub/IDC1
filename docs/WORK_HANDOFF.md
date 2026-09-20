@@ -2515,7 +2515,54 @@ input path-sha / materializer_revision / undeclared field / history_steps
 > **mutation 回归的范围声明（§AN.8）原样保留**：public-entry mutation 回归
 > **仍未被实现**，本卡**不**把 underlying-builder leakage 回归冒充成它。
 
-**⛔ 下一张卡是 M1.3g-e-b**（mapper）——但**在 env 接线/训练之前**；
+### 7AL. M1.3g-e-b-a：B6 mapper 可行域决策审计（**执行完成，等待人工决策**）
+
+`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md` §ah + `docs/task_cards/M1.3g.md` §ah–§ai。
+**纯只读审计**：未改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置；
+未创建 mapper / fixture / 参数 manifest / Task / run / checkpoint。
+
+**核心发现（**本节修正任务卡的基数**）**：任务卡的 `w_min` 用了
+`C = 469.556874725279 work/hour`，但该值**扫 `server_seed` 0–63 无一匹配**、
+**不可复现**——与 M1.3f-d 已退役的 `95.599` / `4.970` **同类**（未冻结探针）。
+B6 policy 固定的硬件实现是 `server_seed=0`，其参考量为
+**`C_IDC_base = _task_workload_capacity_ref() = 485.646896875418349 work/hour`**。
+
+| 量 | 任务卡 | **本审计（B6 冻结实现）** |
+|---|---|---|
+| `C`（work/hour） | 469.556874725279（不可复现） | **485.646896875418349** |
+| 全局最小 `w_min`（work） | 37.56454997802232 | **38.851751750033472** |
+| `< w_min` 的槽（ALL） | 14,401 / 81.9729% | **15,109 / 86.0030%** |
+| train / validation / test | 8,375 / 2,377 / 3,649 | **8,797 / 2,494 / 3,818** |
+
+**零聚合槽 = 0**（min = 12）⇒「零任务覆盖」的逃逸**完全不适用**。
+
+**其他实测**：B6 expected `31.994`；`template × expected ∈ [28.67392724795668,
+35.69791497386820]`——**48 个 slot 全部**小于 `w_min`（`max/w_min = 0.918824`），
+这是「forecast ≠ truth」的又一证据；四 profile 的 `[w_min, w_max]` 见 §ah.1.3；
+当前实现（`workload` **不乘** `delta_t_hours`）会让 **100.0000%** 的槽不可行。
+
+**不可行性证明**：每个合法 Task 的 `workload >= 全局最小 w_min =
+38.851751750033472 > aggregate` ⇒ 非空任务集的和必然超出、空集的和为 0 ——
+与 1:1 守恒矛盾，**无合法分割**。
+
+**人工决策（**只有三个**）**：**A** 批准新的/修改的 modeled micro-task profile
+参数以覆盖最低 aggregate；**B** 回上游 M1.3f 重新批准并版本化场景强度或时间语义；
+**C** 保持当前参数并阻塞 mapper。选项 A 下必须**逐项批准 13 项**参数（§ah.7），
+**不得**由实现自行选择。**本审计不自行选择任何一项。**
+
+**六类伪选项明确禁止**：mapper 内缩放 arrival、合并/移动半小时槽、丢弃低 aggregate 槽、
+零 workload/零数量替代、未经批准放宽 profile/workload 约束、用 validation/test
+拟合 profile 参数。
+
+**验收**：`make check` exit 0（**2632 passed**）、`make smoke` exit 0、
+`make train` **exit 2**、`git diff --check` / `git status --short` 空。
+**范围外修改：无。**
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED，等待 micro-task/profile 参数或上游强度语义的人工批准。**
+
+**下一张卡**：**M1.3f-e-b-c（若选 A/B）或维持阻塞（若选 C）** ——
+**在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
+回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
 readiness **仍为 false**；**不得自行开始** mapper / env 接线 / 训练 / 评估 / M6。
 
