@@ -274,6 +274,34 @@ git revert 316d813 71da67a da862a4 59c1fa3 a532390
 # revert 后 HEAD^{tree} == a740e38^{tree} = 60349ad7d27a02831ac9043a0645dc0b0025a4f1
 ```
 
+### 9.0b **A 路线已选，13 项参数全部 PENDING（M1.3f-e-b-c，2026-09-20）**
+
+**人工已选择路线 A**：用 **modeled micro-task/profile 参数**解决可行域缺口。
+**但 A 的选择【不】等于 13 个具体参数获批。**
+
+审计文档 `docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md` §au 给出：
+
+- **数学必要条件**（只用 train）：`C_IDC_base = 485.646896875418349`、
+  `K = C x delta = 242.823448437709`；TRAIN `n=10,224 min=12 max=59 mean=32.019757`，
+  严格正槽 10,224、零槽 0，**最低正 aggregate = 12 work**；
+- **可行区间**（不选定）：`duration_steps x load_min <= 12 / K`，即
+  1 step → `load_min <= 0.049418621131`、2 steps → `0.024709310565`、
+  3 steps → `0.016472873710`、4 steps → `0.012354655283`；
+  现有最小 `w_min = 38.851751750033 work`（比最低槽大 3.237646 倍）；
+- **13 项人工签核表**（§au.3）：profile 名称 / duration / load range / deadline /
+  priority / interruptible·parallelizable / 扩展旧 vs 新增 / `MAX_TASKS_PER_SLOT` /
+  `MAX_GROWTH_ROUNDS` / `work_unit_scale` / `ABS_TOL_WORK`·`REL_TOL_WORK` /
+  profile·type 确定性顺序 / modeled-scenario 来源声明 ——
+  **状态一律 `PENDING`**，实现未写任何 `APPROVED`；
+- **一次性签核模板**（§au.4，13 行「批准值 + 理由」）与
+  **覆盖验证顺序**（§au.5：先 train 复核，再以 validation/test **仅验证**、
+  不得回头改参数）。
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED。**
+> 在 **13 项逐项**获得人工批准值之前，不得开始 g-e-b / g-e-c / g-e-d / g-f、
+> env 接线、训练、评估或 M6；readiness 保持 **false**。
+> `git diff --name-only dfce1a8..HEAD` 仅三份文档；范围外修改**无**。
+
 ## 9. 当前硬阻塞：arrival workload 到离散 Task 的语义
 
 现在不要直接启动 M1.3g-e 实施。
