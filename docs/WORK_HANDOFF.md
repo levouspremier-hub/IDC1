@@ -2560,6 +2560,29 @@ B6 policy 固定的硬件实现是 `server_seed=0`，其参考量为
 
 > ## ⛔ **g-e-b mapper 实现仍 BLOCKED，等待 micro-task/profile 参数或上游强度语义的人工批准。**
 
+### 7AL.1 R1 账本收口（2026-09-20，纯文档）
+
+**M1.3g-e-b-a 状态**：**执行完成，等待人工裁决（g-e-b mapper BLOCKED）**。
+
+**三项账本澄清（R1 修正）**：
+
+1. **`a740e38` 是【前置】的 `M1.3f-e-b2-b-R1` 审核收口提交**，改动的是
+   M1.3f 卡片与 `WORK_HANDOFF` 本身；它**不属于**本审计卡，
+   **必须保留**、**不得**纳入本卡的回滚链。
+2. **本 `M1.3g-e-b-a` 审计本身只修改四份文档**：
+   `docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`、`docs/task_cards/M1.3g.md`、
+   `docs/WORK_HANDOFF.md`、`docs/NEW_CONVERSATION_HANDOFF.md`。
+3. **数学结论已成立，但不构成 A / B / C 中任一项的人工作出决定**：
+   86.0030% 的槽不可行是**事实**；选 A、选 B 还是选 C 是**人工裁决**，
+   尚未发生。**在裁决之前 mapper 仍 BLOCKED。**
+
+**本审计卡的精确 newest-first 回滚**：
+
+```bash
+git revert 316d813 71da67a da862a4 59c1fa3 a532390
+# revert 后 HEAD^{tree} == a740e38^{tree} = 60349ad7d27a02831ac9043a0645dc0b0025a4f1
+```
+
 **下一张卡**：**M1.3f-e-b-c（若选 A/B）或维持阻塞（若选 C）** ——
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
