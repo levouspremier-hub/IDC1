@@ -1021,3 +1021,246 @@ w_max = duration_steps × load_max × C_IDC_work_per_hour × delta_t_hours
 ## K. 范围外修改
 
 **无。** 本卡只新增/修改四份 markdown。
+
+---
+
+# M1.3g-e-b-a 审计：B6 arrival-to-task mapper 的**可行域**决策
+
+> 任务卡：`docs/task_cards/M1.3g.md` §ah
+> 分支：`p4-safeppo-m51a-rollout-contract-m12-integration`
+> 开始 SHA：`a740e38`
+> 前提：**M1.3f-e-b2-b / R1 已通过** —— 正式入口已切到 **B6/v3/v5**
+> 性质：**只读审计 + 人工决策卡**。**不实现 mapper**、**不创建**任何
+> 参数 manifest / Task / run / checkpoint。
+
+**审计问题（唯一）**：在**已批准的 B6 链**下（main expected
+`31.994 work/半小时`、`server_seed=0` 的冻结硬件实现、现有四类 task profile），
+把**逐槽 realized aggregate** 1:1 分割成合法 `Task` 是否**可行**？
+若不可行，需要人工决定什么？
+
+---
+
+## ah.1 数值重算（**不复制任务卡数字**）
+
+### ah.1.1 硬件参考量 `C_IDC_base`（**本节修正任务卡**）
+
+任务卡写的 `w_min` 基于 `C = 469.556874725279 work/hour`。
+**本审计实测该值不可复现**：
+
+```bash
+uv run python -c "
+import sys; sys.path.insert(0,'.')
+import numpy as np
+from envs.idc_price_env import IDCPriceEnv20D
+target = 469.556874725279
+hits = [s for s in range(64)
+        if abs(float(np.asarray(IDCPriceEnv20D(horizon=24, task_seed=0,
+                server_seed=s, forecast_seed=300000).model.C_server).sum())-target) < 1e-6]
+print('seeds 0..63 matching 469.556874725279 =', hits)
+"
+```
+
+```text
+seeds 0..63 matching 469.556874725279 = []
+```
+
+**B6 policy 固定的硬件实现是 `server_seed=0`**（`hardware realization`），
+其参考量为：
+
+```bash
+uv run python -c "
+import sys; sys.path.insert(0,'.')
+from idc_model.task_model import IDCEnergyTaskModel
+m = IDCEnergyTaskModel(task_seed=0, server_seed=0)
+print('C_IDC_base = %.15f' % m.C_IDC_base)
+print('_task_workload_capacity_ref() = %.15f' % m._task_workload_capacity_ref())
+print('task_workload_scale =', m.task_workload_scale)
+"
+```
+
+```text
+C_IDC_base = 485.646896875418349
+_task_workload_capacity_ref() = 485.646896875418349
+task_workload_scale = 1.0
+```
+
+> **结论**：`469.556874725279` 与 M1.3f-d 已退役的 `95.599` / `4.970` **同类**
+> ——是**未冻结的探针值**，不是 B6 链的物理参考量。
+> **本审计此后一律使用 `C = 485.646896875418349 work/hour`。**
+
+### ah.1.2 B6 policy 与 template（实测）
+
+```text
+main_expected_amount_work_per_half_hour = 31.994
+main_expected_rate_work_per_hour        = 63.988
+declared_capacity_work_per_hour         = 79.985
+delta_t_hours                           = 0.5
+template: len 48  mean 1.0  min 0.8962282692991398  max 1.1157690496301869
+template x expected: min 28.67392724795668  max 35.69791497386820
+```
+
+### ah.1.3 四类 profile 的**物理可行域**（rate-based，g-e-a-R2 §G.4 冻结语义）
+
+`duration` 按**物理小时**声明，`duration_steps = round_half_up(hours / 0.5)`；
+`w_min = steps × load_min × C × delta`、`w_max = steps × load_max × C × delta`。
+
+| profile | duration(h) | steps | `w_min`（work） | `w_max`（work） |
+|---|---|---|---|---|
+| `A_inference` | 1–2 | 2–4 | **38.851751750033** | 174.832882875151 |
+| `B_rl_training` | 2–5 | 4–10 | **135.981131125117** | 728.470345313127 |
+| `C_dl_training` | 4–8 | 8–16 | **427.369269250368** | 1748.328828751506 |
+| `D_preprocess` | 1–4 | 2–8 | **38.851751750033** | 388.517517500335 |
+
+**全局最小 `w_min` = `38.851751750033472` work**（`A_inference` 与 `D_preprocess`）。
+
+> 任务卡写的 `37.56454997802232` 来自 `C=469.556874725279`；
+> 以 B6 冻结实现重算应为 **`38.851751750033472`**。
+
+### ah.1.4 realized aggregate（**v3 驱动表**，已验签）
+
+```text
+n=17568  min=12  max=59  mean=32.020377959927
+zero-aggregate slots = 0
+```
+
+---
+
+## ah.2 逐槽分类（**按 split**）
+
+分类规则：
+
+- **可由现有 profile 覆盖**：`aggregate >= 38.851751750033472`
+  （此时**一个** `A`/`D` profile 任务即可承载——最大槽 59 ≪ 最小 `w_max` 174.83）；
+- **数学不可行**：`0 < aggregate < 38.851751750033472`（无任何合法 Task）；
+- **零聚合槽**：`aggregate == 0`（**本数据集为 0 个**，故该逃逸不适用）；
+- **上限不可行**：`aggregate > w_max`（**本数据集为 0 个**）。
+
+| split | rows | min | max | mean | `< w_min` 的槽 | 占比 |
+|---|---:|---:|---:|---:|---:|---:|
+| train | 10,224 | 12 | 59 | 32.0198 | **8,797** | 86.0426% |
+| validation | 2,928 | 12 | 54 | 32.0584 | **2,494** | 85.1776% |
+| test | 4,416 | 14 | 55 | 31.9966 | **3,818** | 86.4583% |
+| **ALL** | **17,568** | **12** | **59** | **32.0204** | **15,109** | **86.0030%** |
+
+```text
+zero-aggregate slots      = 0
+slots >= w_min            = 2,459 (13.9970%)
+max slot / w_min          = 1.518593
+realized max / smallest w_max(A) = 59 / 174.83 -> 单任务即可承载
+```
+
+**不可行性证明（逐槽）**：取任一 `aggregate ∈ (0, 38.851751750033472)` 的槽。
+1:1 守恒要求该槽所有 Task 的 `workload` 之和**精确等于**该 `aggregate`；
+而每个合法 Task 必须满足 `workload >= w_min = 38.851751750033472`
+（**所有** profile 的 `w_min` 的**最小者**）。因此任何非空任务集的和
+`>= 38.851751750033472 > aggregate`，与守恒矛盾；空集的和为 `0 ≠ aggregate`。
+⇒ **不存在合法分割**。
+
+> **本数据集没有 `aggregate == 0` 的槽**（min = 12），因此「零聚合槽可以用零任务
+> 覆盖」这一逃逸**完全用不上**：**17,568 个槽全部**要么可行（2,459 个），
+> 要么**数学不可行**（15,109 个）。
+
+---
+
+## ah.3 两种口径**不得互换**
+
+| 量 | 来源 | 数值范围 | 用途 |
+|---|---|---|---|
+| **realized aggregate** | `exogenous_drivers_v3.parquet` 的 `arrival` 列（Poisson **实现值**） | 12 – 59（均值 32.0204） | **mapper 的任务到账本输入** |
+| **expected arrival forecast** | `template[slot] × 31.994`（**期望**，D3） | 28.67392724795668 – 35.69791497386820（均值 **31.994**） | **决策可见 forecast** |
+
+**红线**：
+- 二者**不得互换**；
+- **不得**用 forecast 直接伪装 Task truth（forecast 是期望，realized 才是账本）；
+- **不得**用 realized 反调 main intensity（那是已封闭的循环校准）。
+
+**一个必须记录的观测**：`expected` 的 **48 个 slot 全部**小于 `w_min`
+（`expected_max / w_min = 0.918824`）。也就是说，**若**有人拿 forecast 当账本，
+**100%** 的 slot 都不可行——这本身就是「forecast ≠ truth」的又一个证据。
+
+---
+
+## ah.4 两种 profile 语义变体的对照（**帮助人工决策**）
+
+| 语义 | `A/D` 的 `w_min` | `< w_min` 的槽 | 占比 |
+|---|---:|---:|---:|
+| **rate-based（g-e-a-R2 §G.4 已冻结）** | 38.851751750033472 | 15,109 | 86.0030% |
+| 当前实现（`workload` **不乘** `delta_t_hours`） | 77.703503500066944 | **17,568** | **100.0000%** |
+
+> 当前实现的 `Task.workload` **未**乘 `delta_t_hours`（g-e-a §A.4 已登记的矛盾）。
+> 在 0.5 h 步长下，该口径会让**全部**槽不可行。因此 mapper **必须**先按
+> §C.2 的 rate-based 语义统一 `workload` 口径——**但那是实现细节，
+> 不改变本审计的结论**：即便取较宽松的 rate-based 口径，仍有 **86.0030%** 的槽不可行。
+
+---
+
+## ah.5 为什么**不能**在 mapper 内绕过
+
+以下全部是**伪选项**（禁止）：
+
+1. **在 mapper 内缩放 arrival** —— 改变 arrival/service 比 ⇒ 场景强度修改
+   （§C.0 第 3 类），只能在上游 M1.3f 版本化（§G.7 不变式 13）；
+2. **合并/移动半小时槽** —— 改变时间轴与到达语义，破坏 1:1 守恒与
+   slot↔时刻的映射（B5-ARRIVAL 的 `slot_mapping`）；
+3. **丢弃低 aggregate 槽** —— 违反 §G.7 不变式 1/9（不得丢任务）；
+4. **零 workload 或零数量替代** —— 违反不变式 1/4（不得创建 `workload <= 0` 的任务）；
+5. **放宽现有 profile / workload 约束而不经人工批准** —— 未经批准即改变
+   物理可行域，属「放松约束制造可行」；
+6. **用 validation/test 拟合 profile 参数** —— 违反 AGENTS §1.4（冻结后共享，
+   不得按测试日重算）与 §六的泄漏红线。
+
+---
+
+## ah.6 人工决策表（**只有三个选项**）
+
+| 选项 | 内容 | 影响 | 阻塞解除条件 |
+|---|---|---|---|
+| **A** | **批准新的/修改的 modeled micro-task profile 参数**，使其物理可行域**覆盖最低 aggregate**（本数据集最低 = 12 work） | profile 参数是 **modeled scenario**，**不是** 2024 task labels；批准后 mapper 的可行域覆盖全部槽 | 人工逐项批准 §ah.7 的全部参数 |
+| **B** | **回到上游 M1.3f**，重新批准并版本化**场景强度或时间语义** | 新 exogenous 版本 + 新 refs + **新 v6 triad** + 新 policy；旧 v3/v5 逐字节保留并标 superseded | 新版本物化并获人工批准 |
+| **C** | **保持当前参数并阻塞 mapper** | 正式 mapper **不可实现**；env 接线 / 训练 / 评估继续 blocked | 不解除（直到 A 或 B 获批） |
+
+**本审计不自行选择任何一项。** 三者互斥；A 与 B 可以**同时**获批
+（A 解决「最小任务太大」，B 解决「整体强度是否合适」），但**任一未被批准前
+mapper 均不得开工**。
+
+---
+
+## ah.7 选项 A 下人工**必须逐项批准**的参数（**不得自行选择**）
+
+| # | 参数 | 说明 |
+|---|---|---|
+| 1 | **profile 名称** | 新 profile 的键名与 `name` |
+| 2 | **物理 duration**（小时） | 声明为**物理小时**；`duration_steps = round_half_up(hours / 0.5)` |
+| 3 | **load range** `[load_min, load_max]` | 无量纲；与 `delta_t_hours` 相乘得到物理 work |
+| 4 | **deadline**（小时） | 声明为**物理小时**；且 `deadline_steps >= duration_steps` |
+| 5 | **priority** | 调度排序口径 |
+| 6 | **interruptible / parallelizable** | 与现有语义一致或明确变更 |
+| 7 | **扩展现有 profile vs 新增 profile** | 扩展现有会**改变既有 profile 的可行域**（须说明对既有场景的影响） |
+| 8 | **`MAX_TASKS_PER_SLOT`** | §G.2 的**冻结**终止条件之一 |
+| 9 | **迭代上限**（如 `MAX_GROWTH_ROUNDS`） | §G.2 的另一个冻结终止条件 |
+| 10 | **`work_unit_scale`** | 固定点整数账本的精度（如 1 work = 10⁶ micro-work） |
+| 11 | **`ABS_TOL_WORK` / `REL_TOL_WORK`** | float 重构容差（§G.6） |
+| 12 | **profile / type 的确定性顺序** | §G.2 第 1 步的冻结顺序 |
+| 13 | **参数来源声明** | 必须显式声明为 **modeled scenario**，**不是** 2024 task labels |
+
+**红线**：以上任何一项**不得**由实现自行选择；**不得**用 validation/test 拟合。
+
+---
+
+## ah.8 结论与停止条件
+
+**结论**：在已批准的 B6 链与现有 profile 参数下，**86.0030%** 的槽
+（15,109 / 17,568；train 8,797 / validation 2,494 / test 3,818）
+**数学上不可能**被 1:1 分割成合法 `Task`。
+这不是实现缺陷，而是**参数层的可行域缺口**。
+
+因此：
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED，等待 micro-task/profile 参数或上游强度语义的人工批准。**
+
+**本卡停在人工决策处。** 未创建 mapper、fixture、参数 manifest、Task、run 或
+checkpoint；未修改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置。
+
+### ah.8.1 本审计的范围外修改
+
+**无。** 只新增/修改四份 markdown。
