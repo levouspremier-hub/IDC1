@@ -171,12 +171,17 @@ def load_verified_mapper_chain(
     return {"b6_policy": b6_policy, "bundle": bundle, "refs": refs, "splits": splits}
 
 
-def verified_realized_aggregate() -> np.ndarray:
-    """**realized** aggregate（唯一可进 Task truth 的量），来自已验证 v3 bundle。"""
-    from scenario.exogenous_drivers_b6 import load_verified_v3_bundle
+def _aggregate_from_verified_chain(chain: dict) -> np.ndarray:
+    """从**已验证的 chain** 取 realized aggregate（唯一进入 Task truth 的量）。"""
+    return np.asarray(chain["bundle"]["frame"]["arrival"], dtype=np.int64)
 
-    frame = load_verified_v3_bundle()["frame"]
-    return np.asarray(frame["arrival"], dtype=np.int64)
+
+def verified_realized_aggregate() -> np.ndarray:
+    """**realized** aggregate（唯一可进 Task truth 的量）。
+
+    经**唯一**的 `load_verified_mapper_chain()` 取得——**不**另走未绑定的 loader。
+    """
+    return _aggregate_from_verified_chain(load_verified_mapper_chain())
 
 
 def expected_arrival_forecast(timestamps=None) -> np.ndarray:
@@ -206,8 +211,28 @@ def c_idc_base_work_per_hour() -> float:
 
 # --- manifest -----------------------------------------------------------------
 
+def _live_c_idc_base() -> float:
+    """**实测** B6 冻结硬件实现（`server_seed=0`）的 `C_IDC_base`。
+
+    **动态 import**：mypy 不会跟进 `idc_model.task_model`（该文件含既有类型错误
+    且不在 `make check` 的扫描范围内），因此不会把那些错误拉进门禁。
+    **不修改** `task_model.py`；也**不**仅信任 manifest 自报常数。
+    """
+    import importlib
+
+    tm = importlib.import_module("idc_model.task_model")
+    return float(tm.IDCEnergyTaskModel(task_seed=0, server_seed=0)
+                 ._task_workload_capacity_ref())
+
+
 def load_verified_mapper_manifest(path: Path | str | None = None) -> dict:
-    """加载并**严格校验** canonical mapper manifest（无 fallback）。"""
+    """加载并**严格校验** canonical mapper manifest（无 fallback）。
+
+    **R1**：结构校验之后，由 **trusted live inputs + 当前 live revision + live
+    `C_IDC_base` + 锚定冻结时刻**（已验证 `refs_v4` 的 `frozen_at_utc`）
+    **重建**候选并**逐字段比较**。因此篡改、新字段、缺字段、旧 revision、
+    dirty source、自报 `frozen_at_utc` **一律 fail closed**。
+    """
     if path is None:
         path = canonical_mapper_manifest_path()
     else:
@@ -224,7 +249,30 @@ def load_verified_mapper_manifest(path: Path | str | None = None) -> dict:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ArrivalMapperError(f"mapper manifest 不可读：{error}") from error
-    return validate_mapper_manifest(payload)
+    validated = validate_mapper_manifest(payload)
+
+    if _generator_is_dirty():
+        raise ArrivalMapperError(
+            "mapper 实现有未提交修改：拒绝用旧 revision 为未提交代码背书")
+
+    from scenario.b6_refs import load_verified_refs_v4
+
+    anchor = str(load_verified_refs_v4()["frozen_at_utc"])
+    if validated["frozen_at_utc"] != anchor:
+        raise ArrivalMapperError(
+            f"mapper manifest 的 frozen_at_utc 必须锚定已验证 refs_v4 的冻结时刻 "
+            f"{anchor!r}；实际 {validated['frozen_at_utc']!r}")
+
+    rebuilt = build_mapper_manifest(
+        frozen_at_utc=anchor, c_idc_base_work_per_hour=_live_c_idc_base())
+    if rebuilt != validated:
+        differing = sorted(
+            key for key in set(rebuilt) | set(validated)
+            if rebuilt.get(key) != validated.get(key))
+        raise ArrivalMapperError(
+            f"mapper manifest 与由 trusted live inputs + live revision 重建的候选不符；"
+            f"差异字段={differing}")
+    return validated
 
 
 def _require(condition: bool, message: str) -> None:
@@ -398,7 +446,8 @@ def build_arrival_task_stream(
     origin = local_origin_from_start(split, start)
     global_origin = validate_episode_origin(split, origin, horizon)
 
-    aggregate = verified_realized_aggregate()
+    chain = load_verified_mapper_chain()
+    aggregate = _aggregate_from_verified_chain(chain)
     scale = int(payload["work_unit_scale"])
     prof = _profile(payload, "E_micro_inference")
     C = c_idc_base_work_per_hour()
@@ -468,9 +517,24 @@ def build_arrival_task_stream(
     )
 
 
-def canonical_content_hash(stream: ArrivalTaskStream) -> str:
-    """基于**canonical 整数表示**的 content hash（不含平台相关浮点序列化）。"""
-    canon = {
+def _canonical_number(value: Any) -> Any:
+    """跨平台稳定的数值 canonical 表示。
+
+    float 用 `float.hex()`（IEEE-754 位级精确、与平台/序列化器无关）；
+    bool 与 int 规范为 int（bool **不得**冒充数值）。
+    """
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value.hex()
+    raise ArrivalMapperError(f"不支持的数值类型：{type(value).__name__}")
+
+
+def canonical_stream_payload(stream: ArrivalTaskStream) -> dict:
+    """完整 Task stream 的**确定性** canonical 表示（供 content hash 使用）。"""
+    return {
         "split": stream.split,
         "origin": stream.origin,
         "horizon": stream.horizon,
@@ -479,15 +543,42 @@ def canonical_content_hash(stream: ArrivalTaskStream) -> str:
             {
                 "slot_index": slot.slot_index,
                 "aggregate_micro": slot.aggregate_micro,
+                "ledger": [_canonical_number(v) for v in slot.ledger],
                 "tasks": [
-                    {"task_id": task.task_id,
-                     "ledger_work_micro": micro}
-                    for task, micro in zip(slot.tasks, slot.ledger, strict=True)
+                    {
+                        "task_id": task.task_id,
+                        "profile_key": task.profile_key,
+                        "name": task.name,
+                        "arrival_time": task.arrival_time,
+                        "duration": task.duration,
+                        "deadline": task.deadline,
+                        "priority": _canonical_number(task.priority),
+                        "interruptible": bool(task.interruptible),
+                        "parallelizable": bool(task.parallelizable),
+                        "workload": _canonical_number(float(task.workload)),
+                        "load_profile": [
+                            _canonical_number(float(v))
+                            for v in np.asarray(task.load_profile, dtype=np.float64)
+                        ],
+                    }
+                    for task in slot.tasks
                 ],
             }
             for slot in stream.slots
         ],
     }
+
+
+def canonical_content_hash(stream: ArrivalTaskStream) -> str:
+    """完整 Task stream 的 content hash（**覆盖所有业务字段**）。
+
+    R1：此前只覆盖 `(task_id, ledger)` 与 slot metadata，因此改
+    `priority` / `deadline` / `load_profile` / `profile_key` **不会**改变 hash。
+    现覆盖：`task_id` / `profile_key` / `name` / `arrival_time` / `duration` /
+    `deadline` / `priority` / `interruptible` / `parallelizable` /
+    **完整 `load_profile`** / **整数账本** / slot metadata / split·origin·horizon·seed。
+    """
+    canon = canonical_stream_payload(stream)
     return hashlib.sha256(
         json.dumps(canon, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -591,6 +682,16 @@ def build_mapper_manifest(*, frozen_at_utc: str,
                 "sha256": _sha256_file(
                     REPO_ROOT / "data/manifest/formal_splits_v5/train.json"),
             },
+            "formal_split_v5_validation": {
+                "path": "data/manifest/formal_splits_v5/validation.json",
+                "sha256": _sha256_file(
+                    REPO_ROOT / "data/manifest/formal_splits_v5/validation.json"),
+            },
+            "formal_split_v5_test": {
+                "path": "data/manifest/formal_splits_v5/test.json",
+                "sha256": _sha256_file(
+                    REPO_ROOT / "data/manifest/formal_splits_v5/test.json"),
+            },
         },
         "source_revision": mapper_code_revision(),
         "note": (
@@ -635,6 +736,7 @@ __all__ = [
     "build_mapper_manifest",
     "c_idc_base_work_per_hour",
     "canonical_content_hash",
+    "canonical_stream_payload",
     "canonical_mapper_manifest_path",
     "deterministic_priority",
     "expected_arrival_forecast",
