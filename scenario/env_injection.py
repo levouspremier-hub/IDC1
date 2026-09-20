@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pandas as pd
 
 from idc_model.task import Task
@@ -80,16 +81,17 @@ class FormalEnvInjection:
 
     # **causal** forecast（决策可见；来自 B6 ScenarioBundle）
     arrival_forecast: tuple[float, ...]
+    causal_forecasts: dict[str, tuple[float, ...]]
     lambda_ref_work_per_step: float
 
-    # mapper 产物
+    # mapper 产物：pristine 模板 + 业务规格（reset 时按规格新建 Task）
     tasks: tuple[Task, ...]
+    task_specs: tuple[dict[str, Any], ...]
     slots: tuple[Any, ...]
     ledger_micro: tuple[int, ...]
 
-    # refs_v4 的存量型参考值
-    queue_ref: float
-    queue_capacity_ref: float
+    # refs_v4 中环境**实际消费**的正式参考值
+    formal_refs: dict[str, float]
 
     # provenance
     provenance_hash: str
@@ -169,8 +171,51 @@ def build_verified_formal_env_injection(
     v3_episode = v3.iloc[global_origin:global_origin + horizon]
 
     refs = chain["refs"]["references"]
-    queue_ref = float(refs["queue_ref"]["value"])
-    queue_capacity_ref = float(refs["queue_capacity_ref"]["value"])
+    # 环境**实际消费**的正式参考值（逐项取自已验签 refs_v4）。
+    # 注意 `lambda_ref`：refs_v4 声明 **work/hour**（63.988）；环境按**半小时**
+    # 归一化，因此用 `× delta_t_hours` 后的 **work/step**（31.994）。
+    formal_refs = {
+        "price_ref": float(refs["price_ref"]["value"]),
+        "lambda_ref": float(refs["lambda_ref"]["value"]) * DELTA_T_HOURS,
+        "queue_ref": float(refs["queue_ref"]["value"]),
+        "queue_capacity_ref": float(refs["queue_capacity_ref"]["value"]),
+        "pv_ref_kw": float(refs["pv_ref_kw"]["value"]),
+        "wind_ref_kw": float(refs["wind_ref_kw"]["value"]),
+        "carbon_factor_ref": float(refs["carbon_factor_ref"]["value"]),
+        "cost_ref": float(refs["cost_ref"]["value"]),
+        "carbon_ref": float(refs["carbon_ref"]["value"]),
+        "grid_power_limit_kW": float(refs["grid_power_limit_kW"]["value"]),
+        "peak_power_ref_kW": float(refs["peak_power_ref_kW"]["value"]),
+        "peak_power_threshold_kW": float(refs["peak_power_threshold_kW"]["value"]),
+        "sla_penalty_ref": float(refs["sla_penalty_ref"]["value"]),
+    }
+
+    # 任务业务规格：reset 时据此**新建** Task，绝不复用已执行的实例。
+    task_specs = tuple(
+        {
+            "task_id": int(t.task_id),
+            "profile_key": str(t.profile_key),
+            "name": str(t.name),
+            "arrival_time": int(t.arrival_time),
+            "duration": int(t.duration),
+            "load_profile": tuple(float(v) for v in np.asarray(t.load_profile)),
+            "workload": float(t.workload),
+            "deadline": int(t.deadline),
+            "priority": float(t.priority),
+            "interruptible": bool(t.interruptible),
+            "parallelizable": bool(t.parallelizable),
+        }
+        for t in stream.tasks
+    )
+
+    causal_forecasts = {
+        "price_forecast": tuple(float(v) for v in bundle.price_forecast),
+        "temperature_forecast": tuple(float(v) for v in bundle.temperature_forecast),
+        "pv_forecast": tuple(float(v) for v in bundle.pv_forecast),
+        "wind_forecast": tuple(float(v) for v in bundle.wind_forecast),
+        "carbon_forecast": tuple(float(v) for v in bundle.carbon_forecast),
+        "arrival_forecast": tuple(float(v) for v in bundle.arrival_forecast),
+    }
 
     sources = tuple(sorted(
         (str(role), str(entry["sha256"]))
@@ -194,19 +239,45 @@ def build_verified_formal_env_injection(
         carbon_kg_per_kwh=tuple(float(v) for v in v3_episode["carbon_intensity"]),
         local_pv_kw=tuple(float(v) for v in v3_episode["local_pv_kw"]),
         wind_generation_kw=tuple(float(v) for v in v3_episode["wind_generation_kw"]),
-        arrival_forecast=tuple(float(v) for v in bundle.arrival_forecast),
-        lambda_ref_work_per_step=B6_RATE_WORK_PER_STEP,
+        arrival_forecast=causal_forecasts["arrival_forecast"],
+        causal_forecasts=causal_forecasts,
+        lambda_ref_work_per_step=formal_refs["lambda_ref"],
         tasks=tuple(stream.tasks),
+        task_specs=task_specs,
         slots=tuple(stream.slots),
         ledger_micro=slice_micro,
-        queue_ref=queue_ref,
-        queue_capacity_ref=queue_capacity_ref,
+        formal_refs=formal_refs,
         provenance_hash="",
         sources=sources,
     )
     return FormalEnvInjection(
         **{**payload.__dict__,
            "provenance_hash": _provenance_hash(payload)}
+    )
+
+
+def _h(value: float) -> str:
+    """跨平台稳定的浮点 canonical 表示。"""
+    return float(value).hex()
+
+
+def materialize_pristine_tasks(inj: FormalEnvInjection) -> tuple[Task, ...]:
+    """按**不可变规格**新建一批 Task —— reset 时调用，绝不复用已执行实例。"""
+    return tuple(
+        Task(
+            task_id=spec["task_id"],
+            profile_key=spec["profile_key"],
+            name=spec["name"],
+            arrival_time=spec["arrival_time"],
+            duration=spec["duration"],
+            load_profile=np.asarray(spec["load_profile"], dtype=np.float64),
+            workload=spec["workload"],
+            deadline=spec["deadline"],
+            priority=spec["priority"],
+            interruptible=spec["interruptible"],
+            parallelizable=spec["parallelizable"],
+        )
+        for spec in inj.task_specs
     )
 
 
@@ -221,8 +292,38 @@ def _provenance_hash(inj: FormalEnvInjection) -> str:
         "forecast_cutoff": inj.forecast_cutoff,
         "delta_t_hours": inj.delta_t_hours.hex(),
         "ledger_micro": list(inj.ledger_micro),
-        "task_ids": [t.task_id for t in inj.tasks],
-        "arrival_forecast": [float(v).hex() for v in inj.arrival_forecast],
+        # realized exogenous（本卡真正注入的量）
+        "realized": {
+            "price_sgd_per_kwh": [_h(v) for v in inj.price_sgd_per_kwh],
+            "temperature_deg_c": [_h(v) for v in inj.temperature_deg_c],
+            "carbon_kg_per_kwh": [_h(v) for v in inj.carbon_kg_per_kwh],
+            "local_pv_kw": [_h(v) for v in inj.local_pv_kw],
+            "wind_generation_kw": [_h(v) for v in inj.wind_generation_kw],
+        },
+        # causal forecasts（决策可见）
+        "causal_forecasts": {
+            k: [_h(v) for v in series]
+            for k, series in sorted(inj.causal_forecasts.items())
+        },
+        # 正式 refs
+        "formal_refs": {k: _h(v) for k, v in sorted(inj.formal_refs.items())},
+        # 任务业务内容（不只是 id/ledger）
+        "task_specs": [
+            {
+                "task_id": spec["task_id"],
+                "profile_key": spec["profile_key"],
+                "name": spec["name"],
+                "arrival_time": spec["arrival_time"],
+                "duration": spec["duration"],
+                "load_profile": [_h(v) for v in spec["load_profile"]],
+                "workload": _h(spec["workload"]),
+                "deadline": spec["deadline"],
+                "priority": _h(spec["priority"]),
+                "interruptible": spec["interruptible"],
+                "parallelizable": spec["parallelizable"],
+            }
+            for spec in inj.task_specs
+        ],
         "sources": [list(s) for s in inj.sources],
     }
     return hashlib.sha256(
@@ -237,4 +338,5 @@ __all__ = [
     "FormalEnvInjection",
     "FormalInjectionError",
     "build_verified_formal_env_injection",
+    "materialize_pristine_tasks",
 ]

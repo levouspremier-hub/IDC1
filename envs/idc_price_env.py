@@ -222,11 +222,10 @@ class IDCPriceEnv20D(gym.Env):
                 raise ValueError(
                     "formal 注入的 horizon 必须与环境的 horizon 一致："
                     f"{formal_injection.horizon} != {self.horizon}")
-            # 归一化尺度：arrival 用 **work/step**（63.988 work/hour × 0.5 h）；
-            # queue 是**存量**，**不**随步长缩放。
-            self.lambda_ref = float(formal_injection.lambda_ref_work_per_step)
-            self.queue_ref = float(formal_injection.queue_ref)
-            self.queue_capacity_ref = float(formal_injection.queue_capacity_ref)
+            if int(formal_injection.forecast_cutoff) != self.forecast_cutoff:
+                raise ValueError(
+                    "formal 注入的 forecast_cutoff 必须与环境的 forecast_cutoff 一致："
+                    f"{formal_injection.forecast_cutoff} != {self.forecast_cutoff}")
             # 每步计划处理能力的账面记录（rate → work/step）
             self.last_planned_capacity_rate_work_per_hour = 0.0
             self.last_planned_capacity_per_step = 0.0
@@ -357,6 +356,18 @@ class IDCPriceEnv20D(gym.Env):
             raise ValueError("allow_pv_export=True is not supported in this first PV integration.")
         self.wt_t = self._validate_time_series("wt_t", wt_t) if wt_t is not None else np.zeros(self.horizon)
         self.wind_ref_kw = max(float(wind_ref_kw), 1e-6)
+
+        # 7b. **M1.3g-e-c-R1**：formal 链在此统一覆盖调用者的默认 exogenous 与 refs
+        #     （必须在上面所有默认赋值**之后**，否则会被覆盖回去）。
+        if self.formal:
+            self._apply_formal_injection()
+        else:
+            self.price_forecast_t = np.asarray(self.price_t, dtype=np.float64)
+            self.temperature_forecast_t = np.asarray(self.T_amb, dtype=np.float64)
+            self.pv_forecast_t = np.asarray(self.pv_t, dtype=np.float64)
+            self.wind_forecast_t = np.asarray(self.wt_t, dtype=np.float64)
+            self.carbon_forecast_t = np.asarray(self.carbon_factor_t, dtype=np.float64)
+            self.arrival_forecast_t = np.zeros(self.horizon, dtype=np.float64)
 
         # 8. 运行状态变量会在 reset() 中初始化
         self.current_step = 0
@@ -529,6 +540,32 @@ class IDCPriceEnv20D(gym.Env):
             )
         return info
 
+    def _apply_formal_injection(self) -> None:
+        """把**已验证**的 formal 注入统一落到环境上（realized / forecasts / refs）。
+
+        - realized exogenous → `price_t` / `T_amb` / `carbon_factor_t` / `pv_t` / `wt_t`
+          （**step 的物理计算**读它们）；
+        - causal forecasts → `*_forecast_t`（**观测**读它们）；
+        - refs_v4 的正式参考值逐项覆盖。
+        两者**明确分离**，不得混用。
+        """
+        inj = self.formal_injection
+        self.price_t = np.asarray(inj.price_sgd_per_kwh, dtype=np.float64)
+        self.T_amb = np.asarray(inj.temperature_deg_c, dtype=np.float64)
+        self.carbon_factor_t = np.asarray(inj.carbon_kg_per_kwh, dtype=np.float64)
+        self.pv_t = np.asarray(inj.local_pv_kw, dtype=np.float64)
+        self.wt_t = np.asarray(inj.wind_generation_kw, dtype=np.float64)
+        for name, value in inj.formal_refs.items():
+            setattr(self, name, float(value))
+        causal = inj.causal_forecasts
+        self.price_forecast_t = np.asarray(causal["price_forecast"], dtype=np.float64)
+        self.temperature_forecast_t = np.asarray(
+            causal["temperature_forecast"], dtype=np.float64)
+        self.pv_forecast_t = np.asarray(causal["pv_forecast"], dtype=np.float64)
+        self.wind_forecast_t = np.asarray(causal["wind_forecast"], dtype=np.float64)
+        self.carbon_forecast_t = np.asarray(causal["carbon_forecast"], dtype=np.float64)
+        self.arrival_forecast_t = np.asarray(causal["arrival_forecast"], dtype=np.float64)
+
     def _formal_provenance_info(self) -> dict:
         """formal 链的 provenance（**不含**任何未来 truth 数组）。"""
         if not self.formal:
@@ -595,7 +632,10 @@ class IDCPriceEnv20D(gym.Env):
         # 每个 episode 重新生成任务，防止 Task.status/remaining_work 等状态残留。
         # **M1.3g-e-c**：formal 路径**绝不**调用 demo/random 生成器。
         if self.formal:
-            self.tasks = list(self.formal_injection.tasks)
+            # **每次 reset 都新建 Task**：按不可变规格重建，绝不复用已执行实例。
+            from scenario.env_injection import materialize_pristine_tasks
+
+            self.tasks = list(materialize_pristine_tasks(self.formal_injection))
         else:
             self.tasks = self.model.create_demo_tasks(
                 num_tasks=self.num_tasks,
@@ -1999,13 +2039,15 @@ class IDCPriceEnv20D(gym.Env):
         visible = np.zeros(self.horizon, dtype=np.float64)
         visible[start:end] = 1.0
 
-        price_24h = np.asarray(self.price_t, dtype=np.float64) / max(self.price_ref, eps) * visible
-        T_amb_24h = np.asarray(self.T_amb, dtype=np.float64) / 40.0 * visible
+        # M1.3g-e-c-R1：formal 路径的观测通道只读 **causal forecast**；
+        # legacy 路径行为不变（其 forecast 数组就是原数组的副本）。
+        price_24h = np.asarray(self.price_forecast_t, dtype=np.float64) / max(self.price_ref, eps) * visible
+        T_amb_24h = np.asarray(self.temperature_forecast_t, dtype=np.float64) / 40.0 * visible
         lambda_24h = np.asarray(
             self.task_arrival_forecast, dtype=np.float64
         ) / max(self.lambda_ref, eps) * visible
-        pv_24h = np.asarray(self.pv_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
-        wind_24h = np.asarray(self.wt_t, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
+        pv_24h = np.asarray(self.pv_forecast_t, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
+        wind_24h = np.asarray(self.wind_forecast_t, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
         carbon_24h = (
             np.asarray(self.carbon_factor_t, dtype=np.float64)
             / max(self.carbon_factor_ref, eps)
