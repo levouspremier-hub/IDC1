@@ -37,7 +37,7 @@
     "w_max": 60.705862109427294,
     "w_min": 9.712937937508368
   },
-  "frozen_at_utc": "2026-09-20T08:30:34+00:00",
+  "frozen_at_utc": "2026-09-20T08:31:13+00:00",
   "max_growth_rounds": 4,
   "max_tasks_per_slot": 4,
   "note": "B6 arrival-to-Task 确定性 mapper 的冻结参数（Route-A 人工签核）。realized aggregate 是**唯一**任务账本输入；forecast 只作对照。参数仅供本卡读取，不在此处重新选择。",
@@ -68,7 +68,7 @@
   "rel_tol_work": 1e-12,
   "schema": "m1.3g-e-b-arrival-mapper-v1",
   "seed_policy": "explicit per-episode seed; priority = f(split,origin,slot,ordinal,seed)",
-  "source_revision": "5844240703fa5cd829332f822cf344cdda98ab49",
+  "source_revision": "5dfe3c79112af35a5befe597558acf81595d07b9",
   "sources": {
     "b6_intensity_policy": {
       "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
