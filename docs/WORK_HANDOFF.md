@@ -2822,8 +2822,48 @@ git revert 71a6185 ce1fe43 8409a8d 6fdd549 a806599 df9db17 0820931
 # == a319c52^{tree} = 3d07ab4ff86fba5d60ea1c9d457d1dd808a8a7c6
 ```
 
-> ## ⛔ **mapper R2 完成即停，等待人工复审。**
-> **未开始** g-e-c、g-e-d、g-f、env 接线、训练、评估、M6；readiness **仍为 false**。
+### 7AR. M1.3g-e-c：B6 mapper → 正式环境注入（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §at–§au。新增 `scenario/env_injection.py` +
+`envs/idc_price_env.py` 接线 + `tests/test_m13ge_env_injection.py`。
+
+**唯一 formal 入口**：`build_verified_formal_env_injection(split, start, horizon,
+forecast_cutoff)` → `IDCPriceEnv20D(..., delta_t_hours=0.5, formal_injection=inj)`。
+注入链：`load_verified_mapper_chain`（B6 policy / v3 bundle / `refs_v4` / v5 split）
+→ `local_origin_from_start` → `build_arrival_task_stream`（Tasks + 整数账本）
+→ `build_formal_scenario_b6`（causal forecast）→ canonical/v3 episode 切片。
+**不接受**调用方传入 truth / forecast / refs / task stream；非法输入 **fail closed**。
+
+**先红**：19 collected / **18 failed**，原文
+`ModuleNotFoundError: No module named 'scenario.env_injection'`。
+**⭐ 时序证据**：`git show --stat 960c8f0` = **277 insertions, 1 file**（**只有**测试），
+因此失败测试**严格早于**改 `step()` 的提交。**改 `step()`：是**（`planned_capacity_vec`
+的 rate→work/step 折算，**仅** formal 分支）。
+
+**0.5 h 单位证据（实测）**：`C_server` 和 = **485.646897 work/hour**；
+planned rate = **388.517523 work/hour**；per step = **194.258762 work/step**；
+比值 **0.500000**；`lambda_ref` = **31.994 work/step**（63.988 × 0.5）；
+`queue_ref`/`queue_capacity_ref` = **6000/6000**（**存量**，不缩放）。
+
+**leakage / reset**：未来 truth mutation → observation **不变**；可见窗口内 forecast
+变化 → **必变**（防假绿）；窗口外变化 → **不变**（反向控制）；repeated reset
+task stream 与初始 observation **一致**；formal `info` **不含**完整未来 truth；
+formal reset **不**调用 demo/random（monkeypatch 成抛错后仍通过）。
+
+**验收**：新测试 **20 passed**；相关 focused **506 passed, 2 deselected**；
+`make check` exit 0（**2707 passed**）；`make smoke` exit 0；
+`make train` **exit 2**、无 synthetic fallback、无成功 run、无 checkpoint；
+`git diff --check` / `git status --short` 空。
+**冻结资产逐字节未变**；**范围外修改：无**；readiness **仍为 false**。
+
+**精确回滚**（detached worktree 验证）：
+```bash
+git revert 9a8ddb8 a204e2a 3656c6b 960c8f0 0d978c1 044ab69
+# == 044ab69^{tree} = fcb3f2f98df85c3e1cd3b99bd3bab70478330042
+```
+
+> ## ⛔ **g-e-c 完成即停，等待人工复审。**
+> **未开始** g-e-d、g-f、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
