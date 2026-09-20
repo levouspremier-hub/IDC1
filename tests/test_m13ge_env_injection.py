@@ -65,8 +65,10 @@ def _env(split: str = "train", horizon: int = 8, cutoff: int = 4, seed: int = 7)
     from envs.idc_price_env import IDCPriceEnv20D
 
     inj = _build(split, horizon, cutoff)
+    # formal 链**必须**显式声明半小时步长（环境会校验它与注入一致）
     return IDCPriceEnv20D(horizon=horizon, task_seed=seed, server_seed=0,
-                          forecast_seed=seed, formal_injection=inj), inj
+                          forecast_seed=seed, delta_t_hours=0.5,
+                          formal_injection=inj), inj
 
 
 # --- 1. formal 入口存在且可接收 verified injection ------------------------------
@@ -208,14 +210,27 @@ def test_observation_is_invariant_to_future_truth_mutation(monkeypatch):
 
 @needs_assets
 @pytest.mark.leakage
-def test_observation_changes_when_the_visible_forecast_changes(monkeypatch):
+def test_observation_changes_when_the_visible_forecast_changes():
     """**防假绿**：改**可见窗口内**的 forecast，observation 必须变化。"""
     env, _ = _env(horizon=8)
-    base_obs, _ = env.reset(seed=7)
+    env.reset(seed=7)
+    base_obs = env._get_obs()
     env.task_arrival_forecast = np.asarray(
         env.task_arrival_forecast, dtype=np.float64) + 5.0
-    after_obs, _ = env.reset(seed=7)
-    assert not np.allclose(base_obs, after_obs)
+    assert not np.allclose(base_obs, env._get_obs())
+
+
+@needs_assets
+@pytest.mark.leakage
+def test_observation_is_invariant_to_changes_outside_the_visible_window():
+    """反向控制：只改**可见窗口之外**的 forecast，observation **不得**变化。"""
+    env, _ = _env(horizon=8, cutoff=4)
+    env.reset(seed=7)
+    base_obs = env._get_obs()
+    forecast = np.asarray(env.task_arrival_forecast, dtype=np.float64).copy()
+    forecast[4:] += 1000.0  # 窗口是 [0, 4)
+    env.task_arrival_forecast = forecast
+    assert np.allclose(base_obs, env._get_obs())
 
 
 # --- 5. info 不含完整未来 truth ------------------------------------------------

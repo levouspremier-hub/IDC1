@@ -143,6 +143,7 @@ class IDCPriceEnv20D(gym.Env):
         facility_rated_power_mw: float | None = None,
         bess_scale_factor: float = 1.0,
         scale_bess_with_idc: bool = False,
+        formal_injection=None,
     ):
         super().__init__()
 
@@ -205,6 +206,30 @@ class IDCPriceEnv20D(gym.Env):
         self.carbon_price = float(carbon_price)
         # delta_t_hours is the step length used to convert kW power into kWh energy.
         self.delta_t_hours = float(delta_t_hours)
+
+        # --- M1.3g-e-c：**formal** 注入（显式入口；legacy 行为完全不变） ---------
+        # 只有在显式传入已验证 injection 时才切换；缺失即 legacy。
+        self.formal_injection = formal_injection
+        self.formal = formal_injection is not None
+        if self.formal:
+            from scenario.env_injection import DELTA_T_HOURS as _FORMAL_DELTA
+
+            if self.delta_t_hours != _FORMAL_DELTA:
+                raise ValueError(
+                    f"formal 注入要求 delta_t_hours == {_FORMAL_DELTA}（半小时语义）；"
+                    f"实际 {self.delta_t_hours}")
+            if int(formal_injection.horizon) != self.horizon:
+                raise ValueError(
+                    "formal 注入的 horizon 必须与环境的 horizon 一致："
+                    f"{formal_injection.horizon} != {self.horizon}")
+            # 归一化尺度：arrival 用 **work/step**（63.988 work/hour × 0.5 h）；
+            # queue 是**存量**，**不**随步长缩放。
+            self.lambda_ref = float(formal_injection.lambda_ref_work_per_step)
+            self.queue_ref = float(formal_injection.queue_ref)
+            self.queue_capacity_ref = float(formal_injection.queue_capacity_ref)
+            # 每步计划处理能力的账面记录（rate → work/step）
+            self.last_planned_capacity_rate_work_per_hour = 0.0
+            self.last_planned_capacity_per_step = 0.0
         self.peak_power_threshold_kW = float(peak_power_threshold_kW) * max(self.idc_power_scale_factor, 1e-9)
         self.peak_power_ref_kW = float(peak_power_ref_kW) * max(self.idc_power_scale_factor, 1e-9)
         self.grid_power_limit_kW = float(grid_power_limit_kW) * max(self.idc_power_scale_factor, 1e-9)
@@ -475,7 +500,12 @@ class IDCPriceEnv20D(gym.Env):
         metrics = task_forecast_metrics(
             self.true_task_arrival_profile, self.task_arrival_forecast
         )
-        if self.task_forecast_mode == "noisy":
+        if getattr(self, "formal", False):
+            source = (
+                "B6 causal expected arrival forecast "
+                "(rate_template[slot] x 31.994 work/step; D3 expectation, not a draw)"
+            )
+        elif self.task_forecast_mode == "noisy":
             source = SYNTHETIC_FORECAST_SOURCE
         elif self.task_forecast_mode == "perfect":
             source = "oracle ground-truth copy for debug/upper-bound use only"
@@ -498,6 +528,25 @@ class IDCPriceEnv20D(gym.Env):
                 }
             )
         return info
+
+    def _formal_provenance_info(self) -> dict:
+        """formal 链的 provenance（**不含**任何未来 truth 数组）。"""
+        if not self.formal:
+            return {}
+        inj = self.formal_injection
+        return {
+            "formal": True,
+            "split": inj.split,
+            "start": inj.start,
+            "local_origin": int(inj.local_origin),
+            "global_origin": int(inj.global_origin),
+            "horizon": int(inj.horizon),
+            "forecast_cutoff": int(inj.forecast_cutoff),
+            "delta_t_hours": float(self.delta_t_hours),
+            "lambda_ref_work_per_step": float(self.lambda_ref),
+            "provenance_hash": inj.provenance_hash,
+            "sources": [list(s) for s in inj.sources],
+        }
 
     def reset(self, seed=None, options=None):
         """重置环境，开始新的 24 小时 episode。"""
@@ -544,27 +593,42 @@ class IDCPriceEnv20D(gym.Env):
         self.total_non_interruptible_interruption_count = 0
 
         # 每个 episode 重新生成任务，防止 Task.status/remaining_work 等状态残留。
-        self.tasks = self.model.create_demo_tasks(
-            num_tasks=self.num_tasks,
-            horizon=self.horizon,
-        )
+        # **M1.3g-e-c**：formal 路径**绝不**调用 demo/random 生成器。
+        if self.formal:
+            self.tasks = list(self.formal_injection.tasks)
+        else:
+            self.tasks = self.model.create_demo_tasks(
+                num_tasks=self.num_tasks,
+                horizon=self.horizon,
+            )
 
         # 将原来的 Q0 改造成初始积压任务，并纳入 Task 列表。
         initial_backlog_task = self.model.create_initial_backlog_task(self.initial_Q)
         self.tasks.insert(0, initial_backlog_task)
         self._initialize_task_runtime_state()
 
-        self.true_task_arrival_profile = self.model.build_task_arrival_curve(
-            tasks=self.tasks,
-            horizon=self.horizon,
-        )
-        self.lambda_t = self.true_task_arrival_profile
-        self.task_arrival_forecast = generate_task_arrival_forecast(
-            self.true_task_arrival_profile,
-            mode=self.task_forecast_mode,
-            error_level=self.forecast_error_level,
-            rng=self.forecast_rng,
-        )
+        if self.formal:
+            # 真值 = mapper 的**整数账本**（每槽 aggregate，单位 work）；
+            # 预测 = B6 causal **期望** forecast。两者**不得**互换。
+            self.true_task_arrival_profile = np.asarray(
+                [m / 1_000_000.0 for m in self.formal_injection.ledger_micro],
+                dtype=np.float64,
+            )
+            self.lambda_t = self.true_task_arrival_profile
+            self.task_arrival_forecast = np.asarray(
+                self.formal_injection.arrival_forecast, dtype=np.float64)
+        else:
+            self.true_task_arrival_profile = self.model.build_task_arrival_curve(
+                tasks=self.tasks,
+                horizon=self.horizon,
+            )
+            self.lambda_t = self.true_task_arrival_profile
+            self.task_arrival_forecast = generate_task_arrival_forecast(
+                self.true_task_arrival_profile,
+                mode=self.task_forecast_mode,
+                error_level=self.forecast_error_level,
+                rng=self.forecast_rng,
+            )
 
         # reset 后先激活 t=0 已到达任务，让初始状态能看到初始积压。
         self._activate_arrivals(current_time=0)
@@ -577,7 +641,8 @@ class IDCPriceEnv20D(gym.Env):
             "obs_dim": self.obs_dim,
             "pv_ref_kw": float(self.pv_ref_kw),
             "allow_pv_export": bool(self.allow_pv_export),
-            **self._task_forecast_info(include_profiles=True),
+            **self._task_forecast_info(include_profiles=not self.formal),
+            **(self._formal_provenance_info()),
             **self._server_group_info(),
             **self._task_scale_info(),
             **self._bess_static_info(),
@@ -620,7 +685,14 @@ class IDCPriceEnv20D(gym.Env):
 
         # 按每台服务器算力计算逐组计划处理能力（M3.1：不再 np.sum 成标量）
         planned_capacity_vec = planned_task_loads * np.asarray(self.model.C_server, dtype=np.float64)
+        # M1.3g-e-c：`C_server` 是 **work/hour rate**；formal 链每一步的可执行量必须
+        # 折算成 **work/step**（× delta_t_hours = 0.5）。legacy 路径 delta=1.0，
+        # 因此**不**改变其既有语义。
+        self.last_planned_capacity_rate_work_per_hour = float(planned_capacity_vec.sum())
+        if self.formal:
+            planned_capacity_vec = planned_capacity_vec * self.delta_t_hours
         planned_capacity = float(planned_capacity_vec.sum())
+        self.last_planned_capacity_per_step = planned_capacity
 
         # 3. 当前小时外部输入
         T_amb_t = float(self.T_amb[t])
@@ -1032,7 +1104,9 @@ class IDCPriceEnv20D(gym.Env):
             "wind_curtail_kW": float(wind_curtail_kW),
             "allow_pv_export": bool(self.allow_pv_export),
             "lambda_t": lambda_now,
-            **self._task_forecast_info(include_profiles=terminated),
+            **self._task_forecast_info(
+                include_profiles=terminated and not self.formal),
+            **(self._formal_provenance_info()),
 
             "action_mean": float(np.mean(server_action)),
             "action_min": float(np.min(server_action)),
@@ -1972,7 +2046,13 @@ class IDCPriceEnv20D(gym.Env):
 
         T_norm = self.T_amb[t] / 40.0
         price_norm = self.price_t[t] / self.price_ref
-        lambda_norm = self.true_task_arrival_profile[t] / self.lambda_ref
+        # M1.3g-e-c：formal 路径的 arrival 通道只用**该时点可见的 causal forecast**，
+        # 不读取 realized truth（legacy 路径保持原语义）。
+        lambda_source = (
+            self.task_arrival_forecast[t] if self.formal
+            else self.true_task_arrival_profile[t]
+        )
+        lambda_norm = lambda_source / self.lambda_ref
         Q_norm = self.Q_t / self.queue_ref
 
         time_sin = np.sin(2 * np.pi * t / self.horizon)
