@@ -524,6 +524,18 @@ aggregate train 数据校准。
 **回滚**：`git revert <记录提交> cdfd236 47eb01a f9e206c 42f00e1 281b69e 5dfe3c7 5b51986 5844240 c09db56 e3a56d0`
 → `HEAD^{tree} == 7b00836^{tree}`。
 
+**✅ R1（M1.3g-e-b-R1，2026-09-20）**：第一轮审核三处 P1——
+① 伪造 manifest 被接受（`FORGED_MANIFEST_ACCEPTED`）；② 改 `priority` 等 Task 字段
+后 content hash **不变**；③ 篡改 v5 链后**公开入口**仍接受。已全部修复：
+公开入口每次走**唯一** verified chain 并从中取 aggregate；manifest 由 trusted live
+inputs + live revision + live `C_IDC_base` + **锚定 refs_v4 冻结时刻**重建并逐字段比较；
+content hash 覆盖**全部业务字段**（浮点 `float.hex()`）；三份 v5 全部按 hash 绑定。
+manifest `b8a75488…`、`source_revision 53cb0c23…`、`frozen_at_utc` = refs_v4 锚点。
+`make check` **2681 passed**；既有资产逐字节未变；**范围外修改无**。
+
+> **账本勘误**：M1.3g-e-b 实际 **13 个**提交（上轮漏列 `86ca2dd`）；完整回滚见
+> `docs/WORK_HANDOFF.md` §7AP 与 `docs/task_cards/M1.3g.md` §aq.7。
+
 ## 10. 后续顺序
 
 ~~~
