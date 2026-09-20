@@ -274,7 +274,38 @@ git revert 316d813 71da67a da862a4 59c1fa3 a532390
 # revert 后 HEAD^{tree} == a740e38^{tree} = 60349ad7d27a02831ac9043a0645dc0b0025a4f1
 ```
 
-### 9.0b **A 路线已选，13 项参数全部 PENDING（M1.3f-e-b-c，2026-09-20）**
+### 9.0c **13 项参数已由人工签核冻结（M1.3f-e-b-d，2026-09-20）—— 最新**
+
+**人工已逐项批准路线 A 的 13 项**（状态 `PENDING` → **`APPROVED`**，
+**批准来源 = 人工**；实现只记录、未选择任何值）：
+
+| # | 参数 | 人工批准值 |
+|---|---|---|
+| 1 | profile 名称 | **新增 `E_micro_inference`** |
+| 2 | duration | **`0.5 h`**（1 step） |
+| 3 | load range | **`[0.04, 0.25]`** |
+| 4 | deadline | **`1.0 h`**（2 steps） |
+| 5 | priority | **`2.6–3.4`**（沿用 `A_inference`） |
+| 6 | interruptible / parallelizable | **`false / false`** |
+| 7 | 扩展 vs 新增 | **新增**；**不修改** A/B/C/D |
+| 8 | `MAX_TASKS_PER_SLOT` | **`4`** |
+| 9 | `MAX_GROWTH_ROUNDS` | **`4`** |
+| 10 | `work_unit_scale` | **`1_000_000`** |
+| 11 | `ABS_TOL_WORK` / `REL_TOL_WORK` | **`1e-9` / `1e-12`** |
+| 12 | 确定性顺序 | **`E_micro_inference → A_inference → B_rl_training → C_dl_training → D_preprocess`** |
+| 13 | 来源声明 | **`modeled scenario`**（不是 2024 task labels） |
+
+**独立复算（只读）**：`C_IDC_base = 485.646896875418349`、`delta = 0.5`；
+`duration_steps=1`、`deadline_steps=2`（`>=` 成立）；
+`E_micro_inference` 合法区间 **`[9.712937937508368, 60.705862109427294] work`**；
+**train `[12,59]` 被覆盖**（validation `[12,54]` / test `[14,55]` **仅作覆盖验证**）。
+
+**本卡只解除「参数未批准」这一阻塞。** mapper（`g-e-b`）、env 接线（`g-e-c`）、
+回归（`g-e-d`）、`g-f`/正式训练、评估、M6 **仍未开始**；readiness **仍为 false**；
+旧 A/B/C/D profile **一律不变**。
+**下一张卡 = `M1.3g-e-b`（mapper 实现卡）** —— 本卡不开始它。
+
+### 9.0b **A 路线已选，（历史）13 项参数当时为 PENDING（M1.3f-e-b-c，2026-09-20）**
 
 **人工已选择路线 A**：用 **modeled micro-task/profile 参数**解决可行域缺口。
 **但 A 的选择【不】等于 13 个具体参数获批。**
