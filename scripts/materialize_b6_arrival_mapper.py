@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import json
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -67,10 +66,16 @@ def materialize_arrival_mapper_manifest(*, frozen_at_utc: str | None = None) -> 
         raise ArrivalMapperError(
             "生成器有未提交修改：拒绝用旧 revision 为未提交代码背书")
 
-    stamp = frozen_at_utc
-    if target.is_file():
-        stamp = stamp or load_verified_mapper_manifest(target)["frozen_at_utc"]
-    stamp = stamp or datetime.now(UTC).replace(microsecond=0).isoformat()
+    # **R1**：冻结时刻**锚定已验证 refs_v4** 的 `frozen_at_utc`，防止自报值参与
+    # 重建后自洽（mapper 的 loader 会强制该相等）。
+    from scenario.b6_refs import load_verified_refs_v4
+
+    anchor = str(load_verified_refs_v4()["frozen_at_utc"])
+    stamp = frozen_at_utc or anchor
+    if stamp != anchor:
+        raise ArrivalMapperError(
+            f"mapper manifest 的 frozen_at_utc 必须锚定 refs_v4 的冻结时刻 "
+            f"{anchor!r}；实际 {stamp!r}")
 
     candidate = validate_mapper_manifest(build_mapper_manifest(
         frozen_at_utc=stamp,
