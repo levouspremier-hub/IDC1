@@ -1,0 +1,101 @@
+{
+  "abs_tol_work": 1e-09,
+  "approved_decision_id": "M1.3f-e-b-d",
+  "approved_parameters": {
+    "abs_tol_work": 1e-09,
+    "deadline_hours": 1.0,
+    "duration_hours": 0.5,
+    "expansion": "new_profile_do_not_modify_ABCD",
+    "interruptible": false,
+    "load_range": [
+      0.04,
+      0.25
+    ],
+    "max_growth_rounds": 4,
+    "max_tasks_per_slot": 4,
+    "parallelizable": false,
+    "priority_range": [
+      2.6,
+      3.4
+    ],
+    "profile_name": "E_micro_inference",
+    "profile_order": [
+      "E_micro_inference",
+      "A_inference",
+      "B_rl_training",
+      "C_dl_training",
+      "D_preprocess"
+    ],
+    "rel_tol_work": 1e-12,
+    "source": "modeled_scenario",
+    "work_unit_scale": 1000000
+  },
+  "contract_version": "contract-v9",
+  "delta_t_hours": 0.5,
+  "deterministic_algorithm": "n = smallest integer in [ceil(A/hi), floor(A/lo)] with ceil(A/n)..floor(A/n) within [lo,hi]; Hamilton split over n; fail closed beyond max_tasks_per_slot / max_growth_rounds",
+  "e_work_bounds": {
+    "w_max": 60.705862109427294,
+    "w_min": 9.712937937508368
+  },
+  "frozen_at_utc": "2026-09-20T08:30:34+00:00",
+  "max_growth_rounds": 4,
+  "max_tasks_per_slot": 4,
+  "note": "B6 arrival-to-Task 确定性 mapper 的冻结参数（Route-A 人工签核）。realized aggregate 是**唯一**任务账本输入；forecast 只作对照。参数仅供本卡读取，不在此处重新选择。",
+  "profile_order": [
+    "E_micro_inference",
+    "A_inference",
+    "B_rl_training",
+    "C_dl_training",
+    "D_preprocess"
+  ],
+  "profiles": {
+    "E_micro_inference": {
+      "deadline_steps": 2,
+      "duration_steps": 1,
+      "interruptible": false,
+      "load_range": [
+        0.04,
+        0.25
+      ],
+      "parallelizable": false,
+      "priority_range": [
+        2.6,
+        3.4
+      ],
+      "source": "modeled_scenario"
+    }
+  },
+  "rel_tol_work": 1e-12,
+  "schema": "m1.3g-e-b-arrival-mapper-v1",
+  "seed_policy": "explicit per-episode seed; priority = f(split,origin,slot,ordinal,seed)",
+  "source_revision": "5844240703fa5cd829332f822cf344cdda98ab49",
+  "sources": {
+    "b6_intensity_policy": {
+      "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+      "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+    },
+    "exogenous_v3_parquet": {
+      "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+      "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "forecast_policy_v3": {
+      "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+      "sha256": "926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb"
+    },
+    "formal_split_v5_train": {
+      "path": "data/manifest/formal_splits_v5/train.json",
+      "sha256": "8608372fba5c560ba458c8903cc10746a4e21254b2c3e29a2c2cd3001d6233c7"
+    },
+    "frozen_refs_v4": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7"
+    }
+  },
+  "units": {
+    "c_idc_base": "work-unit/hour",
+    "delta_t_hours": "hour",
+    "micro": "work-unit x 1e-6",
+    "work": "work-unit"
+  },
+  "work_unit_scale": 1000000
+}
