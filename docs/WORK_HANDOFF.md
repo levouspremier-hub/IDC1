@@ -2718,6 +2718,56 @@ git revert <记录提交> f9e206c 42f00e1 281b69e 5dfe3c7 5b51986 5844240 c09db5
 # revert 后 HEAD^{tree} == 7b00836^{tree} = d425babf58a23dd6fe1517722029814f4a6addec
 ```
 
+> ⚠️ **R1 账本勘误**：上面这条回滚链**漏掉 `86ca2dd`**。M1.3g-e-b 实际为
+> **13 个**提交，以 §7AP 的完整列表为准。
+
+### 7AP. M1.3g-e-b-R1：mapper 语义信任边界、内容哈希与账本修复（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ap–§aq。**b2-b 之后 mapper 的第一轮审核不通过**（三项 P1）。
+
+**改前实测 → 改后**：
+
+| 缺陷 | 改前 | 改后 |
+|---|---|---|
+| 伪造 manifest（source sha + revision 全零） | `FORGED_MANIFEST_ACCEPTED` | **REJECTED** |
+| 改 `Task.priority` 后 `canonical_content_hash()` | `PRIORITY_MUTATION_HASH_UNCHANGED True` | **hash 改变** |
+| 篡改 v5 链 → 公开入口 | `PUBLIC_ENTRY_ACCEPTED_TAMPERED_V5` | **REJECTED** |
+
+**修复**：① 公开入口每次走**唯一** verified chain 并**从该 chain** 取 aggregate；
+② manifest 由 trusted live inputs + **live revision** + **live `C_IDC_base`** +
+**锚定 `refs_v4` 冻结时刻**重建并**逐字段比较**（13 类篡改全拒绝 + 接受性对照）；
+③ `C_IDC_base` 用**动态 import** live-verify（**不**改 `task_model.py`，
+**不**信自报）；④ content hash 覆盖**全部业务字段**（含完整 `load_profile`、
+整数账本、slot metadata、split·origin·horizon·seed），浮点用 `float.hex()`；
+⑤ 三份 v5 split **全部**按 hash 绑定。
+
+**manifest**：`b8a754885b2bb05ded74108cfa20a149eb877c66845291f0a18238cee277c223`，
+`source_revision = 53cb0c23…`，`frozen_at_utc = 2026-09-19T17:15:19+00:00`（= refs_v4 锚点）。
+`--verify` ×3 幂等、零临时文件。
+
+**验收**：mapper **49 passed**、`make check` exit 0（**2681 passed**）、
+`make smoke` exit 0、`make train` **exit 2**、`git diff --check` / `git status --short` 空；
+既有 B6/v3/`refs_v4`/v5 资产**逐字节未变**；**范围外修改：无**。
+
+> **性能登记（如实）**：重建比对使验证成本上升；三处**等价**重构把每 stream 由
+> **12.59 s 压到 1.95 s**（每 stream 只验一次 manifest；`_live_c_idc_base` 用
+> `lru_cache`；`split_slot_aggregate_micro` 复用已验签 payload；chain 只验本次使用的
+> split）。**未**削弱任何断言。
+
+**账本勘误**：M1.3g-e-b 实际 **13 个**提交（上一轮报告漏列 `86ca2dd`）：
+
+```bash
+# 原卡精确 newest-first 回滚（在 577bf27 上验证）
+git revert 577bf27 cdfd236 47eb01a f9e206c 271804d 42f00e1 281b69e 86ca2dd \
+           5dfe3c7 5b51986 5844240 c09db56 e3a56d0
+# == 7b00836^{tree} = d425babf58a23dd6fe1517722029814f4a6addec
+
+# 本 R1 精确 newest-first 回滚（在最终 HEAD 上验证）
+git revert 1c6feeb 0ed6452 0fc0dfa 53cb0c2 0ed3f57 6d0756e c5b3e12 07e3486 \
+           99e2942 da78075 08b1e89 ecc3fa1 94eb384 66a65fb
+# == 577bf27^{tree} = 1c9a44ae0057cb7fe6d732dd4c095723694ef544
+```
+
 > ## ⛔ **mapper 完成即停，等待人工复审。**
 > **未开始** g-e-c、g-e-d、g-f、env 接线、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
