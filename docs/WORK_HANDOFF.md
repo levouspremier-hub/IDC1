@@ -2908,7 +2908,68 @@ git revert 3a8bfc8 dd78fac 662eb51 c111a4f
 # == 0d74865^{tree} = e42e2ebc448a2e7ed32134724546dec59d1713bd
 ```
 
-> ## ⛔ **g-e-c-R1 完成即停，等待人工复审。**
+> ⚠️ **勘误（M1.3g-e-c-R2，2026-09-20）**：上面这条只回滚到**实现端点**
+> `3a8bfc8`，**遗漏** `ed82aef`、`1f1f61a` 两个文档提交。R1 的**完整**
+> 6 提交 newest-first 回滚见 §7AT（已实测零冲突、逐树一致）。
+
+### 7AT. M1.3g-e-c-R2：修复 formal carbon forecast 观测通道（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ax–§az。**人工复审结论（§ax）：R1 不通过**，
+1 × P1 + 2 × P3。
+
+**P1（唯一阻塞项）**：`_get_forecast_features` 的 **carbon 分组读 realized
+`carbon_factor_t`**，而读入正确 causal 值的 `carbon_forecast_t`
+**全仓库无人读取**（死代码）。R1 只分离了 price / temperature / PV / wind
+**四**条通道，审核要求（§av.4 第 2 条）列的是**六**条（含 carbon）。
+
+```text
+carbon_factor_t (realized, 被观测读取) : [0.402 0.402 0.402 0.402]
+carbon_forecast_t (causal, 从未被读)   : [0.402 0.402 0.402 0.402]
+identical? True
+```
+
+**数值惰性 ≠ 语义豁免**：二者恒等只因 carbon 是人工裁决的**冻结常量**；
+一旦 carbon 重新版本化并出现 episode 内变化，formal 观测就会读 realized 序列。
+**两处假绿**：分离守卫测试不含 carbon；`..._are_the_b6_causal_forecasts`
+对六个属性只做 `hasattr`，非恒等断言只覆盖 pv / price —— carbon 空过。
+
+**修复（最小）**：`carbon_src` 与其余四通道**同型**按 `self.formal` 分流
+（formal → `carbon_forecast_t`，legacy → `carbon_factor_t`）；`step` 的物理 /
+成本计算**继续**读 realized；**未改 `step()`**。
+
+**两条 carbon 先红原文（改前实测，逐字）**：
+```text
+tests/test_m13ge_env_injection.py:548: AssertionError:
+    formal forecast observation 不得读取 realized carbon_factor_t
+tests/test_m13ge_env_injection.py:573: AssertionError:
+    carbon 观测分组必须读 causal carbon_forecast_t（当前读的是 realized 死值）
+```
+
+**两项 P3 清理**：① 删除死属性 `arrival_forecast_t`（formal arrival 观测唯一来源
+仍是 `task_arrival_forecast`，原 R1 arrival 回归保留并继续通过）；
+② `formal_refs` 由**盲 `setattr`** 改为**固定白名单 + fail-closed 集合校验**
+（`EXPECTED_FORMAL_REF_ATTRS` 13 项；缺失/多余即 `ValueError`），
+guard 非空洞性已实测（多余 key 与缺失 key 均触发）。
+
+**验收**：新测试 **47 passed**（43 原有 + 4 新增）；相关 m13f/m13g/env focused
+**670 passed**；`make check` exit 0（**2734 passed**）；`make smoke` exit 0；
+`make train` **exit 2**、train run **114 个全失败 / 0 success**、无 checkpoint；
+readiness **仍全 false**；`scenario/env_injection.py` **未改**；
+`git diff --check` / `git status --short` 空。
+
+**R1 完整回滚（6 提交，勘误 §7AS 的 4 提交口径）**——在 `1f1f61a` 上实测：
+```bash
+git revert 1f1f61a ed82aef 3a8bfc8 dd78fac 662eb51 c111a4f
+# == 0d74865^{tree} = e42e2ebc448a2e7ed32134724546dec59d1713bd
+```
+
+**R2 完整回滚（4 提交，含复审记录）**——在 `a51d7cf` 上实测：
+```bash
+git revert a51d7cf 5bab66d 98f4195 1edbade
+# == 1f1f61a^{tree} = 9749209a0fd4ea2f9adbea873561f71c16ff407c
+```
+
+> ## ⛔ **g-e-c-R2 完成即停，等待人工复审。**
 > **未开始** g-e-d、g-f、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。

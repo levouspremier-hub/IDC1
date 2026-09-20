@@ -575,6 +575,41 @@ checkpoint）；冻结资产逐字节未变；**范围外修改无**；readiness
 > ## ⛔ **g-e-c 完成即停，等待人工复审。**
 > **未开始** g-e-d（回归）、g-f（训练门禁）、训练、评估、M6。
 
+## 9.3 **carbon 观测通道已修复（M1.3g-e-c-R2，2026-09-20）**
+
+**人工复审（卡片 §ax）判定 `g-e-c-R1` 不通过**：1 × P1 + 2 × P3。R1 的
+exogenous truth、五类 forecast 中的**四类**、refs、Task reset replay 均已通过。
+
+**唯一阻塞项 P1**：`_get_forecast_features` 的 **carbon 分组读 realized
+`carbon_factor_t`**，而读入了正确 causal 值的 `carbon_forecast_t` **无人读取**
+（死代码）。审核要求列的是**六**条通道（含 carbon），R1 只完成四条。
+`realized == forecast == 0.402` 只是**冻结常量**造成的数值惰性，**不构成语义豁免**。
+
+**修复**：`carbon_src` 与 price / temperature / PV / wind **同型**按 `self.formal`
+分流；`step` 的物理 / 成本计算**继续**读 realized；legacy **逐字保持原行为**；
+**未改 `step()`**、**未改 `scenario/env_injection.py`**。
+
+**两项 P3 清理**：删除死属性 `arrival_forecast_t`（formal arrival 观测唯一来源仍是
+`task_arrival_forecast`）；`formal_refs` 由盲 `setattr` 改为**固定白名单
+`EXPECTED_FORMAL_REF_ATTRS`（13 项）+ fail-closed 集合校验**。
+
+**验收**：新测试 **47 passed**；相关 m13f/m13g/env focused **670 passed**；
+`make check` **2734 passed**；`make smoke` exit 0；`make train` **exit 2**；
+readiness **仍全 false**；范围外修改**无**。
+
+**回滚（均已实测零冲突、逐树一致）**：
+
+~~~bash
+# R1 完整回滚（6 提交；勘误此前只到 3a8bfc8 的 4 提交口径）
+git revert 1f1f61a ed82aef 3a8bfc8 dd78fac 662eb51 c111a4f   # == 0d74865^{tree}
+
+# R2 完整回滚（4 提交，含复审记录）
+git revert a51d7cf 5bab66d 98f4195 1edbade                    # == 1f1f61a^{tree}
+~~~
+
+> ## ⛔ **g-e-c-R2 完成即停，等待人工复审。**
+> **未开始** g-e-d（回归）、g-f（训练门禁）、训练、评估、M6。
+
 ## 10. 后续顺序
 
 ~~~
