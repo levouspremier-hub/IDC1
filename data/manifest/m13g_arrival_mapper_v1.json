@@ -30,6 +30,7 @@
     "source": "modeled_scenario",
     "work_unit_scale": 1000000
   },
+  "c_idc_base_work_per_hour": 485.64689687541835,
   "contract_version": "contract-v9",
   "delta_t_hours": 0.5,
   "deterministic_algorithm": "n = smallest integer in [ceil(A/hi), floor(A/lo)] with ceil(A/n)..floor(A/n) within [lo,hi]; Hamilton split over n; fail closed beyond max_tasks_per_slot / max_growth_rounds",
@@ -37,7 +38,7 @@
     "w_max": 60.705862109427294,
     "w_min": 9.712937937508368
   },
-  "frozen_at_utc": "2026-09-20T08:31:13+00:00",
+  "frozen_at_utc": "2026-09-20T08:36:41+00:00",
   "max_growth_rounds": 4,
   "max_tasks_per_slot": 4,
   "note": "B6 arrival-to-Task 确定性 mapper 的冻结参数（Route-A 人工签核）。realized aggregate 是**唯一**任务账本输入；forecast 只作对照。参数仅供本卡读取，不在此处重新选择。",
@@ -68,7 +69,7 @@
   "rel_tol_work": 1e-12,
   "schema": "m1.3g-e-b-arrival-mapper-v1",
   "seed_policy": "explicit per-episode seed; priority = f(split,origin,slot,ordinal,seed)",
-  "source_revision": "5dfe3c79112af35a5befe597558acf81595d07b9",
+  "source_revision": "42f00e1926fcf344516b45fae246d71edf54ff46",
   "sources": {
     "b6_intensity_policy": {
       "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
