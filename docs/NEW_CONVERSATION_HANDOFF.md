@@ -223,6 +223,38 @@ data/manifest/formal_splits_v2/                            v2 superseded
 data/manifest/formal_splits_v3/                            v3 superseded_pre_canonical_loader_trust_boundary_fix
 ~~~
 
+### 9.0 **B6 mapper 可行域审计（2026-09-20，M1.3g-e-b-a）—— 最新**
+
+**只读审计完成，停在人工决策处**。审计文档：`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md` §ah。
+
+**基数修正（重要）**：任务卡用的 `C = 469.556874725279 work/hour`
+**扫 `server_seed` 0–63 无一匹配、不可复现**（同 `95.599`/`4.970` 一类未冻结探针）。
+B6 policy 固定 `server_seed=0`，其参考量为
+**`C_IDC_base = 485.646896875418349 work/hour`**。
+
+| 量 | 任务卡 | **本审计** |
+|---|---|---|
+| 全局最小 `w_min`（work） | 37.56454997802232 | **38.851751750033472** |
+| `< w_min` 的槽（ALL） | 14,401 / 81.9729% | **15,109 / 86.0030%** |
+| train / validation / test | 8,375 / 2,377 / 3,649 | **8,797 / 2,494 / 3,818** |
+
+**零聚合槽 = 0**（min = 12）⇒ 无「零任务覆盖」逃逸。
+**expected forecast 的 48 个 slot 全部小于 `w_min`**（`max/w_min = 0.918824`）。
+
+**证明**：合法 Task 的 `workload >= 全局最小 w_min > aggregate` ⇒ 非空集超出、
+空集为 0，与 1:1 守恒矛盾 ⇒ **无合法分割**。
+
+**人工决策（只有三个）**：**A** 批准新的/修改的 modeled micro-task profile 参数
+（须逐项批准 **13 项**，§ah.7）；**B** 回上游 M1.3f 重新批准并版本化场景强度或时间语义；
+**C** 保持当前参数并阻塞。**审计不自行选择。**
+
+**六类伪选项禁止**：mapper 内缩放 arrival / 合并移动半小时槽 / 丢弃低 aggregate 槽 /
+零 workload 或零数量替代 / 未经批准放宽 profile 约束 / 用 validation/test 拟合参数。
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED，等待 micro-task/profile 参数或上游强度语义的人工批准。**
+> 未创建 mapper、fixture、参数 manifest、Task、run 或 checkpoint；
+> `make check` **2632 passed**、`make train` **exit 2**；范围外修改**无**。
+
 ## 9. 当前硬阻塞：arrival workload 到离散 Task 的语义
 
 现在不要直接启动 M1.3g-e 实施。
