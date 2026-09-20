@@ -175,20 +175,20 @@ scenario/formal_scenario.py 的 formal kernel 已构造七条 forecast：
 **B6 正式链只可用 `configs/frozen_refs/refs_v4.json`**
 （schema `m1.3feb2b-frozen-refs-v1`，SHA-256 `b5b64ef2…`；R1 后重新物化）。
 
-`refs_v3.json` 与 `refs.json`（v2）**逐字节保留**但**不得**被正式链使用（无 fallback）。
-**`lambda_ref = 63.988 work-units/hour`**（`decision_id=B6-INTENSITY`），**不继承旧的 2000**。
+`refs_v3.json`（历史 v3）与 `refs.json`（历史 v2，标记
+superseded_pre_trust_boundary_fix）**逐字节保留**，但**不得**被正式链使用（无 fallback）。
+**`refs_v4` 的 `lambda_ref = 63.988 work-units/hour`**（`decision_id=B6-INTENSITY`），
+**不继承旧的 2000**。
 
-configs/frozen_refs/refs.json 是历史 v2，标记 superseded_pre_trust_boundary_fix，保留但不可被 g-c/e/f 使用。
-
-关键值：
+**refs_v4 的关键值**（已调用的判据以文件为准）：
 
 ~~~
 price_ref=4.5                          max(abs(train price))
 pv_ref_kw=350.9073696124661            train derived
 wind_ref_kw=262.3178613166015          train derived
 carbon_factor_ref=0.402                train derived
-lambda_ref=2000, queue_ref=6000,
-queue_capacity_ref=6000, cost_ref=60   declared physical scales
+lambda_ref=63.988                      B6-INTENSITY（**不是** 旧的 2000）
+queue_ref=6000, queue_capacity_ref=6000, cost_ref=60   declared physical scales
 ~~~
 
 生成器不得接收 dataframe/frame、kwargs、expected hash 或 caller trust root。
@@ -198,12 +198,12 @@ queue_capacity_ref=6000, cost_ref=60   declared physical scales
 **B6 正式链只可用目录 `data/manifest/formal_splits_v5/`**
 （schema `m1.3feb2b-formal-split-manifest-v5`，**已 bump**）。
 
-
 **✅ `M1.3f-e-b2-b` / `-R1` 执行完成（等待人工复审）**：b2-b 第一轮审核不批准，R1 修三项 P1——① v5 loader 改为**整体重建比对**（改前改 `time_range` 起止即得 `FORGED_TIME_RANGE_ACCEPTED`），差异时输出差异顶层字段；② `frozen_at_utc` **锚定到已验签 refs_v4**（⇒ 必须先物化 refs_v4 再物化 v5）；③ revision 两集合各扩到 **9 项**（补入 `scenario/scenario.py` 与两个 materializer）；④ 伪事务测试换成**真实** `materialize_*()` 三阶段注入（四产物全不存在、零临时文件）。R1 后四产物：refs_v4 `b5b64ef2…`、v5 train `8608372f…` / validation `3f16ad3a…` / test `aaacd459…`；`materializer_revision = 577f1db…`；共享 `frozen_at_utc 2026-09-19T17:15:19+00:00`。`make check` **2632 passed**；**旧资产逐字节未变**。**public-entry mutation 回归仍未实现**（范围声明未改）。v1–v4 **全部 superseded**，逐字节保留但不得 fallback。
 
-~~只可用目录 data/manifest/formal_splits_v4/~~（历史）
+~~只可用目录 `data/manifest/formal_splits_v4/`~~（历史，superseded）
+~~schema `m1.3g-formal-split-manifest-v4`~~（历史）
 
-schema 是 m1.3g-formal-split-manifest-v4；三个文件共享一个 frozen_at_utc，并以 triad 原子物化。
+v5 triad：三个文件共享一个 `frozen_at_utc`（**锚定到 refs_v4**），以 triad 原子物化。
 
 | split | split-local candidate origins |
 | --- | --- |
