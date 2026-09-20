@@ -2583,7 +2583,53 @@ git revert 316d813 71da67a da862a4 59c1fa3 a532390
 # revert 后 HEAD^{tree} == a740e38^{tree} = 60349ad7d27a02831ac9043a0645dc0b0025a4f1
 ```
 
-**下一张卡**：**M1.3f-e-b-c（若选 A/B）或维持阻塞（若选 C）** ——
+### 7AM. M1.3f-e-b-c：A 路线 micro-task 参数候选与人工签核表（**执行完成，等待人工签核**）
+
+`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md` §au + `docs/task_cards/M1.3f.md` §AT–§AU。
+**只读 + 纯文档**：只改 `AUDIT_ARRIVAL_TO_TASK_MAPPING.md`、`M1.3f.md`、`M1.3g.md`；
+未改任何 `.py` / 测试 / manifest / refs / parquet / 配置；未创建 mapper / fixture /
+参数 manifest / Task / run / checkpoint。
+
+**人工已选择路线 A**（用 modeled micro-task/profile 参数解决可行域缺口）。
+**但 A 的选择【不】等于 13 个具体参数获批——13 项全部 `PENDING`。**
+
+**数学必要条件（只用 train 选参数；实测）**：
+
+```text
+C_IDC_base = 485.646896875418349 work/hour ; delta_t_hours = 0.5
+K = C x delta = 242.823448437709 work per (load_rate x step)
+TRAIN: n=10,224  min=12  max=59  mean=32.019757 ; 严格正槽 10,224 ; 零槽 0
+最低正 aggregate = 12 work ; max/min = 4.916667
+现有最小 w_min = 2 x 0.08 x K = 38.851751750033 work（比最低槽大 3.237646 倍）
+```
+
+**导出的可行区间（不选定任何值）**：覆盖 12 work 要求
+`duration_steps x load_min <= 12 / K`：
+
+| steps | 物理时长 | `load_min` 必须 ≤ |
+|---:|---|---:|
+| 1 | 0.5 h | 0.049418621131 |
+| 2 | 1.0 h | 0.024709310565 |
+| 3 | 1.5 h | 0.016472873710 |
+| 4 | 2.0 h | 0.012354655283 |
+
+**13 项人工签核表**（§au.3）：profile 名称、duration、load range、deadline、
+priority、interruptible/parallelizable、扩展旧 vs 新增、`MAX_TASKS_PER_SLOT`、
+`MAX_GROWTH_ROUNDS`、`work_unit_scale`、`ABS_TOL_WORK`/`REL_TOL_WORK`、
+profile/type 确定性顺序、modeled-scenario 来源声明 ——
+每项含**当前值/候选值/来源与物理理由/影响/状态**，**状态一律 `PENDING`**。
+一次性签核模板见 §au.4；**验证顺序见 §au.5（先 train 复核，再以 validation/test
+做覆盖验证，仅验证、不得回头改参数）**。
+
+**验收**：`git diff --name-only dfce1a8..HEAD` 仅上述三份文档；
+`git diff --check` / `git status --short` 空；13 行编号、13 项 `PENDING`；
+实现未写入任何 `APPROVED`。**范围外修改：无。**
+
+> ## ⛔ **g-e-b mapper 实现仍 BLOCKED。**
+> 在 **13 项逐项**获得人工批准值之前，不得开始 g-e-b / g-e-c / g-e-d / g-f、
+> env 接线、训练、评估或 M6；readiness 保持 **false**。
+
+**下一张卡**：**M1.3g-e-b（mapper）——仅在 13 项全部签核后**；
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
