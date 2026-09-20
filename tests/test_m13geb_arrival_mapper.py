@@ -434,3 +434,139 @@ def test_protected_assets_are_byte_identical():
         assert _sha256(path) == expected, str(path)
     for split in ("train", "validation", "test"):
         assert (V5_DIR / f"{split}.json").is_file()
+
+
+# =============================================================================
+# M1.3g-e-b-R1：语义信任边界、内容哈希与账本
+# =============================================================================
+
+def _forged_manifest(tmp_path, monkeypatch, mutate):
+    m = mapper()
+    d = tmp_path / "manifest"
+    d.mkdir(parents=True, exist_ok=True)
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    mutate(payload)
+    (d / "m13g_arrival_mapper_v1.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    monkeypatch.setattr(m, "_canonical_manifest_dir", lambda: d)
+    return d
+
+
+@needs_assets
+def test_untampered_manifest_is_accepted(tmp_path, monkeypatch):
+    """**接受性对照**：未篡改的副本（经私有 resolver 视为 canonical）必须通过。"""
+    _forged_manifest(tmp_path, monkeypatch, lambda p: None)
+    stream = _stream(horizon=2)
+    assert len(stream.tasks) == 2
+
+
+@needs_assets
+@pytest.mark.parametrize("mutate", [
+    pytest.param(lambda p: p["sources"]["frozen_refs_v4"].update(sha256="0" * 64),
+                 id="source_sha"),
+    pytest.param(lambda p: p.update(source_revision="0" * 40), id="revision"),
+    pytest.param(lambda p: p["sources"]["b6_intensity_policy"].update(sha256="0" * 64),
+                 id="b6_source_sha"),
+    pytest.param(lambda p: p.update(c_idc_base_work_per_hour=1.0), id="c_idc"),
+    pytest.param(lambda p: p["profiles"]["E_micro_inference"].update(load_range=[0.01, 0.99]),
+                 id="load_range"),
+    pytest.param(lambda p: p.update(max_tasks_per_slot=9), id="max_tasks"),
+    pytest.param(lambda p: p.update(work_unit_scale=10), id="scale"),
+    pytest.param(lambda p: p.update(frozen_at_utc="2026-01-01T00:00:00+00:00"),
+                 id="frozen_at_utc"),
+    pytest.param(lambda p: p.update(extra_field=1), id="extra_field"),
+    pytest.param(lambda p: p.pop("e_work_bounds"), id="missing_field"),
+    pytest.param(lambda p: p.update(profile_order=["A_inference"]), id="profile_order"),
+    pytest.param(lambda p: p["approved_parameters"].update(priority_range=[0.0, 1.0]),
+                 id="approved_priority"),
+    pytest.param(lambda p: p.update(sources={}), id="missing_sources"),
+])
+def test_forged_manifest_is_rejected_by_the_public_entry(tmp_path, monkeypatch, mutate):
+    """**公开入口**（不是 helper）必须拒绝被篡改的 manifest。"""
+    _forged_manifest(tmp_path, monkeypatch, mutate)
+    with pytest.raises(mapper().ArrivalMapperError):
+        _stream(horizon=2)
+
+
+@needs_assets
+def test_content_hash_covers_every_task_field():
+    m = mapper()
+    stream = _stream(horizon=2)
+    base = m.canonical_content_hash(stream)
+    task = stream.slots[0].tasks[0]
+
+    for field, value in (
+        ("priority", 3.399999),
+        ("duration", 3),
+        ("deadline", 9),
+        ("profile_key", "A_inference"),
+        ("name", "A_inference"),
+        ("arrival_time", 99),
+        ("interruptible", True),
+        ("parallelizable", True),
+        ("task_id", task.task_id + 1),
+        ("workload", task.workload + 1.0),
+        ("load_profile", np.full(len(task.load_profile), 0.123456, dtype=np.float64)),
+    ):
+        original = getattr(task, field)
+        setattr(task, field, value)
+        try:
+            assert m.canonical_content_hash(stream) != base, field
+        finally:
+            setattr(task, field, original)
+    assert m.canonical_content_hash(stream) == base
+
+
+@needs_assets
+def test_content_hash_covers_slot_and_ledger_metadata():
+    m = mapper()
+    stream = _stream(horizon=2)
+    base = m.canonical_content_hash(stream)
+    slot = stream.slots[0]
+    original = slot.ledger
+    object.__setattr__(slot, "ledger", (original[0] + 1, *original[1:]))
+    try:
+        assert m.canonical_content_hash(stream) != base
+    finally:
+        object.__setattr__(slot, "ledger", original)
+
+
+@needs_assets
+@pytest.mark.parametrize("split", ["train", "validation", "test"])
+def test_tampered_split_chain_is_rejected_by_the_public_entry(
+        tmp_path, monkeypatch, split):
+    """经**私有 canonical resolver** 篡改 v5 链 → **公开入口**必须 REJECT。"""
+    import scenario.b6_split_manifests as splits_mod
+
+    m = mapper()
+    temp_dir = tmp_path / "v5"
+    temp_dir.mkdir()
+    for name in ("train", "validation", "test"):
+        payload = json.loads((V5_DIR / f"{name}.json").read_text(encoding="utf-8"))
+        if name == split:
+            payload["inputs"]["frozen_refs"]["sha256"] = "0" * 64
+        (temp_dir / f"{name}.json").write_text(
+            json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    monkeypatch.setattr(splits_mod, "_canonical_split_dir", lambda: temp_dir)
+    # 该 split 的 start 仍合法；篡改必须由**公开入口**的链验证捕获
+    starts = {"train": "2024-01-02T00:00:00+08:00",
+              "validation": "2024-08-01T00:00:00+08:00",
+              "test": "2024-10-01T00:00:00+08:00"}
+    with pytest.raises(ValueError):
+        m.build_arrival_task_stream(split, start=starts[split], horizon=2, seed=1)
+
+
+@needs_assets
+def test_tampered_refs_chain_is_rejected_by_the_public_entry(tmp_path, monkeypatch):
+    """篡改 `refs_v4`（`lambda_ref` 改回旧的 2000）→ 公开入口必须 REJECT。"""
+    import scenario.b6_refs as refs_mod
+
+    refs_dir = tmp_path / "frozen_refs"
+    refs_dir.mkdir()
+    payload = json.loads(REFS_V4.read_text(encoding="utf-8"))
+    payload["references"]["lambda_ref"]["value"] = 2000.0
+    (refs_dir / "refs_v4.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+    monkeypatch.setattr(refs_mod, "_canonical_refs_dir", lambda: refs_dir)
+    with pytest.raises(ValueError):
+        _stream(horizon=2)
