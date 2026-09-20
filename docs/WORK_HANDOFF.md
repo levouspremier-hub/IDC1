@@ -2754,6 +2754,22 @@ git revert <记录提交> f9e206c 42f00e1 281b69e 5dfe3c7 5b51986 5844240 c09db5
 > `lru_cache`；`split_slot_aggregate_micro` 复用已验签 payload；chain 只验本次使用的
 > split）。**未**削弱任何断言。
 
+**R1 的 16 个提交**（上一轮报告写「15 个」——**计数错误**；其列表本身是 16 项）：
+
+```text
+66a65fb 94eb384 ecc3fa1 08b1e89 da78075 99e2942 07e3486 c5b3e12
+6d0756e 0ed3f57 53cb0c2 0fc0dfa 0ed6452 1c6feeb 7325df2 a319c52
+```
+
+**R1 精确 newest-first 回滚**（detached worktree 验证）：
+
+```bash
+git revert a319c52 7325df2 1c6feeb 0ed6452 0fc0dfa 53cb0c2 0ed3f57 \
+           6d0756e c5b3e12 07e3486 99e2942 da78075 08b1e89 ecc3fa1 \
+           94eb384 66a65fb
+# == 577bf27^{tree} = 1c9a44ae0057cb7fe6d732dd4c095723694ef544
+```
+
 **账本勘误**：M1.3g-e-b 实际 **13 个**提交（上一轮报告漏列 `86ca2dd`）：
 
 ```bash
@@ -2762,13 +2778,51 @@ git revert 577bf27 cdfd236 47eb01a f9e206c 271804d 42f00e1 281b69e 86ca2dd \
            5dfe3c7 5b51986 5844240 c09db56 e3a56d0
 # == 7b00836^{tree} = d425babf58a23dd6fe1517722029814f4a6addec
 
-# 本 R1 精确 newest-first 回滚（在最终 HEAD 上验证）
-git revert 1c6feeb 0ed6452 0fc0dfa 53cb0c2 0ed3f57 6d0756e c5b3e12 07e3486 \
-           99e2942 da78075 08b1e89 ecc3fa1 94eb384 66a65fb
+# 本 R1 精确 newest-first 回滚（在最终 HEAD 上验证，16 个提交）
+git revert a319c52 7325df2 1c6feeb 0ed6452 0fc0dfa 53cb0c2 0ed3f57 \
+           6d0756e c5b3e12 07e3486 99e2942 da78075 08b1e89 ecc3fa1 \
+           94eb384 66a65fb
 # == 577bf27^{tree} = 1c9a44ae0057cb7fe6d732dd4c095723694ef544
 ```
 
-> ## ⛔ **mapper 完成即停，等待人工复审。**
+### 7AQ. M1.3g-e-b-R2：容量来源 revision 覆盖与全范围守恒（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ar–§as。**改前实测**：
+`'idc_model/task_model.py' in ARRIVAL_MAPPER_SOURCE_PATHS : False`。
+
+**根因**：`C_IDC_base` 来自 `idc_model/task_model.py::_task_workload_capacity_ref()`，
+该文件**决定** manifest 的 `c_idc_base_work_per_hour`，却不在 mapper 的
+revision / dirty 集合里 ⇒ **改它不会使旧 revision 失效**。
+
+**修复（最小）**：**仅**把 `idc_model/task_model.py` 加入
+`ARRIVAL_MAPPER_SOURCE_PATHS`（该集合**同时**驱动 dirty 与 revision）；
+**未**修改 `task_model.py`；**未**新增信任规则；R1 的 rebuild-and-compare、
+公开 verified chain、完整 content hash 与性能优化**全部保持不变**。
+
+**全范围逐槽覆盖（实测，只加载一次）**：
+
+```text
+train       slots=10224 tasks=10224
+validation  slots= 2928 tasks= 2928
+test        slots= 4416 tasks= 4416
+TOTAL slots = 17568 | elapsed 2.00s | E integer bounds = [9712938, 60705862]
+```
+
+**manifest**：`efea87f2b854190a9d4433541d7cf4db07bb11ff022a0bd828cdd1d1fe6b040b`，
+`source_revision = a8065990…`，`frozen_at_utc` = refs_v4 锚点；`--verify` ×3 幂等、零临时文件。
+
+**验收**：mapper **55 passed**、`make check` exit 0（**2687 passed**）、
+`make smoke` exit 0、`make train` **exit 2**、`git diff --check` / `git status --short` 空；
+既有资产**逐字节未变**；**范围外修改：无**。
+
+**本 R2 精确 newest-first 回滚**（最终 HEAD 上验证）：
+
+```bash
+git revert 8409a8d 6fdd549 a806599 df9db17 0820931
+# == a319c52^{tree} = 3d07ab4ff86fba5d60ea1c9d457d1dd808a8a7c6
+```
+
+> ## ⛔ **mapper R2 完成即停，等待人工复审。**
 > **未开始** g-e-c、g-e-d、g-f、env 接线、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
