@@ -536,6 +536,17 @@ manifest `b8a75488…`、`source_revision 53cb0c23…`、`frozen_at_utc` = refs_
 > **账本勘误**：M1.3g-e-b 实际 **13 个**提交（上轮漏列 `86ca2dd`）；完整回滚见
 > `docs/WORK_HANDOFF.md` §7AP 与 `docs/task_cards/M1.3g.md` §aq.7。
 
+**✅ R2（M1.3g-e-b-R2，2026-09-20）**：审核指出 `idc_model/task_model.py`
+（`C_IDC_base` 的来源）**未**进入 mapper 的 revision/dirty 集合 ⇒ 改它不会使旧
+revision 失效。已**仅**把它加入统一 source 集合（**未**改 `task_model.py`、
+**未**新增信任规则）；并补**全范围逐槽守恒**回归。实测 **17,568 槽全部覆盖**
+（train 10,224 / validation 2,928 / test 4,416，每槽恰 1 个 E 任务，2.00 s）。
+manifest `efea87f2…`、`source_revision a8065990…`。`make check` **2687 passed**；
+既有资产逐字节未变；**范围外修改无**。
+
+> **R1 账本勘误**：R1 实际 **16 个**提交（上轮写「15 个」——计数错误）。
+> 两条完整回滚见 `docs/WORK_HANDOFF.md` §7AQ 与 `docs/task_cards/M1.3g.md` §as.7–§as.8。
+
 ## 10. 后续顺序
 
 ~~~
