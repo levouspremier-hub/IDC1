@@ -298,3 +298,204 @@ def test_legacy_env_behaviour_is_unchanged():
     obs, info = env.reset(seed=0)
     assert "true_task_arrival_profile" in info
     assert len(env.tasks) > 0
+
+
+# =============================================================================
+# M1.3g-e-c-R1：formal exogenous / refs 接线 + 真正的 reset 重放
+# =============================================================================
+
+# 一个**日照时段**的起点（PV / 风电非零），避免「夜间全零」假绿。
+DAYLIGHT_START = "2024-04-16T04:00:00+08:00"
+
+# refs_v4 中环境实际消费的正式参考值（人工批准 / train 冻结）
+FORMAL_REFS = {
+    "price_ref": 4.5,
+    "lambda_ref": 31.994,          # = 63.988 work/hour × delta_t_hours(0.5)
+    "queue_ref": 6000.0,
+    "queue_capacity_ref": 6000.0,
+    "pv_ref_kw": 350.9073696124661,
+    "wind_ref_kw": 262.3178613166015,
+    "carbon_factor_ref": 0.402,
+    "cost_ref": 60.0,
+    "carbon_ref": 15.0,
+    "grid_power_limit_kW": 18.0,
+    "peak_power_ref_kW": 10.0,
+    "peak_power_threshold_kW": 18.0,
+    "sla_penalty_ref": 50.0,
+}
+
+
+def _daylight_env(horizon: int = 8, cutoff: int = 4):
+    from envs.idc_price_env import IDCPriceEnv20D
+
+    inj = injection_module().build_verified_formal_env_injection(
+        "train", start=DAYLIGHT_START, horizon=horizon, forecast_cutoff=cutoff)
+    return IDCPriceEnv20D(horizon=horizon, task_seed=7, server_seed=0,
+                          forecast_seed=7, delta_t_hours=0.5,
+                          formal_injection=inj), inj
+
+
+# --- R1-1. realized exogenous 逐位接线 ------------------------------------------
+
+@needs_assets
+def test_formal_realized_exogenous_is_wired_bit_for_bit():
+    env, inj = _daylight_env()
+    env.reset(seed=7)
+    # 非空洞性：该窗口的 PV / 风电必须**非零**
+    assert max(inj.local_pv_kw) > 1.0, "测试窗口必须含非零 PV"
+    assert max(inj.wind_generation_kw) > 0.0, "测试窗口必须含非零风电"
+    for k in range(inj.horizon):
+        assert float(env.price_t[k]) == inj.price_sgd_per_kwh[k]
+        assert float(env.T_amb[k]) == inj.temperature_deg_c[k]
+        assert float(env.pv_t[k]) == inj.local_pv_kw[k]
+        assert float(env.wt_t[k]) == inj.wind_generation_kw[k]
+        assert float(env.carbon_factor_t[k]) == inj.carbon_kg_per_kwh[k]
+
+
+@needs_assets
+def test_formal_realized_exogenous_differs_from_the_legacy_defaults():
+    """**防假绿**：接线后的值与 legacy 默认曲线**必须不同**。"""
+    env, inj = _daylight_env()
+    env.reset(seed=7)
+    assert float(env.pv_t[0]) != 0.0          # legacy 默认全零
+    assert float(env.carbon_factor_t[0]) != 0.70  # legacy 日曲线峰值段
+    assert float(env.T_amb[0]) != pytest.approx(
+        25 + 5 * np.sin(np.pi * (0 - 8) / 12), rel=1e-3)  # legacy 正弦
+
+
+# --- R1-2. forecast observation 用 B6 causal -----------------------------------
+
+@needs_assets
+def test_formal_forecast_arrays_are_the_b6_causal_forecasts():
+    env, inj = _daylight_env()
+    env.reset(seed=7)
+    for attr in ("price_forecast_t", "temperature_forecast_t", "pv_forecast_t",
+                 "wind_forecast_t", "carbon_forecast_t", "arrival_forecast_t"):
+        assert hasattr(env, attr), attr
+    assert [float(v) for v in env.arrival_forecast_t] == list(inj.arrival_forecast)
+    # realized 与 forecast **不得**是同一套数组
+    assert not np.allclose(env.pv_forecast_t, env.pv_t)
+    assert not np.allclose(env.price_forecast_t, env.price_t)
+
+
+@needs_assets
+@pytest.mark.leakage
+def test_forecast_observation_uses_causal_forecasts_not_realized_truth():
+    """把 realized 改成不同值 → forecast observation **不变**；反之必变。"""
+    env, _ = _daylight_env()
+    env.reset(seed=7)
+    base = env._get_forecast_features().copy()
+    env.price_t = np.asarray(env.price_t, dtype=np.float64) + 10.0
+    env.pv_t = np.asarray(env.pv_t, dtype=np.float64) + 100.0
+    assert np.allclose(base, env._get_forecast_features())
+    env.price_forecast_t = np.asarray(env.price_forecast_t, dtype=np.float64) + 10.0
+    assert not np.allclose(base, env._get_forecast_features())
+
+
+# --- R1-3. reset 重放：全新 Task 对象 -------------------------------------------
+
+@needs_assets
+def test_reset_after_steps_replays_the_initial_task_state():
+    env, inj = _daylight_env()
+    env.reset(seed=7)
+    before = [(t.task_id, t.status, t.remaining_work, t.start_time, t.finish_time)
+              for t in env.tasks]
+    ids_before = [t.task_id for t in env.tasks]
+
+    for _ in range(3):
+        env.step(np.full(env.action_dim, 0.9, dtype=np.float64))
+    mid = [(t.task_id, t.status, t.remaining_work) for t in env.tasks]
+    assert mid != before, "执行后任务状态必须发生变化（否则重放无意义）"
+
+    obs_after, _ = env.reset(seed=7)
+    after = [(t.task_id, t.status, t.remaining_work, t.start_time, t.finish_time)
+             for t in env.tasks]
+    assert after == before
+    assert [t.task_id for t in env.tasks] == ids_before
+
+
+@needs_assets
+def test_reset_creates_fresh_task_objects():
+    env, inj = _env()
+    env.reset(seed=7)
+    first = env.tasks
+    for _ in range(2):
+        env.step(np.full(env.action_dim, 0.9, dtype=np.float64))
+    env.reset(seed=7)
+    assert [id(t) for t in env.tasks] != [id(t) for t in first]
+    # injection 内的 pristine 模板**不得**被就地执行污染
+    assert all(t.status == "not_arrived" for t in inj.tasks)
+
+
+@needs_assets
+def test_reset_replay_restores_the_initial_observation():
+    env, _ = _daylight_env()
+    obs_before, _ = env.reset(seed=7)
+    for _ in range(3):
+        env.step(np.full(env.action_dim, 0.9, dtype=np.float64))
+    obs_after, _ = env.reset(seed=7)
+    assert np.allclose(obs_before, obs_after)
+
+
+# --- R1-4. refs_v4 全量接线 -----------------------------------------------------
+
+@needs_assets
+@pytest.mark.parametrize("attr,expected", sorted(FORMAL_REFS.items()))
+def test_formal_env_consumes_every_reference_from_refs_v4(attr, expected):
+    env, _ = _env()
+    assert float(getattr(env, attr)) == pytest.approx(expected)
+
+
+@needs_assets
+def test_formal_refs_come_from_the_verified_refs_v4_file():
+    import json
+
+    refs = json.loads(REFS_V4.read_text(encoding="utf-8"))["references"]
+    env, _ = _env()
+    for name in ("price_ref", "pv_ref_kw", "wind_ref_kw", "carbon_factor_ref",
+                 "cost_ref", "carbon_ref", "grid_power_limit_kW",
+                 "peak_power_ref_kW", "peak_power_threshold_kW", "sla_penalty_ref",
+                 "queue_ref", "queue_capacity_ref"):
+        assert float(getattr(env, name)) == pytest.approx(float(refs[name]["value"]))
+    # arrival 每步归一化 = 冻结 rate × delta_t_hours
+    assert float(env.lambda_ref) == pytest.approx(
+        float(refs["lambda_ref"]["value"]) * 0.5)
+
+
+# --- R1-5. forecast_cutoff 一致性 -----------------------------------------------
+
+@needs_assets
+def test_forecast_cutoff_must_match_the_injection():
+    from envs.idc_price_env import IDCPriceEnv20D
+
+    inj = _build(horizon=8, cutoff=4)
+    with pytest.raises(ValueError):
+        IDCPriceEnv20D(horizon=8, task_seed=7, server_seed=0, forecast_seed=7,
+                       delta_t_hours=0.5, forecast_cutoff=2,
+                       formal_injection=inj)
+    ok = IDCPriceEnv20D(horizon=8, task_seed=7, server_seed=0, forecast_seed=7,
+                        delta_t_hours=0.5, forecast_cutoff=4,
+                        formal_injection=inj)
+    assert ok.forecast_cutoff == inj.forecast_cutoff
+
+
+# --- R1-6. provenance 覆盖面 ----------------------------------------------------
+
+@needs_assets
+def test_provenance_hash_covers_realized_forecast_refs_and_tasks():
+    m = injection_module()
+    inj = _build(horizon=8, cutoff=4)
+    assert len(inj.provenance_hash) == 64
+    # 覆盖 realized exogenous
+    assert inj.price_sgd_per_kwh and inj.local_pv_kw and inj.wind_generation_kw
+    assert inj.carbon_kg_per_kwh and inj.temperature_deg_c
+    # 覆盖 causal forecast
+    assert inj.causal_forecasts and "price_forecast" in inj.causal_forecasts
+    # 覆盖 refs
+    assert inj.formal_refs and "price_ref" in inj.formal_refs
+    # 覆盖任务业务内容（不只是 id/ledger）
+    assert inj.task_specs
+    changed = m._provenance_hash(
+        type(inj)(**{**inj.__dict__, "price_sgd_per_kwh": tuple(
+            v + 1.0 for v in inj.price_sgd_per_kwh)}))
+    assert changed != inj.provenance_hash
