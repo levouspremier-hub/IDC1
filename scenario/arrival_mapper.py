@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -211,6 +212,7 @@ def c_idc_base_work_per_hour() -> float:
 
 # --- manifest -----------------------------------------------------------------
 
+@functools.lru_cache(maxsize=1)
 def _live_c_idc_base() -> float:
     """**实测** B6 冻结硬件实现（`server_seed=0`）的 `C_IDC_base`。
 
@@ -356,12 +358,16 @@ def _bounds_micro(payload: dict, key: str = "E_micro_inference") -> tuple[int, i
     return math.ceil(w_min * scale), math.floor(w_max * scale)
 
 
-def split_slot_aggregate_micro(aggregate_micro: int) -> tuple[int, ...]:
+def split_slot_aggregate_micro(aggregate_micro: int, *,
+                               payload: dict | None = None) -> tuple[int, ...]:
     """把**一个槽**的整数 aggregate 分成 1..N 个合法的整数 work 值。
 
     守恒精确；任一不可行即 **fail closed**（不 clip、不缩放、不丢弃）。
+
+    `payload` 为**已验签**的 mapper manifest；批量调用（如逐槽构造 stream）
+    必须传入它，避免对每个槽重复做整链重建比对。
     """
-    payload = load_verified_mapper_manifest()
+    payload = load_verified_mapper_manifest() if payload is None else payload
     if isinstance(aggregate_micro, bool) or not isinstance(aggregate_micro, int):
         raise ArrivalMapperError(f"aggregate_micro 必须是整数，实际 {aggregate_micro!r}")
     if aggregate_micro <= 0:
@@ -466,7 +472,7 @@ def build_arrival_task_stream(
                 f"槽 {slot_index} 的 realized aggregate = {agg_units}："
                 "不得创建零/负 workload Task（fail closed）")
         agg_micro = agg_units * scale
-        parts = split_slot_aggregate_micro(agg_micro)
+        parts = split_slot_aggregate_micro(agg_micro, payload=payload)
         mapped: list[Task] = []
         ledger: list[int] = []
         for ordinal, work_micro in enumerate(parts):
