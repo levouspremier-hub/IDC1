@@ -493,6 +493,37 @@ revision `cda31ab…`），受保护资产 hash 未变；`make check` **2571 pas
 profile 概率等参数**全部**是人工批准的 modeled scenario，**不得**声称由
 aggregate train 数据校准。
 
+## 9.1 **B6 arrival-to-Task mapper 已实现（M1.3g-e-b，2026-09-20）**
+
+`scenario/arrival_mapper.py`（**纯函数**）+ `scripts/materialize_b6_arrival_mapper.py`
++ 冻结参数 manifest `data/manifest/m13g_arrival_mapper_v1.json`
+（schema `m1.3g-e-b-arrival-mapper-v1`，SHA-256 `eb44608f…`，
+`source_revision = 42f00e19…`）。
+
+- 公开入口 `build_arrival_task_stream(split, start=…, horizon=…, seed=…)`
+  **只**接受已验证 B6/v3/v5 链；副本 / symlink / 旧 v1–v4 / `refs_v3` /
+  伪造 hash·revision / dirty **全拒绝**；
+- 每槽**只读该槽 realized aggregate**；**未来 slot mutation 不影响此前 prefix**；
+  **forecast 绝不进入 Task truth**；
+- **fixed-point `work_unit_scale = 1e6`**：每槽与全 episode 整数账本
+  **精确等于**原始 aggregate（float `Task.workload` 仅运行时表示）；
+- Task 11 字段完整、`workload ∈ [9.712937937508368, 60.705862109427294]`、
+  平坦 `load_profile`、`deadline = 2 ≥ duration = 1`；
+  `task_id` 由 canonical 编码导出（**禁止** `hash()`）；`initial backlog` 不入账；
+- 实测 train / validation / test 各 48 槽 **48 任务**、守恒 **True**；
+  `61 work → 两 Task`；低于下界 / 超 4-task / 零 aggregate **均 fail closed**；
+  `--verify` ×3 幂等、零临时文件；CLI **仅** `--help`/`--verify`。
+
+**验收**：mapper **29 passed**；`make check` **2661 passed**、`make smoke` exit 0、
+`make train` **exit 2**；既有资产逐字节未变；**范围外修改无**。
+
+> ## ⛔ **mapper 完成即停，等待人工复审。**
+> **未开始** g-e-c（env 接线）、g-e-d（回归）、g-f（训练门禁）、训练、评估、M6；
+> readiness **仍为 false**。
+
+**回滚**：`git revert <记录提交> cdfd236 47eb01a f9e206c 42f00e1 281b69e 5dfe3c7 5b51986 5844240 c09db56 e3a56d0`
+→ `HEAD^{tree} == 7b00836^{tree}`。
+
 ## 10. 后续顺序
 
 ~~~
