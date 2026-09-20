@@ -58,6 +58,9 @@ ARRIVAL_MAPPER_SOURCE_PATHS: tuple[str, ...] = (
     "scenario/b6_refs.py",
     "scenario/splits.py",
     "idc_model/task.py",
+    # **R2**：`_task_workload_capacity_ref()` 来自该文件，它**决定**
+    # manifest 的 `c_idc_base_work_per_hour`；改它必须使旧 revision 失效。
+    "idc_model/task_model.py",
 )
 
 
