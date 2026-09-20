@@ -2674,7 +2674,52 @@ test       [14, 55] ⊆ 区间 : True    ← 仅覆盖验证
 仍未开始**；readiness **仍为 false**；旧 A/B/C/D profile **一律不变**。
 **范围外修改：无。**
 
-**下一张卡**：**`M1.3g-e-b`（mapper 实现卡）** —— **本卡不开始它**。
+### 7AO. M1.3g-e-b：B6 arrival-to-Task 确定性 mapper（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §an–§ao。新增 `scenario/arrival_mapper.py`（**纯函数**）
+与 `scripts/materialize_b6_arrival_mapper.py`，冻结
+`data/manifest/m13g_arrival_mapper_v1.json`
+（schema `m1.3g-e-b-arrival-mapper-v1`，SHA-256 `eb44608f…`，
+`source_revision = 42f00e19…`，完整值见 manifest）。
+
+**契约落地**：公开入口只接受已验证 B6/v3/v5 链（副本 / symlink / 旧 v1–v4 /
+`refs_v3` / 伪造 hash·revision / dirty **全拒绝**）；输入显式 `split/start/horizon/seed`；
+**纯函数**（同输入同 content hash）；每槽**只读该槽** realized aggregate，
+**未来 slot mutation 不影响此前 prefix**，**forecast 绝不进入 Task truth**；
+`E_micro_inference` 优先；**fixed-point `work_unit_scale = 1e6`**，
+每槽与全 episode 的整数账本**精确等于**原始 aggregate；Task 11 字段完整、
+`workload ∈ [9.712937937508368, 60.705862109427294]`、平坦 `load_profile`、
+`deadline = 2 ≥ duration = 1`；`task_id` 由 canonical 编码导出（**禁止** `hash()`）；
+**initial backlog 不进入**本账本。
+
+**实测**：train / validation / test 各 48 槽 **48 任务**，
+`ledger == aggregate` 与 `total == expected` 均 **True**；
+`61 work → (30500000, 30500000)` 两 Task；`12 work → (12000000,)` 单 Task；
+**低于下界 / 超 4-task 覆盖 / 零 aggregate 均 fail closed**；
+`--verify` ×3 幂等、零临时文件；CLI **仅** `--help` / `--verify`。
+
+**验收**：mapper **29 passed**；既有 m13f/g focused 全绿；
+`make check` exit 0（**2661 passed**）；`make smoke` exit 0；
+`make train` **exit 2**、无 checkpoint；`git diff --check` / `git status --short` 空。
+**既有资产逐字节未变**（B6 policy `7066a0e1…`、policy-v3 `92670333…`、
+`refs_v4` `b5b64ef2…`、v3 parquet `07b648f0…`、v5 train `8608372f…`）。
+**范围外修改：无**；**未**改 `idc_model/` / env / train / readiness。
+
+> **如实登记的实现选择**：`C_IDC_base` 由**物化器**（`scripts/`，不在 `make check`
+> 的 mypy 扫描范围内）解析并写入 manifest；mapper **只从 manifest 读取**，
+> **不导入** `idc_model.task_model`（该文件含 **17 处既有** mypy 错误且不在扫描范围；
+> 导入会把它们拉进 `make check`）。**数值不变**——manifest 记录的仍是
+> `485.64689687541835`。
+
+**回滚（由新到旧）**：
+
+```bash
+git revert <记录提交> f9e206c 42f00e1 281b69e 5dfe3c7 5b51986 5844240 c09db56 e3a56d0
+# revert 后 HEAD^{tree} == 7b00836^{tree} = d425babf58a23dd6fe1517722029814f4a6addec
+```
+
+> ## ⛔ **mapper 完成即停，等待人工复审。**
+> **未开始** g-e-c、g-e-d、g-f、env 接线、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
