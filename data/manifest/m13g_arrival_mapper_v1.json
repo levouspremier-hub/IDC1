@@ -69,7 +69,7 @@
   "rel_tol_work": 1e-12,
   "schema": "m1.3g-e-b-arrival-mapper-v1",
   "seed_policy": "explicit per-episode seed; priority = f(split,origin,slot,ordinal,seed)",
-  "source_revision": "07e3486e61317525afcd3a14af4760fff190fffc",
+  "source_revision": "6d0756e7b9aee008ce2194fce8f1cc339674634a",
   "sources": {
     "b6_intensity_policy": {
       "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
