@@ -40,6 +40,26 @@ def decompose_supply(base_demand_kW: float, total_demand_kW: float, budget_kW: f
     }
 
 
+# formal 注入允许写入环境的**正式参考值属性**（精确且固定的白名单）。
+# `refs_v4` 的实际 key 集合必须与此**完全相等**，否则 fail closed ——
+# 防止「盲 setattr」在 refs 改版时静默产生垃圾属性、而环境继续用旧默认值。
+EXPECTED_FORMAL_REF_ATTRS = (
+    "price_ref",
+    "lambda_ref",
+    "queue_ref",
+    "queue_capacity_ref",
+    "pv_ref_kw",
+    "wind_ref_kw",
+    "carbon_factor_ref",
+    "cost_ref",
+    "carbon_ref",
+    "grid_power_limit_kW",
+    "peak_power_ref_kW",
+    "peak_power_threshold_kW",
+    "sla_penalty_ref",
+)
+
+
 class IDCPriceEnv20D(gym.Env):
     """
     面向 PPO 的智算中心分时电价任务调度环境：ultimate 前瞻状态版。
@@ -367,7 +387,8 @@ class IDCPriceEnv20D(gym.Env):
             self.pv_forecast_t = np.asarray(self.pv_t, dtype=np.float64)
             self.wind_forecast_t = np.asarray(self.wt_t, dtype=np.float64)
             self.carbon_forecast_t = np.asarray(self.carbon_factor_t, dtype=np.float64)
-            self.arrival_forecast_t = np.zeros(self.horizon, dtype=np.float64)
+            # legacy 的 arrival 前瞻通道沿用既有语义（`true_task_arrival_profile`），
+            # 不引入 `arrival_forecast_t`（该属性从未被读取）。
 
         # 8. 运行状态变量会在 reset() 中初始化
         self.current_step = 0
@@ -555,8 +576,26 @@ class IDCPriceEnv20D(gym.Env):
         self.carbon_factor_t = np.asarray(inj.carbon_kg_per_kwh, dtype=np.float64)
         self.pv_t = np.asarray(inj.local_pv_kw, dtype=np.float64)
         self.wt_t = np.asarray(inj.wind_generation_kw, dtype=np.float64)
-        for name, value in inj.formal_refs.items():
-            setattr(self, name, float(value))
+        # refs_v4 的 key 集合必须与**固定白名单**完全相等（fail closed，而不是盲 setattr）。
+        missing = set(EXPECTED_FORMAL_REF_ATTRS) - set(inj.formal_refs)
+        unexpected = set(inj.formal_refs) - set(EXPECTED_FORMAL_REF_ATTRS)
+        if missing or unexpected:
+            raise ValueError(
+                "formal refs 与环境正式参考值属性不一致："
+                f"缺失 {sorted(missing)}，多余 {sorted(unexpected)}")
+        self.price_ref = float(inj.formal_refs["price_ref"])
+        self.lambda_ref = float(inj.formal_refs["lambda_ref"])
+        self.queue_ref = float(inj.formal_refs["queue_ref"])
+        self.queue_capacity_ref = float(inj.formal_refs["queue_capacity_ref"])
+        self.pv_ref_kw = float(inj.formal_refs["pv_ref_kw"])
+        self.wind_ref_kw = float(inj.formal_refs["wind_ref_kw"])
+        self.carbon_factor_ref = float(inj.formal_refs["carbon_factor_ref"])
+        self.cost_ref = float(inj.formal_refs["cost_ref"])
+        self.carbon_ref = float(inj.formal_refs["carbon_ref"])
+        self.grid_power_limit_kW = float(inj.formal_refs["grid_power_limit_kW"])
+        self.peak_power_ref_kW = float(inj.formal_refs["peak_power_ref_kW"])
+        self.peak_power_threshold_kW = float(inj.formal_refs["peak_power_threshold_kW"])
+        self.sla_penalty_ref = float(inj.formal_refs["sla_penalty_ref"])
         causal = inj.causal_forecasts
         self.price_forecast_t = np.asarray(causal["price_forecast"], dtype=np.float64)
         self.temperature_forecast_t = np.asarray(
@@ -564,7 +603,8 @@ class IDCPriceEnv20D(gym.Env):
         self.pv_forecast_t = np.asarray(causal["pv_forecast"], dtype=np.float64)
         self.wind_forecast_t = np.asarray(causal["wind_forecast"], dtype=np.float64)
         self.carbon_forecast_t = np.asarray(causal["carbon_forecast"], dtype=np.float64)
-        self.arrival_forecast_t = np.asarray(causal["arrival_forecast"], dtype=np.float64)
+        # arrival 的 causal forecast 唯一来源是 `task_arrival_forecast`（见 reset）；
+        # 这里**不再**写死属性 `arrival_forecast_t`（它从未被读取）。
 
     def _formal_provenance_info(self) -> dict:
         """formal 链的 provenance（**不含**任何未来 truth 数组）。"""
@@ -2047,11 +2087,15 @@ class IDCPriceEnv20D(gym.Env):
             temp_src = self.temperature_forecast_t
             pv_src = self.pv_forecast_t
             wind_src = self.wind_forecast_t
+            # M1.3g-e-c-R2：carbon 必须与上面四通道**同型**读 causal forecast。
+            # （`step` 的物理 / 成本计算仍然读 realized `carbon_factor_t`。）
+            carbon_src = self.carbon_forecast_t
         else:
             price_src = self.price_t
             temp_src = self.T_amb
             pv_src = self.pv_t
             wind_src = self.wt_t
+            carbon_src = self.carbon_factor_t
         price_24h = np.asarray(price_src, dtype=np.float64) / max(self.price_ref, eps) * visible
         T_amb_24h = np.asarray(temp_src, dtype=np.float64) / 40.0 * visible
         lambda_24h = np.asarray(
@@ -2060,7 +2104,7 @@ class IDCPriceEnv20D(gym.Env):
         pv_24h = np.asarray(pv_src, dtype=np.float64) / max(self.pv_ref_kw, eps) * visible
         wind_24h = np.asarray(wind_src, dtype=np.float64) / max(self.wind_ref_kw, eps) * visible
         carbon_24h = (
-            np.asarray(self.carbon_factor_t, dtype=np.float64)
+            np.asarray(carbon_src, dtype=np.float64)
             / max(self.carbon_factor_ref, eps)
             * visible
         )
