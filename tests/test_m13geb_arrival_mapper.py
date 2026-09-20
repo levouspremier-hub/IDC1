@@ -134,7 +134,7 @@ def test_slot_ledger_is_exactly_one_to_one(split, start):
     agg = mapper().verified_realized_aggregate()
     total = 0
     for slot in stream.slots:
-        micro = sum(t.ledger_work_micro for t in slot.tasks)
+        micro = sum(slot.ledger)
         assert micro == slot.aggregate_micro, slot.slot_index
         assert micro % WORK_UNIT_SCALE == 0
         assert micro // WORK_UNIT_SCALE == int(agg[slot.slot_index])
@@ -211,7 +211,7 @@ def test_validation_and_test_are_only_coverage_checks(split, start):
     stream = _stream(split, start)
     agg = mapper().verified_realized_aggregate()
     for slot in stream.slots:
-        assert sum(t.ledger_work_micro for t in slot.tasks) == slot.aggregate_micro
+        assert sum(slot.ledger) == slot.aggregate_micro
         assert slot.aggregate_micro == int(agg[slot.slot_index]) * WORK_UNIT_SCALE
 
 

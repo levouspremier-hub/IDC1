@@ -67,19 +67,17 @@ class ArrivalMapperError(ValueError):
 # --- 数据类 ---------------------------------------------------------------------
 
 @dataclass(frozen=True)
-class MappedTask:
-    """一个 Task 的**确定性**表示（含整数账本，供守恒对账）。"""
-
-    task: Task
-    slot_index: int
-    ledger_work_micro: int
-
-
-@dataclass(frozen=True)
 class MappedSlot:
+    """一个槽的映射结果：`tasks` 与 `ledger` **同序等长**。
+
+    `ledger[i]` 是 `tasks[i]` 的**整数**账本值（micro-work）；守恒对账以它为准，
+    `Task.workload` 只是运行时 float 表示。
+    """
+
     slot_index: int
     aggregate_micro: int
-    tasks: tuple[MappedTask, ...]
+    tasks: tuple[Task, ...]
+    ledger: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -93,7 +91,11 @@ class ArrivalTaskStream:
 
     @property
     def tasks(self) -> tuple[Task, ...]:
-        return tuple(mt.task for slot in self.slots for mt in slot.tasks)
+        return tuple(task for slot in self.slots for task in slot.tasks)
+
+    @property
+    def ledger_micro(self) -> tuple[int, ...]:
+        return tuple(v for slot in self.slots for v in slot.ledger)
 
 
 # --- Git / 路径 ----------------------------------------------------------------
@@ -410,7 +412,8 @@ def build_arrival_task_stream(
                 "不得创建零/负 workload Task（fail closed）")
         agg_micro = agg_units * scale
         parts = split_slot_aggregate_micro(agg_micro)
-        mapped: list[MappedTask] = []
+        mapped: list[Task] = []
+        ledger: list[int] = []
         for ordinal, work_micro in enumerate(parts):
             task_id = stable_task_id(split, origin, slot_index, ordinal, seed)
             if task_id in seen_ids:
@@ -440,12 +443,12 @@ def build_arrival_task_stream(
                 interruptible=bool(prof["interruptible"]),
                 parallelizable=bool(prof["parallelizable"]),
             )
-            mapped.append(MappedTask(task=task, slot_index=slot_index,
-                                     ledger_work_micro=work_micro))
-        if sum(m.ledger_work_micro for m in mapped) != agg_micro:
+            mapped.append(task)
+            ledger.append(work_micro)
+        if sum(ledger) != agg_micro:
             raise ArrivalMapperError(f"槽 {slot_index} 的整数账本不守恒")
         slots.append(MappedSlot(slot_index=slot_index, aggregate_micro=agg_micro,
-                                tasks=tuple(mapped)))
+                                tasks=tuple(mapped), ledger=tuple(ledger)))
 
     stream = ArrivalTaskStream(
         split=split, origin=origin, horizon=horizon, seed=seed,
@@ -471,9 +474,9 @@ def canonical_content_hash(stream: ArrivalTaskStream) -> str:
                 "slot_index": slot.slot_index,
                 "aggregate_micro": slot.aggregate_micro,
                 "tasks": [
-                    {"task_id": mt.task.task_id,
-                     "ledger_work_micro": mt.ledger_work_micro}
-                    for mt in slot.tasks
+                    {"task_id": task.task_id,
+                     "ledger_work_micro": micro}
+                    for task, micro in zip(slot.tasks, slot.ledger, strict=True)
                 ],
             }
             for slot in stream.slots
@@ -620,7 +623,6 @@ __all__ = [
     "ArrivalTaskStream",
     "MAPPER_MANIFEST_SCHEMA",
     "MappedSlot",
-    "MappedTask",
     "build_arrival_task_stream",
     "build_mapper_manifest",
     "c_idc_base_work_per_hour",
