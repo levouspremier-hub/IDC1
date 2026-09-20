@@ -2818,7 +2818,7 @@ TOTAL slots = 17568 | elapsed 2.00s | E integer bounds = [9712938, 60705862]
 **本 R2 精确 newest-first 回滚**（最终 HEAD 上验证）：
 
 ```bash
-git revert 8409a8d 6fdd549 a806599 df9db17 0820931
+git revert 71a6185 ce1fe43 8409a8d 6fdd549 a806599 df9db17 0820931
 # == a319c52^{tree} = 3d07ab4ff86fba5d60ea1c9d457d1dd808a8a7c6
 ```
 
