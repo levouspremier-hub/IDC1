@@ -252,8 +252,27 @@ B6 policy 固定 `server_seed=0`，其参考量为
 零 workload 或零数量替代 / 未经批准放宽 profile 约束 / 用 validation/test 拟合参数。
 
 > ## ⛔ **g-e-b mapper 实现仍 BLOCKED，等待 micro-task/profile 参数或上游强度语义的人工批准。**
-> 未创建 mapper、fixture、参数 manifest、Task、run 或 checkpoint；
-> `make check` **2632 passed**、`make train` **exit 2**；范围外修改**无**。
+
+**R1 账本收口（2026-09-20，纯文档）—— 三项澄清**：
+
+1. **`a740e38` 是【前置】的 `M1.3f-e-b2-b-R1` 审核收口提交**（改动 M1.3f 卡片与
+   `WORK_HANDOFF`），**不属于**本审计卡，**必须保留**、**不得**纳入本卡回滚链。
+2. **本 `M1.3g-e-b-a` 审计本身只修改四份文档**：
+   `docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`、`docs/task_cards/M1.3g.md`、
+   `docs/WORK_HANDOFF.md`、`docs/NEW_CONVERSATION_HANDOFF.md`。
+3. **数学结论已成立，但【不】构成 A / B / C 中任一项的人工作出决定**——
+   86.0030% 的槽不可行是**事实**；选哪一项是**人工裁决**，尚未发生。
+   **在裁决之前 mapper 仍 BLOCKED。**
+
+**本审计卡未创建** mapper、fixture、参数 manifest、Task、run 或 checkpoint；
+`make check` **2632 passed**、`make train` **exit 2**；范围外修改**无**。
+
+**本审计卡精确 newest-first 回滚**：
+
+```bash
+git revert 316d813 71da67a da862a4 59c1fa3 a532390
+# revert 后 HEAD^{tree} == a740e38^{tree} = 60349ad7d27a02831ac9043a0645dc0b0025a4f1
+```
 
 ## 9. 当前硬阻塞：arrival workload 到离散 Task 的语义
 
