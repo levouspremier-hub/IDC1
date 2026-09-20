@@ -2629,7 +2629,52 @@ profile/type 确定性顺序、modeled-scenario 来源声明 ——
 > 在 **13 项逐项**获得人工批准值之前，不得开始 g-e-b / g-e-c / g-e-d / g-f、
 > env 接线、训练、评估或 M6；readiness 保持 **false**。
 
-**下一张卡**：**M1.3g-e-b（mapper）——仅在 13 项全部签核后**；
+### 7AN. M1.3f-e-b-d：路线 A 的 13 项人工参数签核冻结（**执行完成，等待人工复审**）
+
+`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md` §au.3–§au.6 +
+`docs/task_cards/M1.3f.md` §AV–§AW。**纯文档**：只改五份文档；未改任何 `.py` /
+测试 / manifest / refs / parquet / 配置；未创建 mapper / fixture / 参数 manifest /
+Task / run / checkpoint。
+
+**人工已逐项批准 13 项**（状态 `PENDING` → **`APPROVED`**，**批准来源 = 人工**，
+实现**未**选择任何值）：
+
+| # | 参数 | 人工批准值 |
+|---|---|---|
+| 1 | profile 名称 | **新增 `E_micro_inference`** |
+| 2 | duration | **`0.5 h`**（1 step） |
+| 3 | load range | **`[0.04, 0.25]`** |
+| 4 | deadline | **`1.0 h`**（2 steps） |
+| 5 | priority | **`2.6–3.4`**（沿用 `A_inference`） |
+| 6 | interruptible / parallelizable | **`false / false`** |
+| 7 | 扩展 vs 新增 | **新增**；**不修改** A/B/C/D |
+| 8 | `MAX_TASKS_PER_SLOT` | **`4`** |
+| 9 | `MAX_GROWTH_ROUNDS` | **`4`** |
+| 10 | `work_unit_scale` | **`1_000_000`** |
+| 11 | `ABS_TOL_WORK` / `REL_TOL_WORK` | **`1e-9` / `1e-12`** |
+| 12 | 确定性顺序 | **`E_micro_inference → A_inference → B_rl_training → C_dl_training → D_preprocess`** |
+| 13 | 来源声明 | **`modeled scenario`**（不是 2024 task labels） |
+
+**独立复算（只读，实测）**：
+
+```text
+C_IDC_base = 485.646896875418349 | delta = 0.5
+duration_steps = 1 | deadline_steps = 2 | deadline >= duration: True
+E_micro_inference 合法 workload 区间 = [9.712937937508368, 60.705862109427294] work
+train      [12, 59] ⊆ 区间 : True    ← 选参依据（唯一）
+validation [12, 54] ⊆ 区间 : True    ← 仅覆盖验证
+test       [14, 55] ⊆ 区间 : True    ← 仅覆盖验证
+```
+
+**选定参数与 train 的关系**：现有最小任务比最低槽大 3.237646 倍的缺口**已闭合**——
+每个 split 的每个槽都可被**恰好一个** `E_micro_inference` 承载。
+
+**本卡的解除范围（**必须如实**）**：**只**解除「参数未批准」这一阻塞。
+**mapper（g-e-b）、env 接线（g-e-c）、回归（g-e-d）、`g-f`/正式训练、评估、M6
+仍未开始**；readiness **仍为 false**；旧 A/B/C/D profile **一律不变**。
+**范围外修改：无。**
+
+**下一张卡**：**`M1.3g-e-b`（mapper 实现卡）** —— **本卡不开始它**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
