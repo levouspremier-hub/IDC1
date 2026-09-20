@@ -2862,7 +2862,53 @@ git revert 9a8ddb8 a204e2a 3656c6b 960c8f0 0d978c1 044ab69
 # == 044ab69^{tree} = fcb3f2f98df85c3e1cd3b99bd3bab70478330042
 ```
 
-> ## ⛔ **g-e-c 完成即停，等待人工复审。**
+### 7AS. M1.3g-e-c-R1：formal exogenous/refs 接线与真正的 reset 重放（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §av–§aw。**改前实测三项缺陷**：
+
+| # | 缺陷 | 改前原文 |
+|---|---|---|
+| 1 | realized exogenous **未接线** | `price_t env=0.350000 inj=0.191010 equal=False`；`pv_t env=0.0 inj=282.64` |
+| 2 | `refs_v4` **未接线** | `price_ref env=1.5 refs=4.5 MISMATCH`；`pv_ref_kw env=1.0 refs=350.907` |
+| 3 | reset **复用已执行 Task 实例** | `reset restores initial state: False`；`same Task objects reused: True` |
+
+**修复**：`FormalEnvInjection` 现保存 realized 切片、**全部** causal forecasts、
+`refs_v4` 的正式 refs 与**不可变任务规格**；环境在 `__init__` **末尾**统一覆盖
+（早于默认赋值会被覆盖回去）；`reset` 按规格**新建 Task**（绝不复用）；
+`provenance_hash` 覆盖 realized + forecasts + refs + 任务业务内容。
+
+**实测**：`realized price_t[0] == inj` 且 `pv_t max = 283.13`（非零）；
+`forecast pv_forecast_t[0] = 139.87` 且 `realized != forecast`；
+3 步后 reset **完全恢复**（状态/观测/pristine 模板）。
+**13 项 refs 全部接入**（`price_ref=4.5`、`lambda_ref=31.994`（=63.988×0.5）、
+`pv_ref_kw=350.9074`、`wind_ref_kw=262.3179`、`carbon_factor_ref=0.402`、
+`cost_ref=60`、queue=6000/6000 等）；`forecast_cutoff` 不一致**明确失败**。
+
+**验收**：新测试 **43 passed**（含原 20 项）；`make check` exit 0（**2730 passed**）；
+`make smoke` exit 0；`make train` **exit 2**、0 成功 run、无 checkpoint；
+`git diff --check` / `git status --short` 空；冻结资产与 readiness **未变**。
+
+> **⚠️ 本卡修掉的一处 self-inflicted 回归（如实登记）**：首版把
+> `_get_forecast_features` **一律**改读 `*_forecast_t`，破坏了 legacy——
+> 既有 leakage 回归正是靠「改 `wt_t` 真值 → 观测变」验证可见性。
+> `3a8bfc8` 按 `self.formal` 分流（formal 读 causal forecast，legacy 原样）。
+> **该回归由 `make check` 捕获**（4 failed），非人工发现。
+
+**两条原卡回滚（均已复核）**：
+```bash
+git revert 0d74865 5333d69 9a8ddb8 a204e2a 3656c6b 960c8f0 0d978c1
+# == 044ab69^{tree} = fcb3f2f98df85c3e1cd3b99bd3bab70478330042
+git revert 0d74865 5333d69 9a8ddb8 a204e2a 3656c6b 960c8f0 0d978c1 044ab69
+# == 71a6185^{tree} = 1e5c8ff3c7d794eaa484787c572ac30be1899fd3
+```
+
+**本 R1 精确回滚**：
+```bash
+git revert 3a8bfc8 dd78fac 662eb51 c111a4f
+# == 0d74865^{tree} = e42e2ebc448a2e7ed32134724546dec59d1713bd
+```
+
+> ## ⛔ **g-e-c-R1 完成即停，等待人工复审。**
 > **未开始** g-e-d、g-f、训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
