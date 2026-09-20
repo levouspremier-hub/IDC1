@@ -1358,7 +1358,7 @@ train 最低正 aggregate     = 12 work
 |---|---|---|---|---|---|---|
 | 1 | **profile 名称** | `A_inference` / `B_rl_training` / `C_dl_training` / `D_preprocess` | 新增 micro 键名（如 `E_micro_inference` 等）或复用既有键名；**命名方案由人工定** | modeled scenario；名称只作标识，但**复用旧键名会改变既有 profile 的可行域** | 决定 mapper 的 profile 枚举与 provenance 键 | **PENDING** |
 | 2 | **duration（物理小时）** | A `1–2`、B `2–5`、C `4–8`、D `1–4`（**小时**） | 需含**最小 0.5 h**（=1 step）方能满足 §au.2.3 条件 2；上界由人工定 | 业务时长；`steps = round_half_up(h / 0.5)` | 直接决定 `w_min`/`w_max` 与任务数 | **PENDING** |
-| 3 | **load range `[load_min, load_max]`** | A `0.08–0.18`、B `0.14–0.30`、C `0.22–0.45`、D `0.08–0.20` | 必须满足 §au.2.4 的 `duration_steps_min x load_min <= 13/…`；具体区间由人工定 | 无量纲负载率；乘 `K` 得 work | 决定可行域能否覆盖最低槽 | **PENDING** |
+| 3 | **load range `[load_min, load_max]`** | A `0.08–0.18`、B `0.14–0.30`、C `0.22–0.45`、D `0.08–0.20` | 必须满足 §au.2.3 条件 2：`duration_steps_min x load_min <= 12 / K`（区间见 §au.2.4）；具体区间由人工定 | 无量纲负载率；乘 `K` 得 work | 决定可行域能否覆盖最低槽 | **PENDING** |
 | 4 | **deadline（物理小时）** | A `2–4`、B `8–16`、C `14–24`、D `5–10` | 需满足 `deadline_steps >= duration_steps`；上界由人工定 | 业务时限；0.5 h 步长换算 | 影响违约统计与调度排序 | **PENDING** |
 | 5 | **priority** | A `2.6–3.4`、B `1.8–2.5`、C `1.2–2.0`、D `0.8–1.6` | 区间由人工定；须覆盖新 profile | modeled scenario；决定分配器排序 | 影响任务完成顺序与 SLA | **PENDING** |
 | 6 | **interruptible / parallelizable** | A `F/F`、B `T/T`、C `T/T`、D `T/F` | 布尔组合由人工定 | 语义开关，非数值 | 影响可中断/可并行的执行语义 | **PENDING** |
