@@ -288,7 +288,7 @@ def test_beyond_four_task_coverage_fails_closed(monkeypatch):
     # 通过公开入口注入超大 aggregate 也必须 fail closed
     real = m.verified_realized_aggregate
     base = np.asarray(real(), dtype=np.int64).copy()
-    base[11224] = 10_000
+    base[10224] = 10_000  # validation 的首个槽（origin=0 -> 全局 10224）
     monkeypatch.setattr(m, "verified_realized_aggregate", lambda: base)
     with pytest.raises(m.ArrivalMapperError):
         _stream(horizon=8, start="2024-08-01T00:00:00+08:00", split="validation")
@@ -330,12 +330,14 @@ def test_old_split_dirs_and_refs_are_rejected():
 @needs_assets
 def test_tampered_source_is_rejected(tmp_path, monkeypatch):
     m = mapper()
+    import scenario.b6_split_manifests as splits_mod
+
     temp_dir = tmp_path / "v5"
     temp_dir.mkdir()
     payload = json.loads((V5_DIR / "train.json").read_text(encoding="utf-8"))
     payload["inputs"]["frozen_refs"]["sha256"] = "0" * 64
     (temp_dir / "train.json").write_text(json.dumps(payload))
-    monkeypatch.setattr(m, "_canonical_split_dir", lambda: temp_dir)
+    monkeypatch.setattr(splits_mod, "_canonical_split_dir", lambda: temp_dir)
     with pytest.raises(ValueError):
         m.load_verified_mapper_chain(split_manifest_path=temp_dir / "train.json")
 
@@ -387,8 +389,12 @@ def test_verify_is_idempotent():
 
 
 @needs_assets
-@pytest.mark.parametrize("fail_at", [1, 2, 3])
-def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch, fail_at):
+def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch):
+    """本物化器**只写一个**产物（单文件 manifest）⇒ 只有一个原子写阶段。
+
+    （多产物物化器——refs / triad——才有「第 1/2/3 阶段」之分；此处如实只测
+    它**真正存在**的那一个阶段，不虚构不存在的阶段。）
+    """
     mod = materializer()
     m = mapper()
     target_dir = tmp_path / "manifest"
@@ -396,14 +402,8 @@ def test_transactional_failure_leaves_nothing(tmp_path, monkeypatch, fail_at):
     monkeypatch.setattr(m, "_canonical_manifest_dir", lambda: target_dir)
     monkeypatch.setattr(mod, "_generator_is_dirty", lambda: False)
 
-    calls = {"n": 0}
-    real_write = mod._atomic_write_bytes
-
     def failing(path, body):
-        calls["n"] += 1
-        if calls["n"] == fail_at:
-            raise RuntimeError(f"injected failure at write #{fail_at}")
-        real_write(path, body)
+        raise RuntimeError("injected failure at the single atomic write")
 
     monkeypatch.setattr(mod, "_atomic_write_bytes", failing)
     with pytest.raises(RuntimeError):
