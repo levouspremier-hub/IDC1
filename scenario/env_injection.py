@@ -35,12 +35,12 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-import numpy as np
 import pandas as pd
 
 from idc_model.task import Task
+from scenario.splits import SplitName
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -149,7 +149,7 @@ def build_verified_formal_env_injection(
 
     # 4) B6 causal forecast（**期望**值，长度 == horizon）
     bundle = build_formal_scenario_b6(
-        split,
+        cast("SplitName", split),
         origin=local_origin,
         forecast_cutoff=horizon,
         canonical_parquet_path=REPO_ROOT / "data/processed/singapore_2024/half_hour.parquet",
