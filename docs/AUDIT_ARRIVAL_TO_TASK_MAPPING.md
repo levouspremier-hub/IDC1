@@ -1349,65 +1349,114 @@ train 最低正 aggregate     = 12 work
 => 现有最小任务比最低槽**大 3.237646 倍** ⇒ 86.0030% 的槽无合法分割（§ah）
 ```
 
-## au.3 **人工签核表**（13 项，**全部 `PENDING`**）
+## au.3 **人工签核表**（13 项，**已由人工逐项批准**）
 
-> **状态一律 `PENDING`**。本审计**不**写 `APPROVED`，**不**暗选任何值。
-> 「候选值」列给的是**可行区间/选项**，不是推荐。
+> **批准来源**：以下 13 项是**人工**作出的决定（本对话）。
+> 实现只**记录**，**未**自行选择任何一项。
+> 状态由 `PENDING` → **`APPROVED`** 发生在 **M1.3f-e-b-d**。
 
-| # | 参数 | **当前值** | **候选值（区间/选项，未选定）** | **来源与物理理由** | **影响** | **状态** |
+| # | 参数 | **当前值** | **人工批准值** | **来源与物理理由** | **影响** | **状态** |
 |---|---|---|---|---|---|---|
-| 1 | **profile 名称** | `A_inference` / `B_rl_training` / `C_dl_training` / `D_preprocess` | 新增 micro 键名（如 `E_micro_inference` 等）或复用既有键名；**命名方案由人工定** | modeled scenario；名称只作标识，但**复用旧键名会改变既有 profile 的可行域** | 决定 mapper 的 profile 枚举与 provenance 键 | **PENDING** |
-| 2 | **duration（物理小时）** | A `1–2`、B `2–5`、C `4–8`、D `1–4`（**小时**） | 需含**最小 0.5 h**（=1 step）方能满足 §au.2.3 条件 2；上界由人工定 | 业务时长；`steps = round_half_up(h / 0.5)` | 直接决定 `w_min`/`w_max` 与任务数 | **PENDING** |
-| 3 | **load range `[load_min, load_max]`** | A `0.08–0.18`、B `0.14–0.30`、C `0.22–0.45`、D `0.08–0.20` | 必须满足 §au.2.3 条件 2：`duration_steps_min x load_min <= 12 / K`（区间见 §au.2.4）；具体区间由人工定 | 无量纲负载率；乘 `K` 得 work | 决定可行域能否覆盖最低槽 | **PENDING** |
-| 4 | **deadline（物理小时）** | A `2–4`、B `8–16`、C `14–24`、D `5–10` | 需满足 `deadline_steps >= duration_steps`；上界由人工定 | 业务时限；0.5 h 步长换算 | 影响违约统计与调度排序 | **PENDING** |
-| 5 | **priority** | A `2.6–3.4`、B `1.8–2.5`、C `1.2–2.0`、D `0.8–1.6` | 区间由人工定；须覆盖新 profile | modeled scenario；决定分配器排序 | 影响任务完成顺序与 SLA | **PENDING** |
-| 6 | **interruptible / parallelizable** | A `F/F`、B `T/T`、C `T/T`、D `T/F` | 布尔组合由人工定 | 语义开关，非数值 | 影响可中断/可并行的执行语义 | **PENDING** |
-| 7 | **扩展现有 profile vs 新增** | 无 | **扩展**（改动既有可行域，须说明对既有场景的影响）**vs 新增**（不动既有） | 版本隔离 | 决定是否改变既有 profile 语义 | **PENDING** |
-| 8 | **`MAX_TASKS_PER_SLOT`** | 未定义（§G.2 要求冻结） | 正整数上界，由人工定 | §G.2 的**冻结终止条件** | 决定单槽最大任务数与 fail-closed 阈值 | **PENDING** |
-| 9 | **`MAX_GROWTH_ROUNDS`（迭代上限）** | 未定义 | 正整数上界，由人工定 | §G.2 的第二个**冻结终止条件** | 决定确定性迭代的收敛/失败边界 | **PENDING** |
-| 10 | **`work_unit_scale`** | 未定义 | 如 `1 work = 10^6 micro-work`，由人工定 | §G.6 固定点整数账本精度 | 决定守恒账本的精确表示 | **PENDING** |
-| 11 | **`ABS_TOL_WORK` / `REL_TOL_WORK`** | 未定义 | 例 `1e-9` / `1e-12`，**必须冻结并登记**，由人工定 | §G.4/§G.6 的 float 重构容差 | 决定「float 对象 vs 整数账本」比对口径 | **PENDING** |
-| 12 | **profile / type 确定性顺序** | 未定义（现按 `type_probability` 抽样） | 冻结的**确定性**顺序，由人工定 | §G.2 第 1 步；**不得**按结果调节 | 决定分割的确定性与可复现性 | **PENDING** |
-| 13 | **modeled-scenario 来源声明** | 现有 profile 自述为仿真设定 | 显式声明为 **modeled scenario**（**不是** 2024 task labels） | §H / D11 红线 | 决定论文表述与 provenance | **PENDING** |
+| 1 | **profile 名称** | `A_inference` / `B_rl_training` / `C_dl_training` / `D_preprocess` | **新增 `E_micro_inference`** | modeled scenario；**新增**而非复用，避免改变既有 profile 可行域 | 决定 mapper 的 profile 枚举与 provenance 键 | **APPROVED**（人工） |
+| 2 | **duration（物理小时）** | A `1–2`、B `2–5`、C `4–8`、D `1–4` | **`0.5 h`**（= **1** step） | 业务时长；`steps = round_half_up(h / 0.5)` | 直接决定 `w_min`/`w_max` | **APPROVED**（人工） |
+| 3 | **load range `[load_min, load_max]`** | A `0.08–0.18`、B `0.14–0.30`、C `0.22–0.45`、D `0.08–0.20` | **`[0.04, 0.25]`** | 无量纲负载率；乘 `K = C × delta` 得 work；满足 §au.2.3 条件 2 | 决定可行域能否覆盖最低槽 | **APPROVED**（人工） |
+| 4 | **deadline（物理小时）** | A `2–4`、B `8–16`、C `14–24`、D `5–10` | **`1.0 h`**（= **2** steps） | 业务时限；满足 `deadline_steps >= duration_steps` | 影响违约统计与调度排序 | **APPROVED**（人工） |
+| 5 | **priority** | A `2.6–3.4`、B `1.8–2.5`、C `1.2–2.0`、D `0.8–1.6` | **`2.6–3.4`**（沿用 `A_inference` 口径） | modeled scenario；决定分配器排序 | 影响任务完成顺序与 SLA | **APPROVED**（人工） |
+| 6 | **interruptible / parallelizable** | A `F/F`、B `T/T`、C `T/T`、D `T/F` | **`false / false`** | 语义开关，非数值 | 影响可中断/可并行的执行语义 | **APPROVED**（人工） |
+| 7 | **扩展现有 profile vs 新增** | 无 | **新增**；**不修改** A/B/C/D | 版本隔离：既有 profile 可行域**不变** | 决定是否改变既有 profile 语义 | **APPROVED**（人工） |
+| 8 | **`MAX_TASKS_PER_SLOT`** | 未定义 | **`4`** | §G.2 的**冻结终止条件** | 单槽最大任务数与 fail-closed 阈值 | **APPROVED**（人工） |
+| 9 | **`MAX_GROWTH_ROUNDS`（迭代上限）** | 未定义 | **`4`** | §G.2 的第二个**冻结终止条件** | 确定性迭代的收敛/失败边界 | **APPROVED**（人工） |
+| 10 | **`work_unit_scale`** | 未定义 | **`1_000_000`**（1 work = 10⁶ micro-work） | §G.6 固定点整数账本精度 | 守恒账本的精确表示 | **APPROVED**（人工） |
+| 11 | **`ABS_TOL_WORK` / `REL_TOL_WORK`** | 未定义 | **`1e-9` / `1e-12`** | §G.4/§G.6 的 float 重构容差 | 「float 对象 vs 整数账本」比对口径 | **APPROVED**（人工） |
+| 12 | **profile / type 确定性顺序** | 未定义（现按 `type_probability` 抽样） | **`E_micro_inference → A_inference → B_rl_training → C_dl_training → D_preprocess`** | §G.2 第 1 步；**不得**按结果调节 | 分割的确定性与可复现性 | **APPROVED**（人工） |
+| 13 | **modeled-scenario 来源声明** | 现有 profile 自述为仿真设定 | **`modeled scenario`**（**不是** 2024 task labels） | §H / D11 红线 | 论文表述与 provenance | **APPROVED**（人工） |
 
-**表中没有任何一项被选定。** 任何 `APPROVED` 字样都必须来自**人工**，不得由实现写入。
+**13 项全部 `APPROVED`，批准来源为人工。** 实现**未**选择任何值、**未**写入任何
+未经人工给出的取值。
 
-## au.4 供人工**一次性签核**的模板
+## au.4 批准参数的**独立复算**（M1.3f-e-b-d，只读）
 
-> 收到以下 13 行（每行「批准值 + 理由」）后，方可开 mapper 卡。
+以 **B6 冻结**常量复算 `E_micro_inference`：
 
-```text
-1  profile 名称            : <值>   理由: <…>
-2  duration（物理小时）      : <值>   理由: <…>
-3  load range [min,max]    : <值>   理由: <…>
-4  deadline（物理小时）      : <值>   理由: <…>
-5  priority                : <值>   理由: <…>
-6  interruptible/parallelizable : <值> 理由: <…>
-7  扩展现有 vs 新增          : <值>   理由: <…>
-8  MAX_TASKS_PER_SLOT       : <值>   理由: <…>
-9  MAX_GROWTH_ROUNDS        : <值>   理由: <…>
-10 work_unit_scale          : <值>   理由: <…>
-11 ABS_TOL_WORK / REL_TOL_WORK : <值> 理由: <…>
-12 profile/type 确定性顺序   : <值>   理由: <…>
-13 modeled-scenario 来源声明  : <值>   理由: <…>
+```bash
+uv run python -c "
+import sys, math; sys.path.insert(0,'.')
+import numpy as np
+from idc_model.task_model import IDCEnergyTaskModel
+from scenario.exogenous_drivers_b6 import load_verified_v3_bundle
+from scenario.splits import SPLIT_SPECS
+C = IDCEnergyTaskModel(task_seed=0, server_seed=0)._task_workload_capacity_ref(); d = 0.5
+def steps(h): return max(1, math.floor(h/d + 0.5))
+s_dur, s_dl = steps(0.5), steps(1.0)
+print('C_IDC_base = %.15f | delta = %.1f' % (C, d))
+print('duration_steps =', s_dur, '| deadline_steps =', s_dl, '| deadline>=dur:', s_dl>=s_dur)
+print('E w_min = %.15f' % (s_dur*0.04*C*d))
+print('E w_max = %.15f' % (s_dur*0.25*C*d))
+arr = np.asarray(load_verified_v3_bundle()['frame']['arrival'], np.int64)
+for n in ('train','validation','test'):
+    sp = SPLIT_SPECS[n]; sl = arr[sp['row_start']:sp['row_end_exclusive']]
+    print(n, sl.min(), sl.max(), 'covered:', bool(((sl>=s_dur*0.04*C*d)&(sl<=s_dur*0.25*C*d)).all()))
+"
 ```
 
-## au.5 覆盖验证（**签核之后、mapper 之前**）
-
-签核完成后，**先用 train 复核**（选参数阶段已用的口径），
-**再用 validation / test 做覆盖验证**——**仅验证、不得回头改参数**：
-
 ```text
-对每个 split：核对 每个槽 aggregate ∈ [Σ w_min, Σ w_max]（§G.2 步骤 3）
-若任一分片不覆盖 -> 回到人工重新签核（不得在 mapper 内绕过）
+C_IDC_base = 485.646896875418349 | delta = 0.5
+duration_steps = 1 | deadline_steps = 2 | deadline>=dur: True
+E w_min = 9.712937937508368
+E w_max = 60.705862109427294
+train       12  59  covered: True
+validation  12  54  covered: True
+test        14  55  covered: True
 ```
 
-## au.6 停止条件
+**结论**：
 
-> ## ⛔ **g-e-b mapper 实现仍 BLOCKED。**
-> 在 **13 项逐项**获得人工批准值之前，**不得**开始：
-> **g-e-b mapper**、**g-e-c env 接线**、**g-e-d 回归**、**g-f 训练**、
-> 训练、评估或 **M6**。readiness 保持 **false**。
+| 项 | 值 | 判据 |
+|---|---|---|
+| `E_micro_inference` 合法 workload 区间 | **`[9.712937937508368, 60.705862109427294] work`** | = `1 × [0.04, 0.25] × 485.646896875418349 × 0.5` |
+| **train** realized `[12, 59]` ⊆ 该区间 | **✅** | **选参依据（唯一）** |
+| `deadline_steps >= duration_steps` | **`2 >= 1` ✅** | 0.5 h 语义 |
+| validation `[12, 54]` / test `[14, 55]` | **✅** 仅作**覆盖验证** | **不得**回头改参数 |
 
-**本卡未修改任何 `.py` / 测试 / manifest / refs / parquet / raw / 配置 /
-`.gitignore`；未创建 mapper、fixture、参数 manifest、Task、run 或 checkpoint。**
+> **覆盖含义**：每个 split 的**每一个**槽都可以由**恰好一个**
+> `E_micro_inference` 任务承载（`aggregate ∈ [w_min, w_max]`），
+> 因此 §G.2 的覆盖检查在**单任务**下即成立（仍需 `MAX_TASKS_PER_SLOT` 等
+> 冻结终止条件兜底）。
+
+### au.4.1 `E_micro_inference` 的**冻结定义**（逐项来自人工，非实现选择）
+
+```text
+profile_key        : E_micro_inference
+duration           : 0.5 h          -> duration_steps = 1
+load_range         : [0.04, 0.25]
+deadline           : 1.0 h          -> deadline_steps = 2
+priority_range     : 2.6 - 3.4      (沿用 A_inference 口径)
+interruptible      : false
+parallelizable     : false
+来源                : modeled scenario（**不是** 2024 task labels）
+合法 workload 区间  : [9.712937937508368, 60.705862109427294] work
+```
+
+**A/B/C/D 四个既有 profile 一律不变。**
+
+## au.5 覆盖验证的**顺序纪律**（未变）
+
+选参阶段只用 **train**（已在上表体现）；**validation / test 只作覆盖验证**。
+若任一分片不覆盖 → **回到人工重新签核**，**不得**在 mapper 内绕过。
+
+## au.6 本卡解除与**未**解除的阻塞
+
+| 阻塞 | 状态 |
+|---|---|
+| **参数未批准** | ✅ **已解除**（13 项 `APPROVED`，人工） |
+| **g-e-b mapper** | ⛔ **仍未开始**（下一张卡） |
+| **g-e-c env 接线** | ⛔ 未开始 |
+| **g-e-d 回归** | ⛔ 未开始 |
+| **g-f / 正式训练** | ⛔ 未开始 |
+| **评估 / M6** | ⛔ 未开始 |
+| **readiness** | ⛔ 仍为 **false** |
+
+> ## ⛔ **本卡只解除「参数未批准」这一阻塞。**
+> mapper、env 接线、训练、评估、M6 **仍未开始**；readiness **仍为 false**。
+
+**下一张卡**：**`M1.3g-e-b`（mapper 实现卡）** —— **本卡不开始它。**
