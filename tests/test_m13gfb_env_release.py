@@ -44,6 +44,14 @@ def run_cli(*args: str, timeout: int = 600) -> subprocess.CompletedProcess:
     )
 
 
+@pytest.fixture(scope="module")
+def verified_release() -> dict:
+    """**模块级**只验签一次：`load_verified_env_release()` 会复用既有 verified 链
+    校验整条 v5 triad（约 4.5 s/次），逐用例重复调用只是浪费 CPU，
+    并不增加强度。"""
+    return release_module().load_verified_env_release()
+
+
 def _failed_report(base_dir: pathlib.Path, run_id: str) -> tuple[dict, dict]:
     manifest = json.loads((base_dir / run_id / "manifest.json").read_text(encoding="utf-8"))
     report = json.loads((base_dir / run_id / "report.json").read_text(encoding="utf-8"))
@@ -54,9 +62,9 @@ def _failed_report(base_dir: pathlib.Path, run_id: str) -> tuple[dict, dict]:
 # 1. 合法产物被接受（需要 canonical 产物已物化）
 # =============================================================================
 
-def test_canonical_env_release_is_accepted():
+def test_canonical_env_release_is_accepted(verified_release):
     m = release_module()
-    payload = m.load_verified_env_release()
+    payload = verified_release
     assert payload["schema"] == m.RELEASE_SCHEMA
     assert payload["readiness"] == {
         "formal_env_ready": True, "formal_training_ready": False}
@@ -70,10 +78,9 @@ def test_canonical_env_release_is_accepted():
     assert CANONICAL_RELEASE.stat().st_size > 0
 
 
-def test_env_release_binds_the_immutable_v5_and_mapper_bytes():
+def test_env_release_binds_the_immutable_v5_and_mapper_bytes(verified_release):
     """产物的 binds 必须与 **v5 三份 + refs_v4 + mapper manifest** 的实际字节一致。"""
-    m = release_module()
-    payload = m.load_verified_env_release()
+    payload = verified_release
     expected = {
         "formal_split_v5_train": "data/manifest/formal_splits_v5/train.json",
         "formal_split_v5_validation": "data/manifest/formal_splits_v5/validation.json",
@@ -97,10 +104,10 @@ def test_env_release_rejects_a_missing_artifact(monkeypatch):
 
 
 @pytest.mark.parametrize("role", BOUND_ROLES)
-def test_env_release_rejects_tampered_binding(role):
+def test_env_release_rejects_tampered_binding(role, verified_release):
     """篡改任一 binds 的 hash → 重建比对必须拒绝。"""
     m = release_module()
-    payload = copy.deepcopy(m.load_verified_env_release())
+    payload = copy.deepcopy(verified_release)
     original = payload["binds"][role]["sha256"]
     payload["binds"][role] = {**payload["binds"][role], "sha256": "0" * 64}
     assert payload["binds"][role]["sha256"] != original, "mutation 未生效"
@@ -108,9 +115,9 @@ def test_env_release_rejects_tampered_binding(role):
         m.validate_env_release(payload)
 
 
-def test_env_release_rejects_a_wrong_path_binding():
+def test_env_release_rejects_a_wrong_path_binding(verified_release):
     m = release_module()
-    payload = copy.deepcopy(m.load_verified_env_release())
+    payload = copy.deepcopy(verified_release)
     payload["binds"]["frozen_refs_v4"] = {
         **payload["binds"]["frozen_refs_v4"], "path": "configs/frozen_refs/refs_v3.json"}
     with pytest.raises(m.EnvReleaseError):
@@ -122,20 +129,20 @@ def test_env_release_rejects_a_wrong_path_binding():
     {"formal_env_ready": True, "formal_training_ready": True},
     {"formal_env_ready": False, "formal_training_ready": True},
 ])
-def test_env_release_rejects_tampered_readiness(tamper):
+def test_env_release_rejects_tampered_readiness(tamper, verified_release):
     """readiness 必须**精确等于** env=true / training=false。"""
     m = release_module()
-    payload = copy.deepcopy(m.load_verified_env_release())
+    payload = copy.deepcopy(verified_release)
     assert payload["readiness"] != tamper, "mutation 未生效"
     payload["readiness"] = tamper
     with pytest.raises(m.EnvReleaseError):
         m.validate_env_release(payload)
 
 
-def test_env_release_rejects_a_stale_revision():
+def test_env_release_rejects_a_stale_revision(verified_release):
     """`release_revision` 必须等于**当前**实现 revision。"""
     m = release_module()
-    payload = copy.deepcopy(m.load_verified_env_release())
+    payload = copy.deepcopy(verified_release)
     payload["release_revision"] = "0" * 40
     with pytest.raises(m.EnvReleaseError):
         m.validate_env_release(payload)
@@ -151,10 +158,9 @@ def test_env_release_revision_covers_the_required_implementation_files():
         assert required in covered, f"revision 覆盖缺失 {required}"
 
 
-def test_env_release_has_no_self_reported_timestamp():
+def test_env_release_has_no_self_reported_timestamp(verified_release):
     """**不得**把未经锚定的自报时间戳当验签依据 ⇒ 产物无时间戳字段。"""
-    m = release_module()
-    payload = m.load_verified_env_release()
+    payload = verified_release
     for forbidden in ("frozen_at_utc", "generated_at", "created_at", "timestamp"):
         assert forbidden not in payload, f"发布产物不得自报时间戳 {forbidden}"
 
