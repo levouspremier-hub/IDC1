@@ -190,9 +190,10 @@ def test_released_env_still_blocks_training(tmp_path):
     assert result.returncode != 0, "env 发布不得让训练成功"
     combined = result.stdout + result.stderr
     assert "M1.3" in combined, combined
-    # 必须是 **training 未放行** 的归因，而不是「env 未放行」
-    assert "formal_training_ready" in combined, combined
-    assert "训练" in combined, combined
+    # 必须是 **training 未放行** 的归因，而不是「env 未放行」：
+    # 改前只会出现 `['formal_env_ready', 'formal_training_ready']` 这样的列表，
+    # 不含 `formal_training_ready=false` 这一训练门专属判定。
+    assert "formal_training_ready=false" in combined, combined
     assert "synthetic=true" not in combined
 
     manifest, report = _failed_report(tmp_path, "released")
