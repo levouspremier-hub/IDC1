@@ -508,8 +508,17 @@ class IDCPriceEnv20D(gym.Env):
         }
 
     def _task_scale_info(self) -> dict:
-        total_workload = self._total_available_work() if self.tasks else 0.0
-        task_count = len(self.tasks) if self.tasks else 0
+        if self.formal:
+            # **M1.3g-e-d-R1**：formal 只基于**已到达**的任务（含 env 独立插入的
+            # initial backlog，其 `arrival_time == 0`）。整段工作量（未来任务）
+            # 是未来信息，不得进入 info。legacy 输出**逐字不变**。
+            arrived = [t for t in self.tasks
+                       if int(t.arrival_time) <= int(self.current_step)]
+            total_workload = float(sum(t.workload for t in arrived))
+            task_count = len(arrived)
+        else:
+            total_workload = self._total_available_work() if self.tasks else 0.0
+            task_count = len(self.tasks) if self.tasks else 0
         return {
             "task_workload_scale": float(self.task_workload_scale),
             "sla_penalty_ref": float(self.sla_penalty_ref),
@@ -1142,7 +1151,13 @@ class IDCPriceEnv20D(gym.Env):
 
         # 14. 记录信息，方便训练后画图和计算指标
         task_metrics = self._compute_task_metrics()
-        total_available_work = self._total_available_work()
+        # **M1.3g-e-d-R1**：formal 的分母只统计**截至本步已到达**的任务工作量
+        # （`t` 是本步的时点；此处 `current_step` 已自增，故不能用它）。
+        # 终点 `t == horizon - 1` 时与整段总量一致；legacy 语义**逐字不变**。
+        total_available_work = (
+            self._arrived_available_work(t) if self.formal
+            else self._total_available_work()
+        )
 
         completion_rate = (
             self.total_completed_work / total_available_work
@@ -1752,6 +1767,20 @@ class IDCPriceEnv20D(gym.Env):
             task.workload
             for task in self.tasks
             if task.arrival_time < self.horizon
+        ))
+
+    def _arrived_available_work(self, current_time: int) -> float:
+        """**截至 `current_time` 已到达**任务的总工作量（M1.3g-e-d-R1，formal 专用）。
+
+        未来任务的工作量是未来信息，不得作为 formal 的 info 出口分母。
+        episode 终点 `current_time == horizon - 1` 时与 `_total_available_work()`
+        **一致**（mapper 任务的 `arrival_time` 全部 `< horizon`）。
+        """
+        now = int(current_time)
+        return float(sum(
+            task.workload
+            for task in self.tasks
+            if int(task.arrival_time) <= now
         ))
 
     def _compute_reward_task_pressure(self, current_time: int) -> tuple[float, float]:
