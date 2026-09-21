@@ -30,6 +30,8 @@
 !configs/harl_mappo_short.yaml
 !configs/frozen_refs/
 !configs/frozen_refs/*.json
+!configs/release/
+!configs/release/*.json
 !data_io/
 !data_io/*.py
 !idc_model/
