@@ -3243,6 +3243,62 @@ git revert d0a0876 8b411fd e087a05
 
 > ## ⛔ **f-b-a 完成即停，等待人工选择发布方案。**
 > **未自行开始** f-b 实施、f-c、正式训练、M6；readiness **仍为 false**。
+
+### 7AZ. M1.3g-f-b-b：formal env 独立发布产物（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §bp–§bq。f-b-a 审计**通过并采纳方案 B**（§bo）。
+
+**新增**：`scenario/env_release.py`（唯一严格 loader）、
+`scripts/materialize_env_release.py`（物化器）、
+`configs/release/idc_formal_env_release_v1.json`（唯一 canonical 产物）。
+
+```text
+产物 sha256 = 017575dc827043a5926d9b3b1057d91ffdead7b406dd115e97218f51f8c6adae
+release_revision = 913754e6071b80070f96e51599894936e564ba77
+readiness = { formal_env_ready: true, formal_training_ready: false }
+```
+
+**逐字节绑定**（全部与冻结记录一致）：v5 三份 `8608372f` / `3f16ad3a` /
+`aaacd459`、`refs_v4` `b5b64ef2`、mapper manifest `efea87f2`。
+产物**无时间戳字段**；验签输入全部来自 live 文件 hash + live git revision。
+`ENV_RELEASE_SOURCE_PATHS` 覆盖 `envs/idc_price_env.py`、
+`scenario/env_injection.py`、`safe_rl_v2/train.py`、`scenario/env_release.py`、
+`scripts/materialize_env_release.py`。
+
+**顺序约束已满足**：受 revision 约束的代码（`3009771`）**先提交**，
+**之后**才物化（`24dbf07`）；产物记录的 revision 与 live 一致。
+**物化幂等**：`--verify` 重复 3 次同 hash；再次物化 `written=False`；
+不同既存文件**拒绝覆盖**。
+
+**`train.py` 合取门**（`safe_rl_v2/train.py`）：⑥a v5 readiness 必须**严格保持**
+both-false（不得运行时覆盖）；⑥b 独立发布产物必须验签且 `formal_env_ready=true`；
+⑥c `formal_training_ready=false` **继续阻断训练**。
+
+**验收**：新测试 **20 passed**；f-a **17 passed**；m54a **30 passed**；
+`make check` **exit 0**（**2802 passed**，ruff/mypy 全通过）；`make smoke` exit 0；
+`make train` **exit 2**，归因为 **training 未放行**
+（`formal_training_ready=false`）；`runs/train_real_*` **128 个全失败、0 success**、
+无 checkpoint；v5 / `refs_v4` / mapper manifest **逐字节未变**；
+readiness 三份**仍 both-false**；范围外修改**无**。
+
+**本卡修正的自身缺陷**：① `release_revision` 误用 64 位校验（由新测试捕获，
+`913754e`）；② `pytest.raises(Exception)` 过宽（由 `make check` 的 ruff B017 捕获，
+`57bf5d1`）；③ 一处既有断言过窄（`3f4b070` **收紧**为「⊆ 三个正式 v5 split」）。
+另观测到 `test_m54g_*` 的 MILP **墙钟预算** flake（5 次中 1 次；无并发负载下
+`make check` 全绿；与本卡改动模块无交集），并将发布测试改为**模块级 fixture**
+以去掉重复验签开销（`660290b`）。
+
+**本卡完整回滚（13 提交，newest-first）**——在 `3311943` 上实测，零冲突：
+```bash
+git revert 3311943 660290b 57bf5d1 3f4b070 24dbf07 913754e 3009771 \
+           e39425f bc0933c acb0448 d0c9e42 66a8da4 9df3ce0
+# == f0d5407^{tree} = ed3e1b7312ff913425902a1a6ac77655764fbb2d
+```
+（**实现范围** 12 提交的同类回滚得同一棵树。）
+
+> ## ⛔ **f-b-b 完成即停，等待人工复审。**
+> **未开始** f-c、正式训练、M6。`formal_env_ready=true` **仅**表示 env 已发布；
+> `formal_training_ready=false` **继续阻断训练**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
