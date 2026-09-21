@@ -684,6 +684,50 @@ git revert fa82d78 2afb5a5 4d532bb 641cb19   # == bc22f01^{tree}
 > ## ⛔ **g-e-d-R1 完成即停，等待人工复审。**
 > **未开始** g-f（训练门禁）、训练接线、正式训练、评估、M6；readiness **仍为 false**。
 
+## 9.6 **正式训练入口预检已接线（M1.3g-f-a，2026-09-21）**
+
+新增 `tests/test_m13gfa_train_entry_gates.py`（**14 passed**）。
+**只接 preflight，不实现训练循环。**
+
+**preflight 顺序**：① `load_verified_split_manifest_v5("train")` →
+② `load_verified_mapper_chain("train")`（复用**同一条** verified public 链）→
+③ 由 **candidate origin** 推导 start → ④ `build_formal_scenario_b6` →
+⑤ `validate_forecast_purpose(bundle, purpose="training")` → ⑥ readiness（**最后**）。
+`train.py` **不重写**任何 hash 校验器（有结构性守卫）。
+
+**origin 来源（关键）**：v5 train `candidate_origins.start = 48`；
+`time_range.start`（`2024-01-01T00:00:00+08:00`）是**本地行 0**，**不是** episode
+start。入口推导 `2024-01-02T00:00:00+08:00` 并**往返校验**回 origin 48。
+
+**改前缺陷**：硬编码 `start="2023-01-01"`（M1.2 时代），从不读 v5
+`candidate_origins` / `readiness`，从不调用 training purpose gate，归因写 M1.2。
+
+**make train（实测）**：**exit 2**，`TrainEntryError: M1.3 发布门禁未放行…`
+（`readiness={formal_env_ready: False, formal_training_ready: False}`）。
+归因中**不再有** `M1.2` / `2023-01-01`。失败 run `status=failed`、
+`synthetic=False`、claims 全 false；`runs/train_real_*` **121 个全失败、0 success**、
+无 checkpoint；`formal_splits_v5` 三份 hash **逐字节未变**；readiness **仍全 false**。
+
+**旧测试迁移**：`test_m54a_train_entry.py` 的 M1.2 措辞断言 → M1.3 归因断言，
+**未删除、未放宽**。
+
+**⚠️ `make check` 捕获的两处自身缺陷**：① mypy 的 `SplitName` Literal 不兼容；
+② 初版 `readiness.get(name)` 违反「不用 `.get()` 兜底」红线（m51c 结构性守卫捕获）。
+
+**验收**：`make check` exit 0（**2779 passed**，ruff/mypy 全通过）；`make smoke`
+exit 0；`make train` exit 2。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+# 本卡完整范围（10 提交，含记录提交）
+git revert f2457fe a23ab0e 06d8b33 c91b8e7 83051e8 53f307c 96434db a314e2c 9acdc33 48cd438
+# == 5adb019^{tree}
+~~~
+
+> ## ⛔ **g-f-a 完成即停，等待人工审核。**
+> **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
+
 ## 10. 后续顺序
 
 ~~~
