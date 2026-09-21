@@ -190,7 +190,9 @@ def test_released_env_still_blocks_training(tmp_path):
     assert result.returncode != 0, "env 发布不得让训练成功"
     combined = result.stdout + result.stderr
     assert "M1.3" in combined, combined
-    assert "formal_training_ready" in combined or "训练未放行" in combined, combined
+    # 必须是 **training 未放行** 的归因，而不是「env 未放行」
+    assert "formal_training_ready" in combined, combined
+    assert "训练" in combined, combined
     assert "synthetic=true" not in combined
 
     manifest, report = _failed_report(tmp_path, "released")
@@ -218,7 +220,8 @@ def test_v5_readiness_is_still_required_to_be_both_false(monkeypatch, tmp_path):
     rc = train.main(["--base-dir", str(tmp_path), "--run-id", "v5forged"])
     assert rc != 0
     _manifest, report = _failed_report(tmp_path, "v5forged")
-    assert "both-false" in report["failure"] or "v5" in report["failure"], report["failure"]
+    # 必须显式判定「v5 readiness 必须严格保持 both-false」，而不是泛泛的「未放行」
+    assert "both-false" in report["failure"], report["failure"]
 
 
 # =============================================================================
