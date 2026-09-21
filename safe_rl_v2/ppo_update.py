@@ -166,15 +166,24 @@ def _single_update(
 
     if not bool(torch.isfinite(loss)):
         raise ValueError(
-            f"损失非有限（{float(loss)!r}）：明确失败，**不执行** optimizer.step()")
+            f"损失非有限（{loss.detach().item()!r}）：明确失败，"
+            "**不执行** optimizer.step()")
 
     # --- 恰好一次 step -------------------------------------------------------
     params_before = [p.detach().clone() for p in policy.parameters()]
     optimizer.zero_grad()
     loss.backward()
-    grad_norm_actor = float(
-        torch.sqrt(sum((p.grad.detach() ** 2).sum() for p in policy.parameters()
-                       if p.grad is not None)).item())
+    # **R1 / §ca.2**：`grad_norm_actor` 必须**只**覆盖 actor 与 `log_std`；
+    # 全参数（含 critic）的范数如实命名为 `grad_norm_total`。
+    # 改前把「全参数范数」误标成 actor 梯度，属证据误标。
+    actor_params = [(name, p) for name, p in policy.named_parameters()
+                    if name.startswith("actor") or name == "log_std"]
+    grad_norm_actor = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for _, p in actor_params
+        if p.grad is not None)).item())
+    grad_norm_total = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for p in policy.parameters()
+        if p.grad is not None)).item())
     optimizer.step()
 
     delta = sum(float(((p.detach() - b) ** 2).sum().item())
@@ -202,6 +211,7 @@ def _single_update(
         "lagrangian_updates_after": int(getattr(lagrangian, "_updates", 0)),
         "optimizer_steps": 1,
         "grad_norm_actor": grad_norm_actor,
+        "grad_norm_total": grad_norm_total,
         "param_delta_norm": float(np.sqrt(delta)),
         "num_transitions": n,
         "claims": dict(CLAIMS),
@@ -298,4 +308,3 @@ def single_ppo_update(
         terminated=terminated, truncated=truncated,
         adv_reward=adv_reward, adv_business=adv_business, adv_carbon=adv_carbon,
         clip_epsilon=clip_epsilon, gamma=gamma, lam=lam)
-
