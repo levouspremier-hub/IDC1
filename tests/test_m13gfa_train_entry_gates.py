@@ -207,6 +207,73 @@ def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch
         f"必须透出上游原始错误，实际 {report['failure']!r}")
 
 
+def test_real_preflight_verifies_the_frozen_mapper_manifest(monkeypatch, tmp_path):
+    """**M1.3g-f-a-R1**：preflight 必须调用公开的
+    `load_verified_mapper_manifest()`（冻结参数 manifest 的唯一验证入口）。
+
+    改前 `load_verified_mapper_chain()` **不**调用它，故 mapper 参数 manifest
+    被篡改 / revision 陈旧时 preflight 不会发现。
+    """
+    import scenario.arrival_mapper as mapper_mod
+
+    train = train_module()
+    calls: list[int] = []
+    real = mapper_mod.load_verified_mapper_manifest
+
+    def spy(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(mapper_mod, "load_verified_mapper_manifest", spy)
+    rc = train.main(["--base-dir", str(tmp_path), "--run-id", "mmok"])
+    assert rc != 0, "当前 readiness=false，real 入口必须非零退出"
+    assert calls, (
+        "real preflight 必须验证冻结 mapper 参数 manifest"
+        "（load_verified_mapper_manifest 一次都没被调用）")
+
+
+def test_mapper_manifest_rejection_surfaces_before_the_readiness_gate(monkeypatch, tmp_path):
+    """mapper manifest 校验失败必须在 **readiness 门之前**明确失败并透出原始原因。"""
+    import scenario.arrival_mapper as mapper_mod
+
+    train = train_module()
+
+    def boom(*args, **kwargs):
+        raise mapper_mod.ArrivalMapperError("mapper-manifest-rejected")
+
+    monkeypatch.setattr(mapper_mod, "load_verified_mapper_manifest", boom)
+    rc = train.main(["--base-dir", str(tmp_path), "--run-id", "mmrej"])
+    assert rc != 0
+    manifest, report = _failed_report(tmp_path, "mmrej")
+    assert manifest["status"] == "failed"
+    assert manifest["failure_classification"]
+    assert report["synthetic"] is False
+    assert "mapper-manifest-rejected" in report["failure"], (
+        f"必须透出 mapper loader 的原始错误：{report['failure']!r}")
+    assert "ArrivalMapperError" in report["failure"], report["failure"]
+    # **绝不能**先走到 readiness=false
+    assert "发布门禁" not in report["failure"], (
+        f"mapper manifest 校验失败必须早于 readiness 门：{report['failure']!r}")
+    assert "readiness" not in report["failure"], report["failure"]
+    # 无成功 run / checkpoint
+    assert not list(tmp_path.rglob("*.pt"))
+    assert not list(tmp_path.rglob("*.pth"))
+
+
+def test_valid_mapper_manifest_still_blocks_on_the_m13_readiness_gate(tmp_path):
+    """**未篡改对照**：合法 mapper manifest 通过后，入口**仍**因 v5
+    `readiness=false` 明确失败（说明新增门禁没有短路后面的 readiness 门）。"""
+    train = train_module()
+    rc = train.main(["--base-dir", str(tmp_path), "--run-id", "okchain"])
+    assert rc != 0
+    _manifest, report = _failed_report(tmp_path, "okchain")
+    assert "M1.3" in report["failure"], report["failure"]
+    assert "readiness" in report["failure"], report["failure"]
+    assert "mapper-manifest-rejected" not in report["failure"]
+    assert report["synthetic"] is False
+    assert report["claims"]["trained"] is False
+
+
 def test_real_preflight_fails_closed_when_readiness_fields_are_missing(monkeypatch, tmp_path):
     """readiness 字段**缺失**必须明确失败，不得用 `.get()` 静默兜底。
 
