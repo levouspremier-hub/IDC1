@@ -165,8 +165,6 @@ def test_new_log_prob_is_recomputed_from_raw_action_even_with_corrector_on():
 
     m = pu()
     new_lp = m.new_raw_log_prob_from_buffer(policy, buffer)
-    from safe_rl_v2.ppo_objective import _as_tensor  # noqa: PLC2701 - 复用同一数值口径
-
     obs = torch.as_tensor(np.stack([t.observation for t in buffer.transitions]),
                           dtype=torch.float32)
     raw = torch.as_tensor(np.stack([t.raw_action for t in buffer.transitions]),
@@ -177,7 +175,6 @@ def test_new_log_prob_is_recomputed_from_raw_action_even_with_corrector_on():
     # 若误用 exec_action，数值必须**不同**
     assert not torch.allclose(new_lp, policy.evaluate_raw_actions(obs, exec_).detach(),
                               atol=1e-6), "本用例要求 raw 与 exec 给出不同 log-prob"
-    _ = _as_tensor  # 保持导入被使用（同一 float32 口径）
 
 
 # =============================================================================
@@ -244,25 +241,22 @@ def test_exactly_one_optimizer_step_changes_params_and_state():
     optimizer = _optimizer(policy)
     lag = _lagrangian()
 
+    assert len(optimizer.state) == 0, "本用例要求 optimizer 是全新的（零步）"
     before = _param_vector(policy).copy()
-    steps_before = int(optimizer.state_dict()["state"].__len__() and
-                       list(optimizer.state.values())[0]["step"])
     out = _update(buffer, policy, optimizer, lag)
     after = _param_vector(policy)
 
     assert out["optimizer_steps"] == 1
     assert not np.array_equal(before, after), "参数必须变化"
     assert out["param_delta_norm"] > 0.0
-    # Adam 状态必须被创建/推进
+    # Adam 状态必须被创建/推进（从零步到 1 步）
     steps_after = list(optimizer.state.values())[0]["step"]
-    assert float(steps_after) == pytest.approx(float(steps_before) + 1.0)
+    assert float(steps_after) == pytest.approx(1.0)
     assert len(optimizer.state) > 0
 
 
 @needs_assets
 def test_empty_buffer_fails_closed():
-    from safe_rl_v2.buffer import RolloutBuffer
-
     buffer, policy, _env = _formal_buffer(steps=1)
     buffer.transitions.clear()
     with pytest.raises((ValueError, RuntimeError)):
