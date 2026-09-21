@@ -207,6 +207,34 @@ def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch
         f"必须透出上游原始错误，实际 {report['failure']!r}")
 
 
+def test_real_preflight_fails_closed_when_readiness_fields_are_missing(monkeypatch, tmp_path):
+    """readiness 字段**缺失**必须明确失败，不得用 `.get()` 静默兜底。
+
+    `safe_rl_v2/train.py` 的红线之一是「不使用 `.get(...)` 默认值」——
+    由 `tests/test_m51c_train_buffer_integration.py` 结构性守卫。
+    """
+    import scenario.b6_split_manifests as v5mod
+
+    train = train_module()
+    real = v5mod.load_verified_split_manifest_v5
+
+    def drop_readiness(*args, **kwargs):
+        payload = real(*args, **kwargs)
+        payload.pop("readiness", None)
+        return payload
+
+    monkeypatch.setattr(v5mod, "load_verified_split_manifest_v5", drop_readiness)
+    rc = train.main(["--base-dir", str(tmp_path), "--run-id", "noready"])
+    assert rc != 0
+    _manifest, report = _failed_report(tmp_path, "noready")
+    # 必须是**入口自己**的明确 fail-closed 判定，而不是撞上 KeyError 后被动透出
+    assert "缺少" in report["failure"] and "readiness" in report["failure"], (
+        f"readiness 缺失必须由入口明确判定并指明字段，实际 {report['failure']!r}")
+    assert "KeyError" not in report["failure"], (
+        f"不得靠 KeyError 被动失败（等价于 .get() 兜底的反面）：{report['failure']!r}")
+    assert report["synthetic"] is False
+
+
 def test_train_entry_does_not_rewrite_its_own_frozen_asset_verifier():
     """**结构性守卫**：`train.py` 不得自建一套**冻结资产**的 hash 校验器。
 
