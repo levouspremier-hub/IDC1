@@ -135,6 +135,9 @@ def test_old_log_prob_and_advantages_do_not_receive_gradient():
         policy, optimizer, lag,
         observation=torch.as_tensor(
             np.stack([t.observation for t in buffer.transitions]), dtype=torch.float32),
+        next_observation=torch.as_tensor(
+            np.stack([t.next_observation for t in buffer.transitions]),
+            dtype=torch.float32),
         raw_action=torch.as_tensor(
             np.stack([t.raw_action for t in buffer.transitions]), dtype=torch.float32),
         old_raw_log_prob=old,
@@ -197,7 +200,7 @@ def test_actor_term_is_the_clipped_objective_and_critics_are_per_head():
     assert out["critic_loss_total"] == pytest.approx(
         sum(per_head.values()), rel=1e-6)
     # 非空洞性：三头 loss 不应恰好全等（否则可能只算了一头）
-    assert len({round(v, 12) for v in per_head.values()}) > 1
+    assert len({round(float(v), 12) for v in per_head.values()}) > 1
 
 
 @needs_assets
@@ -224,7 +227,7 @@ def test_perturbing_one_head_target_only_changes_that_head():
     m = pu()
     fixed = m.compute_targets_from_buffer(policy, buffer, gamma=0.99, lam=0.95)
     assert set(fixed) == {"reward", "business", "carbon"}
-    assert all(t.shape[0] == len(buffer) for t in fixed.values())
+    assert all(t[1].shape[0] == len(buffer) for t in fixed.values())
     # 非空洞性：三头 target 互不相同
     assert not np.allclose(fixed["reward"][1], fixed["business"][1])
     assert not np.allclose(fixed["reward"][1], fixed["carbon"][1])
@@ -265,9 +268,12 @@ def test_empty_buffer_fails_closed():
 
 @needs_assets
 def test_non_finite_loss_fails_closed_without_stepping():
-    """**自然**触发非有限损失（不用任何测试专用后门）：
+    """**自然**触发非有限损失（不用任何测试专用后门）：缓冲区里出现 `NaN` 的
+    `old_raw_log_prob`（损坏数据）⇒ `ratio = exp(new − NaN) = NaN` ⇒ 损失 NaN。
 
-    `old_raw_log_prob = -1e30` ⇒ `ratio = exp(new + 1e30) = inf` ⇒ 损失非有限。
+    注意：`ratio → +inf` **不会**产生非有限损失 —— 逐样本 `min` 里的
+    `clip(ratio, 1±ε)` 分支把结果**界定**住了，这正是 clipping 的正确性质。
+    故本用例用 NaN 而不是 inf。
     """
     buffer, policy, _env = _formal_buffer()
     optimizer = _optimizer(policy)
@@ -281,10 +287,13 @@ def test_non_finite_loss_fails_closed_without_stepping():
             observation=torch.as_tensor(
                 np.stack([t.observation for t in buffer.transitions]),
                 dtype=torch.float32),
+            next_observation=torch.as_tensor(
+                np.stack([t.next_observation for t in buffer.transitions]),
+                dtype=torch.float32),
             raw_action=torch.as_tensor(
                 np.stack([t.raw_action for t in buffer.transitions]),
                 dtype=torch.float32),
-            old_raw_log_prob=torch.full((n,), -1e30, dtype=torch.float32),
+            old_raw_log_prob=torch.full((n,), float("nan"), dtype=torch.float32),
             rewards=torch.as_tensor([t.reward for t in buffer.transitions]),
             business_violations=torch.as_tensor(
                 [t.business_cost for t in buffer.transitions]),
