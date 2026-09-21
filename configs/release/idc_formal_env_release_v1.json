@@ -1,0 +1,34 @@
+{
+  "approved_decision_id": "M1.3g-f-b-a",
+  "binds": {
+    "formal_split_v5_test": {
+      "path": "data/manifest/formal_splits_v5/test.json",
+      "sha256": "aaacd459ed4e1154ea538ba4c3164e67b04094a044f2d96c52a1312553f09835"
+    },
+    "formal_split_v5_train": {
+      "path": "data/manifest/formal_splits_v5/train.json",
+      "sha256": "8608372fba5c560ba458c8903cc10746a4e21254b2c3e29a2c2cd3001d6233c7"
+    },
+    "formal_split_v5_validation": {
+      "path": "data/manifest/formal_splits_v5/validation.json",
+      "sha256": "3f16ad3af4d8b5ab86982550bda86e03af8bab4d9a8ff94b67ec2a0799a4851b"
+    },
+    "frozen_refs_v4": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7"
+    },
+    "m13g_arrival_mapper_v1": {
+      "path": "data/manifest/m13g_arrival_mapper_v1.json",
+      "sha256": "efea87f2b854190a9d4433541d7cf4db07bb11ff022a0bd828cdd1d1fe6b040b"
+    }
+  },
+  "contract_version": "contract-v9",
+  "note": "formal env 的独立发布批准（方案 B）。v5 的 readiness 保持 both-false 且字节不变；本产物不覆盖 v5 的任何字节。formal_training_ready=false 表示训练仍未放行。",
+  "readiness": {
+    "formal_env_ready": true,
+    "formal_training_ready": false
+  },
+  "release_revision": "913754e6071b80070f96e51599894936e564ba77",
+  "schema": "idc-formal-env-release-v1",
+  "supersedes": null
+}
