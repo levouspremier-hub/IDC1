@@ -343,3 +343,210 @@ def test_update_does_not_claim_training_success():
     # 非空洞性：确实做了一次真实更新（有梯度与参数变化）
     assert out["optimizer_steps"] == 1
     assert out["grad_norm_actor"] > 0.0
+
+
+# =============================================================================
+# 5. M1.3g-f-c-c-R1 证据修正
+# =============================================================================
+
+def _actor_parameters(policy):
+    """actor 与 log_std 的参数（**不**含 critic 头）。"""
+    return [p for name, p in policy.named_parameters()
+            if name.startswith("actor") or name == "log_std"]
+
+
+@needs_assets
+def test_grad_norm_actor_covers_only_actor_and_log_std():
+    """**R1 / P1**：`grad_norm_actor` 必须**只**统计 `actor` 与 `log_std`。
+
+    改前该字段实为**全部** policy 参数（含 critic）的范数，故本断言改前失败。
+    """
+    buffer, policy, _env = _formal_buffer()
+    optimizer = _optimizer(policy)
+    out = _update(buffer, policy, optimizer, _lagrangian())
+
+    actor_norm = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for p in _actor_parameters(policy)
+        if p.grad is not None)).item())
+    total_norm = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for p in policy.parameters()
+        if p.grad is not None)).item())
+
+    # 非空洞性：两者的统计范围确实不同（否则本用例区分不出误标）
+    assert actor_norm != pytest.approx(total_norm, rel=1e-6), \
+        "本用例要求 actor 范数与全参数范数不同，否则无法检出误标"
+    assert float(out["grad_norm_actor"]) == pytest.approx(actor_norm, rel=1e-6), \
+        "grad_norm_actor 必须只覆盖 actor 与 log_std"
+    assert float(out["grad_norm_total"]) == pytest.approx(total_norm, rel=1e-6)
+
+
+@needs_assets
+def test_actor_parameters_have_non_zero_gradients():
+    """actor 与 log_std 的参数必须**确实**拿到非零梯度，且逐一非零。"""
+    buffer, policy, _env = _formal_buffer()
+    optimizer = _optimizer(policy)
+    _update(buffer, policy, optimizer, _lagrangian())
+
+    grads = _actor_parameters(policy)
+    assert grads, "actor 参数不得为空"
+    for p in grads:
+        assert p.grad is not None, "actor 参数必须参与反传"
+        assert float(p.grad.abs().sum()) > 0.0, "actor 参数梯度不得恒为零"
+
+
+def _targets_and_mse(policy, buffer, *, gamma: float = 0.99, lam: float = 0.95):
+    """在**不 step** 的前提下算三头 target 与各自的 critic MSE。"""
+    m = pu()
+    targets = m.compute_targets_from_buffer(policy, buffer, gamma=gamma, lam=lam)
+    obs = torch.as_tensor(np.stack([t.observation for t in buffer.transitions]),
+                          dtype=torch.float32)
+    with torch.no_grad():
+        _, values = policy.forward(obs)
+    mse = {}
+    for index, head in enumerate(("reward", "business", "carbon")):
+        target = torch.as_tensor(targets[head][1], dtype=torch.float32)
+        mse[head] = float((values[:, index] - target).pow(2).mean())
+    return targets, mse
+
+
+def _with_perturbed(buffer, field: str, delta: float):
+    """只改**一个** transition 的**一个**输入字段，返回新 buffer（不动 optimizer）。"""
+    import copy as _copy
+    import dataclasses
+
+    clone = _copy.deepcopy(buffer)
+    first = clone.transitions[0]
+    clone.transitions[0] = dataclasses.replace(
+        first, **{field: getattr(first, field) + delta})
+    return clone
+
+
+@needs_assets
+@pytest.mark.parametrize("field,head,delta", [
+    ("reward", "reward", 10.0),
+    ("business_cost", "business", 5.0),
+    ("carbon_cost", "carbon", 3.0),
+])
+def test_single_head_perturbation_changes_only_that_head(field, head, delta):
+    """**R1**：固定同一更新前 policy / buffer，只改**一个**输入头 ⇒
+    只有该头的 target 与 MSE 变化，另两头**逐位不变**。
+
+    注意：全程**不调用** `optimizer.step()`，故对照的是同一状态。
+    """
+    buffer, policy, _env = _formal_buffer()
+    heads = ("reward", "business", "carbon")
+    base_targets, base_mse = _targets_and_mse(policy, buffer)
+
+    pert_targets, pert_mse = _targets_and_mse(
+        policy, _with_perturbed(buffer, field, delta))
+
+    # 被改头：target 与 MSE **必须**变化（非空洞性）
+    assert not np.allclose(base_targets[head][1], pert_targets[head][1]), \
+        f"{head} 的 target 必须随输入变化"
+    assert pert_mse[head] != pytest.approx(base_mse[head], rel=1e-12), \
+        f"{head} 的 critic MSE 必须随输入变化"
+
+    # 另两头：target 与 MSE **逐位不变**
+    for other in heads:
+        if other == head:
+            continue
+        assert np.array_equal(base_targets[other][1], pert_targets[other][1]), \
+            f"改 {field} 不得影响 {other} 的 target"
+        assert pert_mse[other] == pytest.approx(base_mse[other], rel=1e-12), \
+            f"改 {field} 不得影响 {other} 的 MSE"
+
+
+@needs_assets
+def test_infinite_ratio_is_sign_dependent_on_the_advantage():
+    """**R1 / §ca.3**：`ratio = +inf` 的后果**取决于优势符号**。
+
+    - **正**优势：`min(inf×A, clip(inf)×A) = 1.2×A` —— **有限**（上界 clip）。
+    - **负**优势：`min(−inf, 1.2×A) = −inf` —— **非有限**。
+
+    （§bz.5 曾笼统写成「`ratio → +inf` 不会产生非有限损失」，**该结论错误**。）
+    """
+    from safe_rl_v2.ppo_objective import clipped_surrogate
+
+    infinity = torch.tensor([float("inf")])
+    positive = float(clipped_surrogate(
+        infinity, torch.tensor([2.0]), clip_epsilon=0.2)[0])
+    negative = float(clipped_surrogate(
+        infinity, torch.tensor([-2.0]), clip_epsilon=0.2)[0])
+
+    assert np.isfinite(positive) and positive == pytest.approx(2.4)
+    assert not np.isfinite(negative), "负优势下 ratio=inf 必须产生非有限 surrogate"
+    assert np.isneginf(negative)
+
+
+@needs_assets
+def test_infinite_ratio_with_negative_advantage_is_rejected_before_step():
+    """**R1 / §ca.3**：负优势 + `ratio = inf` 时，失败门必须在 **step 之前**拒绝。"""
+    buffer, policy, _env = _formal_buffer()
+    optimizer = _optimizer(policy)
+    before = _param_vector(policy).copy()
+    n = len(buffer)
+
+    m = pu()
+    with pytest.raises((ValueError, RuntimeError)) as excinfo:
+        m.single_ppo_update_from_arrays(
+            policy, optimizer, _lagrangian(),
+            observation=torch.as_tensor(
+                np.stack([t.observation for t in buffer.transitions]),
+                dtype=torch.float32),
+            next_observation=torch.as_tensor(
+                np.stack([t.next_observation for t in buffer.transitions]),
+                dtype=torch.float32),
+            raw_action=torch.as_tensor(
+                np.stack([t.raw_action for t in buffer.transitions]),
+                dtype=torch.float32),
+            # old = −1e30 ⇒ ratio = exp(new + 1e30) = +inf
+            old_raw_log_prob=torch.full((n,), -1e30, dtype=torch.float32),
+            rewards=torch.as_tensor([t.reward for t in buffer.transitions]),
+            business_violations=torch.as_tensor(
+                [t.business_cost for t in buffer.transitions]),
+            carbon_emissions=torch.as_tensor(
+                [t.carbon_cost for t in buffer.transitions]),
+            terminated=torch.zeros(n, dtype=torch.bool),
+            truncated=torch.zeros(n, dtype=torch.bool),
+            adv_reward=torch.full((n,), -2.0, dtype=torch.float32),
+            adv_business=torch.zeros(n, dtype=torch.float32),
+            adv_carbon=torch.zeros(n, dtype=torch.float32),
+            clip_epsilon=CLIP_EPSILON, gamma=0.99, lam=0.95)
+
+    assert "非有限" in str(excinfo.value), \
+        f"必须是**入口自身**的非有限损失判定，实际 {excinfo.value!r}"
+    assert np.array_equal(before, _param_vector(policy)), "不得已经 step"
+    assert len(optimizer.state) == 0, "不得留下 optimizer 状态"
+
+
+@needs_assets
+def test_infinite_ratio_with_positive_advantage_is_finite_and_clipped():
+    """正优势 + `ratio = inf` ⇒ 有限损失（被上界 clip 界定），更新可正常完成。"""
+    buffer, policy, _env = _formal_buffer()
+    n = len(buffer)
+    m = pu()
+    out = m.single_ppo_update_from_arrays(
+        policy, _optimizer(policy), _lagrangian(),
+        observation=torch.as_tensor(
+            np.stack([t.observation for t in buffer.transitions]), dtype=torch.float32),
+        next_observation=torch.as_tensor(
+            np.stack([t.next_observation for t in buffer.transitions]),
+            dtype=torch.float32),
+        raw_action=torch.as_tensor(
+            np.stack([t.raw_action for t in buffer.transitions]), dtype=torch.float32),
+        old_raw_log_prob=torch.full((n,), -1e30, dtype=torch.float32),
+        rewards=torch.as_tensor([t.reward for t in buffer.transitions]),
+        business_violations=torch.as_tensor(
+            [t.business_cost for t in buffer.transitions]),
+        carbon_emissions=torch.as_tensor([t.carbon_cost for t in buffer.transitions]),
+        terminated=torch.zeros(n, dtype=torch.bool),
+        truncated=torch.zeros(n, dtype=torch.bool),
+        adv_reward=torch.full((n,), 2.0, dtype=torch.float32),
+        adv_business=torch.zeros(n, dtype=torch.float32),
+        adv_carbon=torch.zeros(n, dtype=torch.float32),
+        clip_epsilon=CLIP_EPSILON, gamma=0.99, lam=0.95)
+
+    assert torch.isfinite(out["loss_total"])
+    assert out["optimizer_steps"] == 1
+    # clip 生效：ratio 已被界定，clip_fraction 必须 > 0
+    assert out["clip_fraction"] > 0.0
