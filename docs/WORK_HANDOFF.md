@@ -3413,6 +3413,55 @@ git revert a74f0e3 67de152 12af939 e79dc7b ae2a836
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡，
 > 不得悄悄重写 v1。**
+
+### 7BC. M1.3g-f-c-c：基于 formal buffer 的单次 PPO 更新（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §by–§bz。f-c-b 已通过人工审核（§bx，`d28ec13`）。
+
+**新增**：`safe_rl_v2/ppo_update.py`、`tests/test_m13gcc_ppo_update.py`（**10 passed**）。
+把三头 target、乘子与 f-c-b 的 clipped actor objective 接成**一次**更新：
+`zero_grad → backward → step` 恰好一次，`lagrangian.update` 在 step **之后**。
+
+**先红**：`ModuleNotFoundError: safe_rl_v2.ppo_update` × 10。
+
+**关键证据（真实 formal buffer 实测）**：
+
+```text
+num_transitions=4  optimizer_steps=1
+loss_total=25.7303371429  actor_loss=1.1115287542  critic_loss_total=24.6188087463
+  reward MSE=0.0737459958  business MSE=0.0152603080  carbon MSE=24.5298023224
+grad_norm_actor=51.3125495911  param_delta_norm=1.577241300083e-01
+multipliers {0.5, 0.25} -> {0.45, 0.23936910577118398}（step 后更新）
+claims={trained:false, performance_evaluated:false, convergence_claimed:false}
+```
+
+三头 critic MSE **互不相同** ⇒ 各对自己的 target；乘子取**更新前**值参与 actor 目标。
+
+**红线**：`old_raw_log_prob` 与三头优势一律 `detach()`（`requires_grad=True` 下
+`.grad is None`，有测试）；新 log-prob 只由 `raw_action` 现算，corrector 开启
+（`raw ≠ exec`）时**不**改用 `exec_action`；空 buffer 与非有限损失**明确失败且不
+step**。生产代码**不含**任何测试专用开关（非有限路径由缓冲区的 `NaN`
+`old_raw_log_prob` **自然**触发）。
+
+**一处有价值的数学发现**：`ratio → +inf` **不会**产生非有限损失 —— 逐样本 `min`
+的 `clip` 分支把结果界定住了（clipping 的正确性质）；故非有限用例改用 `NaN`。
+
+**验收**：`make check` exit 0（**2844 passed**，ruff/mypy 145 files 全通过）；
+`make smoke` exit 0；`make train` **exit 2**（training 未放行）；
+`runs/train_real_*` **137 个全失败、0 success**、无正式 checkpoint。
+
+**改动仅 3 个文件**；**未**修改 `train.py`、env、冻结资产或发布产物 v1
+（`safe_rl_v2/ppo_update.py` 不在 `ENV_RELEASE_SOURCE_PATHS` 内 ⇒ v1 仍为 `017575dc`）。
+
+**本卡完整回滚（9 提交，newest-first）**——在 `7b5afcb` 上实测，零冲突：
+```bash
+git revert 7b5afcb 3801f93 e40773d 58092b0 9c53071 a44d335 b1482c5 b7b0ff1 d28ec13
+# == 34f63ce^{tree} = aa39bb6f30ffdd3d4927f70e3e03889746069583
+```
+
+> ## ⛔ **f-c-c 完成即停，等待人工复审。**
+> **未接**正式训练循环或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

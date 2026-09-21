@@ -923,6 +923,43 @@ git revert a74f0e3 67de152 12af939 e79dc7b ae2a836   # == f960d31^{tree}
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.12 **基于 formal buffer 的单次 PPO 更新已落地（M1.3g-f-c-c，2026-09-21）**
+
+新增 `safe_rl_v2/ppo_update.py` 与 `tests/test_m13gcc_ppo_update.py`（**10 passed**）。
+把三头 target、乘子与 f-c-b 的 clipped actor objective 接成**一次**更新。
+
+~~~text
+num_transitions=4  optimizer_steps=1
+loss_total=25.7303371429  actor_loss=1.1115287542  critic_loss_total=24.6188087463
+  reward MSE=0.0737459958  business MSE=0.0152603080  carbon MSE=24.5298023224
+grad_norm_actor=51.3125495911  param_delta_norm=1.577241300083e-01
+multipliers {0.5, 0.25} -> {0.45, 0.23936910577118398}（step 后更新）
+claims 三项全 false
+~~~
+
+**红线**：old log-prob 与三头优势一律 `detach()`；新 log-prob 只由 `raw_action`
+现算（corrector 开启时**不**用 `exec_action`）；空 buffer / 非有限损失**明确失败
+且不 step**。生产代码**无**测试专用开关。
+
+**数学发现**：`ratio → +inf` **不**产生非有限损失（`min` 的 `clip` 分支界定住了），
+故非有限用例改用 `NaN`。
+
+**验收**：`make check` exit 0（**2844 passed**）；`make smoke` exit 0；
+`make train` **exit 2**；`runs/train_real_*` **137 个全失败、0 success**。
+资产未变（v5 三份 / `refs_v4` / mapper manifest / **发布产物 v1 `017575dc`
+未重物化**）。改动仅 3 个文件。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert 7b5afcb 3801f93 e40773d 58092b0 9c53071 a44d335 b1482c5 b7b0ff1 d28ec13
+# == 34f63ce^{tree}
+~~~
+
+> ## ⛔ **f-c-c 完成即停，等待人工复审。**
+> **未接**正式训练循环或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~
