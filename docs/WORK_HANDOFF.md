@@ -3299,6 +3299,66 @@ git revert 3311943 660290b 57bf5d1 3f4b070 24dbf07 913754e 3009771 \
 > ## ⛔ **f-b-b 完成即停，等待人工复审。**
 > **未开始** f-c、正式训练、M6。`formal_env_ready=true` **仅**表示 env 已发布；
 > `formal_training_ready=false` **继续阻断训练**。
+
+### 7BA. M1.3g-f-c-a：formal 真实 rollout 闭环验证（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §bs–§bt。f-b-b 已通过人工审核（§br，`8fc47d8`）。
+
+**⚠️ 本卡没有真实先红（如实登记）**：按 §bs.3 拟定的五组断言在**实现前逐条
+运行，全部通过**（`10 passed`）。**formal 真实 rollout 闭环本就可用**，
+本卡未暴露任何生产缺陷。按仓库纪律，全部登记为**回归守卫**，**未**人为制造失败。
+
+**新增**：`tests/test_m13gca_formal_rollout.py`（**12 passed**）、
+`scripts/probe_formal_rollout.py`（只读 probe，输出机器可读证据）。
+
+**链路**：verified train v5 candidate origin（本地行 48 →
+`2024-01-02T00:00:00+08:00`）→ `build_verified_formal_env_injection` →
+`IDCPriceEnv20D(formal_injection=…)` → `collect_rollout` → `RolloutBuffer`。
+
+**probe 实测**：
+
+```text
+formal=true  split=train  horizon=8  delta_t_hours=0.5
+steps_requested=6  steps_collected=6  buffer_len=6
+obs_dim=200  action_dim=21  contract_version=contract-v9
+env_seed=0  policy_rng_source=explicit_generator
+ledger_micro_sum=250000000（250 work）  initial_backlog_work=50.0
+reward_sum=0.17850826268115177  reward_min=-0.5194912670143697  reward_max=0.6725489216174692
+carbon_emission_sum_kg=14.003927524436847  old_raw_log_prob_first=0.7914390563964844
+raw_equals_exec=true  claims={trained:false, performance_evaluated:false, convergence_claimed:false}
+```
+
+**验证要点**：正式注入逐位进入 env；buffer 的 observation / reward / 三类约束
+信号 / `raw_action` / `old_raw_log_prob` 均来自真实 transition（并与
+`evaluate_raw_actions` 重算值、与 `env.step` 返回值逐步对照一致）；
+同 seed + 同动作路径 **逐位可重放**（digest 相同，异 seed 不同）；
+monkeypatch `create_demo_tasks` / `create_random_tasks` 抛错后仍跑通；
+未来 realized exogenous 不可见（反向控制：可见窗口内 forecast 变异必变）。
+另补两条守卫：`corrector_on=True` 下 exec 与 raw **真实分离**
+（`raw_exec_difference_count > 0`，修正器在正式数据上真的求解）；
+请求步数 > episode 长度时提前终止且不丢 transition。
+
+**§bs.6 越界条件未发生**：无需修改 `envs/`、`scenario/env_injection.py` 或
+`train.py`，**无需**发布产物升级，**未**触碰 `ENV_RELEASE_SOURCE_PATHS`。
+
+**验收**：`make check` exit 0（**2814 passed**，ruff/mypy 全通过）；
+`make smoke` exit 0；`make train` **exit 2**（training 未放行，归因不变）；
+`runs/train_real_*` **133 个全失败、0 success**、**无正式 checkpoint**；
+**未**写 `trained=true`。
+
+**资产逐字节未变**：v5 三份 `8608372f` / `3f16ad3a` / `aaacd459`、
+`refs_v4` `b5b64ef2`、mapper manifest `efea87f2`、**发布产物 v1 `017575dc`
+（未重物化）**。本卡改动仅 3 个文件（1 文档 + 2 新增）。
+
+**本卡完整回滚（4 提交，newest-first）**——在 `c00af0d` 上实测，零冲突：
+```bash
+git revert c00af0d e720e7c 38d9632 8fc47d8
+# == f122299^{tree} = d749b90600694216aa6ce7c384f6a7871e9dde42
+```
+（**实现范围** 3 提交的回滚 `git revert e720e7c 38d9632 8fc47d8` 得同一棵树。）
+
+> ## ⛔ **f-c-a 完成即停，等待人工复审。**
+> **未开始**正式训练或 M6。`formal_training_ready=false` **继续阻断训练**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

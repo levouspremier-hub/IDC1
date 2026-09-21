@@ -843,6 +843,46 @@ git revert 3311943 660290b 57bf5d1 3f4b070 24dbf07 913754e 3009771 \
 > ## ⛔ **f-b-b 完成即停，等待人工复审。**
 > **未开始** f-c、正式训练、M6；`formal_training_ready=false` **继续阻断训练**。
 
+## 9.10 **formal 真实 rollout 闭环已验证（M1.3g-f-c-a，2026-09-21）**
+
+新增 `tests/test_m13gca_formal_rollout.py`（**12 passed**）与只读
+`scripts/probe_formal_rollout.py`。链路：verified train v5 candidate origin
+（本地行 48 → `2024-01-02T00:00:00+08:00`）→ `build_verified_formal_env_injection`
+→ `IDCPriceEnv20D(formal_injection=…)` → `collect_rollout` → `RolloutBuffer`。
+
+**⚠️ 本卡没有真实先红**：五组拟定断言在**实现前全部通过** —— formal 真实
+rollout 闭环本就可用，本卡**未暴露任何生产缺陷**。按仓库纪律全部登记为
+**回归守卫**，未人为制造失败。
+
+**probe 实测**：`formal=true`、`horizon=8`、`steps_collected=6`、`obs_dim=200`、
+`action_dim=21`、`contract_version=contract-v9`、`env_seed=0`、
+`policy_rng_source=explicit_generator`、`ledger_micro_sum=250000000`、
+`initial_backlog_work=50.0`、`reward_sum=0.1785`、`carbon_emission_sum_kg=14.004`、
+`raw_equals_exec=true`、claims 三项全 false。
+
+**验证要点**：正式注入逐位进入 env；buffer 字段来自真实 transition（与
+`evaluate_raw_actions` 重算、与 `env.step` 返回值逐步对照一致）；同 seed + 同
+动作路径**逐位可重放**；monkeypatch demo/random 生成器抛错后仍跑通；
+未来真值不可见（含反向控制）。补两条守卫：`corrector_on=True` 下 exec 与 raw
+**真实分离**；超长 rollout 提前终止且不丢 transition。
+
+**§bs.6 越界条件未发生**：无需修改 `envs/` / `env_injection.py` / `train.py`，
+**无需**发布产物升级，**未**触碰 `ENV_RELEASE_SOURCE_PATHS`，**未**重物化 v1。
+
+**验收**：`make check` exit 0（**2814 passed**）；`make smoke` exit 0；
+`make train` **exit 2**（training 未放行）；`runs/train_real_*` **133 个全失败、
+0 success**、无正式 checkpoint；**未**写 `trained=true`。资产逐字节未变
+（v5 三份 / `refs_v4` / mapper manifest / 发布产物 v1 `017575dc`）。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert c00af0d e720e7c 38d9632 8fc47d8    # == f122299^{tree}
+~~~
+
+> ## ⛔ **f-c-a 完成即停，等待人工复审。**
+> **未开始**正式训练或 M6；`formal_training_ready=false` **继续阻断训练**。
+
 ## 10. 后续顺序
 
 ~~~
