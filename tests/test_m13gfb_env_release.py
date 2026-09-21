@@ -240,7 +240,7 @@ def test_materializer_is_idempotent_and_refuses_to_overwrite(tmp_path, monkeypat
     tmp_canonical = tmp_path / "release.json"
     tmp_canonical.write_text('{"schema":"bogus"}\n', encoding="utf-8")
     monkeypatch.setattr(mat, "_canonical_release_path", lambda: tmp_canonical)
-    with pytest.raises(Exception):
+    with pytest.raises(release_module().EnvReleaseError):
         mat.materialize()
     # 既存文件**未被**覆盖
     assert json.loads(tmp_canonical.read_text(encoding="utf-8")) == {"schema": "bogus"}
