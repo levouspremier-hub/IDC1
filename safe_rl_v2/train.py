@@ -513,11 +513,22 @@ def _require_formal_training_entry(args) -> None:
         ) from exc
 
     # ⑥ readiness（**最后**）：v5 明示 formal_*_ready=false 即 M1.3 发布门禁未放行
+    # 直接索引、**不**用 `.get()` 兜底（本模块红线，由 m51c 结构性守卫）；
+    # 字段缺失时由入口自身明确 fail closed，而不是被动撞 KeyError。
+    required = ("formal_env_ready", "formal_training_ready")
+    if "readiness" not in payload:
+        raise TrainEntryError(
+            f"verified v5 train split 缺少 readiness 字段 {list(required)}，"
+            "无法判定 M1.3 发布门禁，故明确失败（**不**回退到合成数据）"
+        )
     readiness = payload["readiness"]
-    blocked = sorted(
-        name for name in ("formal_env_ready", "formal_training_ready")
-        if not readiness.get(name)
-    )
+    absent = [name for name in required if name not in readiness]
+    if absent:
+        raise TrainEntryError(
+            f"verified v5 train split 缺少 readiness 字段 {absent}，"
+            "无法判定 M1.3 发布门禁，故明确失败（**不**回退到合成数据）"
+        )
+    blocked = sorted(name for name in required if not readiness[name])
     if blocked:
         raise TrainEntryError(
             f"M1.3 发布门禁未放行：verified v5 train split 声明 {blocked} 为 false，"
