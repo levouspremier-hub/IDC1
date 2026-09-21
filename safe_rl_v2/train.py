@@ -416,18 +416,118 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _require_frozen_real_scenario(args) -> None:
-    """正式路径：必须要有 M1.2 的真实冻结数据；缺失即失败，**不回退合成**。"""
-    from scenario.scenario import build_scenario
+# --- M1.3g-f-a：正式 real 入口的 preflight -----------------------------------
+#
+# 本卡**只接 preflight**，不实现训练循环。顺序固定：
+#   ① verified v5 split manifest → ② verified mapper 链（完整性）
+#   → ③ 由 candidate origin 推导 start → ④ formal ScenarioBundle
+#   → ⑤ training purpose gate → ⑥ readiness（**最后**）
+#
+# 不得自建 hash 校验器：完整性一律复用既有 verified public 链。
+
+FORMAL_TRAINING_SPLIT = "train"
+FORMAL_TRAINING_FORECAST_CUTOFF = 4
+# canonical 网格步长（分钟）：episode start 必须落在严格 30 分钟网格上。
+CANONICAL_GRID_MINUTES = 30
+
+
+def formal_training_episode_start(payload: dict) -> str:
+    """由 **verified** v5 manifest 的 `candidate_origins` 推导规范带时区 start。
+
+    ⚠️ `time_range.start` 对应 split 的**本地行 0**，**不是**合法 episode start；
+    第一个合法 candidate origin 是本地行 `candidate_origins["start"]`
+    （train = 48 行 = 24 h）。直接把 `time_range.start` 当 start 会被
+    `local_origin_from_start` 以「不在候选 origin 集合内」拒绝。
+
+    推导结果再做**往返校验**：必须精确映射回声明的 candidate origin。
+    """
+    origins = payload["candidate_origins"]
+    declared = int(origins["start"])
+    base = pd.Timestamp(payload["time_range"]["start"])
+    start = (base + pd.Timedelta(minutes=CANONICAL_GRID_MINUTES * declared)).isoformat()
+
+    from scenario.b6_split_manifests import local_origin_from_start
+
+    split = str(payload["split"])
+    mapped = local_origin_from_start(split, start)
+    if mapped != declared:
+        raise TrainEntryError(
+            f"由 v5 candidate origin 推导的 start {start!r} 往返映射为 origin {mapped}，"
+            f"与声明的 candidate_origins.start={declared} 不符（拒绝不一致的起点）"
+        )
+    return start
+
+
+def _require_formal_training_entry(args) -> None:
+    """正式 real 路径预检：唯一信任链 + purpose gate + **M1.3 readiness** 门。
+
+    任一上游缺失或校验失败**明确失败**，**不回退**旧 v1–v4、默认曲线或 synthetic。
+    """
+    from contracts.validators import validate_forecast_purpose
+    from scenario.arrival_mapper import load_verified_mapper_chain
+    from scenario.b6_refs import (
+        CANONICAL_MANIFEST_LOGICAL,
+        CANONICAL_PARQUET_LOGICAL,
+        SPLIT_MANIFEST_LOGICAL,
+    )
+    from scenario.b6_split_manifests import load_verified_split_manifest_v5
+    from scenario.formal_scenario_b6 import (
+        build_formal_scenario_b6,
+        canonical_policy_v3_path,
+    )
+
+    split = FORMAL_TRAINING_SPLIT
 
     try:
-        build_scenario("train", start="2023-01-01", horizon=args.horizon, forecast_cutoff=4)
-    except (FileNotFoundError, KeyError, ValueError) as exc:
+        # ① 唯一验证入口：结构 → 实时输入绑定 → refs_v4 → revision → 四条严格链
+        payload = load_verified_split_manifest_v5(expected_split=split)
+        # ② 完整性：复用**同一条** verified public 链（B6 policy / v3 / refs_v4 / v5）
+        load_verified_mapper_chain(split)
+        # ③ 起点来自 **verified candidate origin**，不是硬编码
+        start = formal_training_episode_start(payload)
+        origin = int(payload["candidate_origins"]["start"])
+
+        # ④ 经既有正式入口构造 formal ScenarioBundle
+        root = Path(__file__).resolve().parent.parent
+        bundle = build_formal_scenario_b6(
+            split,
+            origin=origin,
+            forecast_cutoff=FORMAL_TRAINING_FORECAST_CUTOFF,
+            horizon=args.horizon,
+            canonical_parquet_path=root / CANONICAL_PARQUET_LOGICAL,
+            canonical_manifest_path=root / CANONICAL_MANIFEST_LOGICAL,
+            split_manifest_path=root / SPLIT_MANIFEST_LOGICAL,
+            policy_manifest_path=canonical_policy_v3_path(),
+        )
+        # ⑤ formal 训练**必须显式**过 purpose gate（synthetic/oracle 一律拒绝）
+        validate_forecast_purpose(bundle, purpose="training")
+    except TrainEntryError:
+        raise
+    except Exception as exc:
         raise TrainEntryError(
-            "训练默认路径需要 M1.2 的冻结真实数据，当前不可用，故明确失败"
-            "（**不**回退到合成数据）。原始错误："
+            "正式训练入口需要 B6 的 verified formal 链（v5 split / refs_v4 / policy-v3 / "
+            "exogenous v3 / mapper），当前校验未通过，故明确失败"
+            "（**不**回退到旧 v1–v4、默认曲线或合成数据）。原始错误："
             f"{type(exc).__name__}: {exc}"
         ) from exc
+
+    # ⑥ readiness（**最后**）：v5 明示 formal_*_ready=false 即 M1.3 发布门禁未放行
+    readiness = payload["readiness"]
+    blocked = sorted(
+        name for name in ("formal_env_ready", "formal_training_ready")
+        if not readiness.get(name)
+    )
+    if blocked:
+        raise TrainEntryError(
+            f"M1.3 发布门禁未放行：verified v5 train split 声明 {blocked} 为 false，"
+            "故正式训练入口明确失败（**不**回退到合成数据、**不**写成功 run）。"
+            f"episode start={start}（由 candidate origin {origin} 推导）、"
+            f"split={split}、readiness={dict(readiness)}"
+        )
+
+    raise TrainEntryError(  # pragma: no cover - readiness 放行前不可达
+        "真实数据路径的正式训练尚未实现（需 M1.3g-f 的训练循环）"
+    )
 
 
 def _manifest_metadata(args) -> dict:
@@ -635,7 +735,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if not args.synthetic_smoke:
-            _require_frozen_real_scenario(args)
+            _require_formal_training_entry(args)
             raise TrainEntryError(  # pragma: no cover - 数据到位前不可达
                 "真实数据路径的正式训练尚未实现（需 M5.4/M5.5 的训练循环）"
             )
