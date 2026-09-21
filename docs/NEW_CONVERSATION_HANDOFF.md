@@ -883,6 +883,46 @@ git revert c00af0d e720e7c 38d9632 8fc47d8    # == f122299^{tree}
 > ## ⛔ **f-c-a 完成即停，等待人工复审。**
 > **未开始**正式训练或 M6；`formal_training_ready=false` **继续阻断训练**。
 
+## 9.11 **PPO clipped actor objective 核心已落地（M1.3g-f-c-b，2026-09-21）**
+
+新增 `safe_rl_v2/ppo_objective.py`（**纯数值计算**）与
+`tests/test_m13gcb_ppo_objective.py`（**20 passed**）。
+
+~~~text
+ratio             = exp(new_raw_log_prob − old_raw_log_prob)
+advantage         = A_reward − λ_business·A_business − λ_carbon·A_carbon
+clipped surrogate = min(ratio × A, clip(ratio, 1−ε, 1+ε) × A)
+actor loss        = −mean(clipped surrogate)
+~~~
+
+**先红**：`ModuleNotFoundError: safe_rl_v2.ppo_objective` × 20（模块不存在）。
+
+**数学微例**：`ratio = 2.000000`（`ln2`）；优势 `= −1.000000`；ε=0.2 下
+`ratio=10,A=+2 → +2.4000`（上界保护）、**`ratio=10,A=−2 → −20.0000`（负优势
+不被 clip 救回）**、`ratio=0.1,A=−2 → −1.6000`。
+
+**红线执行**：API **无**新 log-prob / `exec_action` 入参（有结构性守卫）；
+新 log-prob 只能由 `raw_action` 现算；`clip_epsilon` keyword-only **无默认值**；
+乘子由调用方给出，本模块不选择/不更新。有测试证明传 `exec_action` 结果必须不同。
+
+**验收**：`make check` exit 0（**2834 passed**）；`make smoke` exit 0；
+`make train` **exit 2**（training 未放行）；`runs/train_real_*` **135 个全失败、
+0 success**；无正式 checkpoint；**未**写 `trained=true`。
+
+**资产未变**：v5 三份 / `refs_v4` / mapper manifest / **发布产物 v1 `017575dc`
+未重物化**（`safe_rl_v2/ppo_objective.py` 不在 `ENV_RELEASE_SOURCE_PATHS` 内，
+故 v1 的 `release_revision` **未失效**）。改动仅 3 个文件。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert a74f0e3 67de152 12af939 e79dc7b ae2a836   # == f960d31^{tree}
+~~~
+
+> ## ⛔ **f-c-b 完成即停，等待人工复审。**
+> **未接**正式训练循环或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~
