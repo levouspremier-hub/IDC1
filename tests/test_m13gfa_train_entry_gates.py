@@ -157,7 +157,12 @@ def test_real_preflight_calls_the_training_purpose_gate(monkeypatch, tmp_path):
 # =============================================================================
 
 def test_real_preflight_consults_the_verified_v5_loader(monkeypatch, tmp_path):
-    """preflight 必须经**既有 verified public 链**读取 v5 manifest。"""
+    """preflight 必须经**既有 verified public 链**读取 v5 manifest。
+
+    **回归守卫（改前已绿）**：改前 `build_scenario(synthetic=False)` 已路由到
+    v5 loader，故该性质部分先已存在；本用例锁定「切到 candidate-origin 接线后
+    仍必须走 verified 链」，**不冒充先红**。
+    """
     import scenario.b6_split_manifests as v5mod
 
     train = train_module()
@@ -175,7 +180,11 @@ def test_real_preflight_consults_the_verified_v5_loader(monkeypatch, tmp_path):
 
 
 def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch, tmp_path):
-    """上游校验失败必须**明确失败并透出原始错误**，不得回退。"""
+    """上游校验失败必须**明确失败并透出原始错误**，不得回退。
+
+    **回归守卫（改前已绿）**：改前失败的原始错误已被透出；本用例锁定接线后
+    仍然如此，**不冒充先红**。
+    """
     import scenario.b6_split_manifests as v5mod
 
     train = train_module()
@@ -193,11 +202,21 @@ def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch
         f"必须透出上游原始错误，实际 {report['failure']!r}")
 
 
-def test_train_entry_does_not_rewrite_its_own_hash_verifier():
-    """**结构性守卫**：`train.py` 不得自建一套 hash 校验器。"""
+def test_train_entry_does_not_rewrite_its_own_frozen_asset_verifier():
+    """**结构性守卫**：`train.py` 不得自建一套**冻结资产**的 hash 校验器。
+
+    注意 `_dependency_lock_hash()` 对 `uv.lock` 的 sha256 是**既有且正当**的
+    依赖锁记录，不属于冻结资产校验，故只禁止**复刻校验链**的写法。
+    """
     source = (REPO_ROOT / "safe_rl_v2" / "train.py").read_text(encoding="utf-8")
-    assert "hashlib.sha256" not in source, "完整性校验必须复用 verified public 链"
-    assert "def _sha256_file" not in source and "def _verify_frozen_chain" not in source
+    for reimplemented in ("def _sha256_file", "def _verify_frozen_chain",
+                          "def load_verified_", "def _require_live_binding"):
+        assert reimplemented not in source, (
+            f"完整性校验必须复用 verified public 链，不得自建 {reimplemented!r}")
+    # 不得把冻结资产路径直接读进来自己做校验
+    for frozen in ("formal_splits_v5", "refs_v4.json", "singapore_2024_forecast_policy_v3"):
+        assert frozen not in source, (
+            f"不得在 train.py 直接拼接冻结资产路径 {frozen!r}（须走 verified public 链）")
     # 也不得回退到旧世代资产
     for stale in ("refs_v3", "refs.json", "formal_splits_v1", "formal_splits_v2",
                   "formal_splits_v3", "formal_splits_v4"):
