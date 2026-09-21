@@ -181,7 +181,14 @@ def test_real_preflight_consults_the_verified_v5_loader(monkeypatch, tmp_path):
     assert rc != 0
     # `load_verified_mapper_chain` 内部也会读 v5，故计数 ≥ 1。
     assert seen.count("train") >= 1, f"必须经 verified v5 loader 读取 train split，实际 {seen}"
-    assert set(seen) == {"train"}, f"只允许读取 train split，实际 {seen}"
+    # **M1.3g-f-b-b 收窄修正**：原断言 `set(seen) == {"train"}` 与「preflight 只碰
+    # train」耦合；env 发布产物（方案 B）以 `binds` 绑定**整条 v5 triad**，因此其
+    # loader 会校验 train/validation/test 三份。本断言真正要保证的意图是：
+    # preflight **只**经 verified v5 loader 读**正式 v5 的这三个 split**，
+    # 绝不读 v4 或更旧世代。收紧为「集合 ⊆ 三个 v5 split」而非放宽。
+    assert set(seen) <= {"train", "validation", "test"}, (
+        f"只允许经 verified loader 读取正式 v5 的三个 split，实际 {seen}")
+    assert seen, "v5 loader 必须被调用"
 
 
 def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch, tmp_path):
