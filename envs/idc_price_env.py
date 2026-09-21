@@ -716,7 +716,9 @@ class IDCPriceEnv20D(gym.Env):
 
         obs = self._get_obs()
         info = {
-            "total_task_count": len(self.tasks),
+            # **M1.3g-e-d**：formal info 只报**已到达**任务数；未来任务数是未来信息，
+            # 不得作为 formal 决策输入。legacy 沿用 `len(self.tasks)`。
+            "total_task_count": self._task_count_ref(),
             "initial_backlog_work": self.Q_t,
             "obs_dim": self.obs_dim,
             "pv_ref_kw": float(self.pv_ref_kw),
@@ -999,9 +1001,12 @@ class IDCPriceEnv20D(gym.Env):
         urgent_backlog_work, avg_waiting_pressure = self._compute_reward_task_pressure(current_time=t)
         sla_metrics = self._compute_sla_metrics(current_time=t + 1)
 
+        # **M1.3g-e-d**：任务数尺度在 formal 下只数已到达任务（未来任务数不得
+        # 影响当步 reward）；legacy 走 _task_count_ref() 的 `len(self.tasks)` 分支。
+        task_count_ref = self._task_count_ref()
         completed_norm = completed_work / self.queue_ref
-        finished_task_norm = newly_finished_count / max(len(self.tasks), 1)
-        priority_finish_norm = newly_finished_priority_sum / max(5.0 * len(self.tasks), 1e-6)
+        finished_task_norm = newly_finished_count / max(task_count_ref, 1)
+        priority_finish_norm = newly_finished_priority_sum / max(5.0 * task_count_ref, 1e-6)
         cost_norm = cost_t / self.cost_ref
         carbon_norm = carbon_emission_t / max(self.carbon_ref, 1e-6)
         queue_norm = Q_next / self.queue_ref
@@ -1010,7 +1015,7 @@ class IDCPriceEnv20D(gym.Env):
         overflow_norm = overflow_work / max(self.queue_ref, 1e-6)
         urgent_backlog_norm = urgent_backlog_work / max(self.queue_ref, 1e-6)
         waiting_norm = avg_waiting_pressure / max(self.horizon, 1)
-        deadline_miss_norm = new_deadline_miss_count / max(len(self.tasks), 1)
+        deadline_miss_norm = new_deadline_miss_count / max(task_count_ref, 1)
         sla_penalty_norm = sla_metrics["sla_penalty"] / self.sla_penalty_ref
         unused_capacity_norm = unused_capacity / max(self.queue_ref, 1e-6)
         # Grid peak is based on P_grid; P_IDC_kW remains the physical IDC load metric.
@@ -1025,9 +1030,10 @@ class IDCPriceEnv20D(gym.Env):
         self.episode_peak_power_kW = self.episode_grid_peak_power_kW
         self.total_peak_excess_kW_hour = self.total_grid_peak_excess_kW_hour
         peak_load_norm = grid_peak_excess_kW / max(self.peak_power_ref_kW, 1e-6)
-        pause_norm = pause_count_this_step / max(len(self.tasks), 1)
-        resume_norm = resume_count_this_step / max(len(self.tasks), 1)
-        non_interruptible_norm = non_interruptible_interruption_this_step / max(len(self.tasks), 1)
+        pause_norm = pause_count_this_step / max(task_count_ref, 1)
+        resume_norm = resume_count_this_step / max(task_count_ref, 1)
+        non_interruptible_norm = non_interruptible_interruption_this_step / max(
+            task_count_ref, 1)
         # load_change penalizes rapid server utilization movement between adjacent hours.
         load_change = float(np.mean(np.abs(actual_total_loads - self.prev_loads)))
         # action_change penalizes policy jitter between adjacent continuous action vectors.
@@ -1611,9 +1617,18 @@ class IDCPriceEnv20D(gym.Env):
         return new_count
 
     def _loads_from_group_completion(self, completed_work_by_group: np.ndarray) -> np.ndarray:
-        """每组实际负载 = 完成工作 / 组能力（M3.3 废除比例回分与 α）。"""
+        """每组实际负载 = 完成工作 / 组**每步**能力（M3.3 废除比例回分与 α）。
+
+        `C_server` 是 **work/hour rate**，而 `completed_work_by_group` 是**一个步长**
+        内完成的工作量（work/step）；故每步能力 = `C_server × delta_t_hours`。
+        **M1.3g-e-d**：formal 链把计划能力按 `× delta_t_hours` 折算过，此处必须
+        用同一单位，否则 formal 任务负载被低估 `1/delta_t_hours` 倍。
+        legacy `delta_t_hours = 1.0`，语义与改前**逐字相同**。
+        """
         c_server = np.asarray(self.model.C_server, dtype=np.float64)
-        loads = np.asarray(completed_work_by_group, dtype=np.float64) / np.maximum(c_server, 1e-6)
+        capacity_per_step = c_server * self.delta_t_hours
+        loads = np.asarray(completed_work_by_group, dtype=np.float64) / np.maximum(
+            capacity_per_step, 1e-6)
         return np.clip(loads, 0.0, self.max_task_load_per_server)
 
     def _idc_power_kw(self, load_vector, T_amb) -> float:
@@ -1652,7 +1667,9 @@ class IDCPriceEnv20D(gym.Env):
         soc_recovery_kwh = soc_excess * self.bess_capacity_kWh
 
         leftover_norm = leftover / max(self.queue_ref, 1e-6)
-        deadline_miss_norm = deadline_miss / max(len(self.tasks), 1)
+        # **M1.3g-e-d**：与当步 reward 用同一因果尺度；结算时已到达任务 == 全部任务，
+        # 故 formal 下与改前同值，legacy 逐字不变。
+        deadline_miss_norm = deadline_miss / max(self._task_count_ref(), 1)
         settlement_penalty = leftover_norm + deadline_miss_norm + soc_excess
         service_violation = 1 if (leftover > 1e-9 or deadline_miss > 0 or soc_recovery_kwh > 1e-9) else 0
 
@@ -1708,6 +1725,18 @@ class IDCPriceEnv20D(gym.Env):
 
         self.__dict__.clear()
         self.__dict__.update(copy.deepcopy(state))
+
+    def _task_count_ref(self) -> int:
+        """reward / 特征归一化所用的**任务数尺度**（M1.3g-e-d）。
+
+        **formal**：只数**已到达**任务 —— 尚未到达的任务数是未来信息，不得进入
+        当步 reward 或观测；**legacy**：沿用既有的 `len(self.tasks)`，语义逐字不变
+        （legacy 任务在 t=0 全部到达，两者本就相等）。
+        """
+        if self.formal:
+            now = int(self.current_step)
+            return max(sum(1 for t in self.tasks if int(t.arrival_time) <= now), 1)
+        return max(len(self.tasks), 1)
 
     def _compute_backlog_work(self) -> float:
         """由 Task 列表统计当前已到达但未完成任务的剩余工作量。"""
@@ -1912,7 +1941,9 @@ class IDCPriceEnv20D(gym.Env):
             and task.remaining_work > 1e-6
         ]
 
-        total_task_ref = max(len(self.tasks), 1)
+        # **M1.3g-e-d**：formal 的归一化尺度**不得**含未到达任务（未来信息）；
+        # legacy 逐字沿用 `len(self.tasks)`（其任务在 t=0 全部到达，语义不变）。
+        total_task_ref = self._task_count_ref()
         work_ref = max(self.queue_ref, 1e-6)
         priority_ref = 5.0
         urgent_window = 3
