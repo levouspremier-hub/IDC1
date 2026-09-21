@@ -142,6 +142,14 @@ def _require_hex64(value: object, *, field: str) -> str:
     return value
 
 
+def _require_git_sha40(value: object, *, field: str) -> str:
+    """Git revision 是 **40** 位十六进制（**不是** sha256 的 64 位）。"""
+    if not isinstance(value, str) or len(value) != 40 \
+            or any(c not in "0123456789abcdef" for c in value):
+        raise EnvReleaseError(f"{field} 必须是 40 位小写十六进制 git SHA，实际 {value!r}")
+    return value
+
+
 def _require_str(value: object, *, field: str) -> str:
     if not isinstance(value, str) or not value:
         raise EnvReleaseError(f"{field} 必须是非空字符串，实际 {value!r}")
@@ -205,7 +213,7 @@ def validate_env_release(payload: object) -> dict:
                  f"实际 {declared!r}")
         _require_hex64(entry["sha256"], field=f"binds.{role}.sha256")
 
-    _require_hex64(validated["release_revision"], field="release_revision")
+    _require_git_sha40(validated["release_revision"], field="release_revision")
     _require_str(validated["note"], field="note")
 
     if _generator_is_dirty():
