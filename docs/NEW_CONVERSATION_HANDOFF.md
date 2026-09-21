@@ -728,6 +728,39 @@ git revert f2457fe a23ab0e 06d8b33 c91b8e7 83051e8 53f307c 96434db a314e2c 9acdc
 > ## ⛔ **g-f-a 完成即停，等待人工审核。**
 > **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
 
+## 9.7 **冻结 mapper 参数 manifest 已纳入 preflight（M1.3g-f-a-R1，2026-09-21）**
+
+**f-a 人工复审不通过（1 × P1）**：real preflight 调用
+`load_verified_mapper_chain("train")`，但它只验证 **B6 policy / v3 bundle /
+`refs_v4` / v5 split**，**不调用** `load_verified_mapper_manifest()` ——
+后者才是 `m13g_arrival_mapper_v1.json` 的唯一验证入口（canonical 位置 / 冻结参数 /
+来源 hash / live revision / 锚定 refs_v4 冻结时刻）。故 mapper 参数 manifest 被篡改
+或 revision 陈旧时，`make train` **不会发现**。
+
+**修复**：在 readiness 检查之前新增一行**现有公开** loader 调用
+（`train.py` **+9 / −1** 行）；**未**复制参数 / hash 逻辑、**未**重物化、
+**未**改 mapper manifest；`scenario/` **零改动**。
+
+**调用证据（实测）**：未篡改链上调用 **1 次**，`path=None` → canonical 路径，
+`schema=m1.3g-e-b-arrival-mapper-v1`、`approved_decision_id=M1.3f-e-b-d`。
+**合法链对照**：合法 manifest → 抵达准确的 **M1.3 readiness 阻塞**（`exit 2`）；
+篡改 manifest → 在 readiness 门**之前**失败并透出 `ArrivalMapperError`。
+
+**验收**：新测试 **17 passed**（原 14 + 3）、m54a **30 passed**；`make check` exit 0
+（**2782 passed**）；`make smoke` exit 0；`make train` **exit 2**；
+`m13g_arrival_mapper_v1.json` `efea87f2…` 与 v5 三份 hash **逐字节未变**；
+readiness **仍全 false**；`runs/train_real_*` **126 个全失败、0 success**、无 checkpoint。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+# 本卡完整范围（5 提交，含记录提交）
+git revert cbec1a3 57d9cf1 e755951 e1a79f8 777a5da   # == 7de03c0^{tree}
+~~~
+
+> ## ⛔ **g-f-a-R1 完成即停，等待人工复审。**
+> **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
+
 ## 10. 后续顺序
 
 ~~~

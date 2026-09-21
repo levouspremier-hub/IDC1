@@ -3127,6 +3127,52 @@ git revert f2457fe a23ab0e 06d8b33 c91b8e7 83051e8 53f307c 96434db a314e2c 9acdc
 
 > ## ⛔ **g-f-a 完成即停，等待人工审核。**
 > **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
+
+### 7AX. M1.3g-f-a-R1：把冻结 mapper 参数 manifest 纳入 real preflight（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §bi–§bk。**f-a 人工复审不通过（1 × P1）**。
+
+**P1**：`train.py` 的 real preflight 调用 `load_verified_mapper_chain("train")`，
+但该函数（`scenario/arrival_mapper.py:143`）只验证 **B6 policy / v3 bundle /
+`refs_v4` / v5 split** 四者，**不调用** `load_verified_mapper_manifest()`
+—— 后者才是 `m13g_arrival_mapper_v1.json` 的唯一验证入口（canonical 位置 /
+冻结参数 / 来源 hash / **live revision** / 锚定 refs_v4 冻结时刻）。
+后果：mapper 参数 manifest 被篡改或 revision 陈旧时 preflight **不会发现**。
+
+**红得最直白的一条**：篡改该 loader 使其抛 `mapper-manifest-rejected` 后，
+改前的失败原因**仍然是 readiness 门** —— 证明它从未被调用。
+
+**最小实现**（`train.py` **+9 / −1** 行）：在 ② 之后新增一行现有公开 loader 调用：
+
+```python
+load_verified_mapper_chain(split)     # 既有：B6 policy / v3 / refs_v4 / v5
+load_verified_mapper_manifest()       # ②b 新增：冻结 mapper 参数 manifest
+```
+
+**未**复制任何参数或 hash 校验逻辑、**未**重物化、**未**改 mapper manifest；
+`scenario/` **零改动**。
+
+**调用证据（实测，未篡改链）**：调用 **1 次**，`path=None` → 唯一 canonical 路径，
+`schema=m1.3g-e-b-arrival-mapper-v1`、`approved_decision_id=M1.3f-e-b-d`；
+随后失败原因 = M1.3 readiness 门。
+
+**合法链对照**：合法 manifest → 新门禁通过 → 抵达准确的 **M1.3 readiness 阻塞**；
+篡改 manifest → 在 readiness 门**之前**失败并透出 `ArrivalMapperError`。
+
+**验收**：f-a 测试 **17 passed**（原 14 + 新 3）；m54a **30 passed**；`make check`
+exit 0（**2782 passed**，ruff/mypy 全通过）；`make smoke` exit 0；`make train`
+**exit 2**；`m13g_arrival_mapper_v1.json` `efea87f2…` 与 v5 三份 hash **逐字节未变**；
+readiness **仍全 false**；`runs/train_real_*` **126 个全失败、0 success**、无 checkpoint。
+
+**本卡完整回滚（5 提交，newest-first）**——在 `cbec1a3` 上实测，零冲突：
+```bash
+git revert cbec1a3 57d9cf1 e755951 e1a79f8 777a5da
+# == 7de03c0^{tree} = 542c431a4433bd4d49a18e3346f0faad44f4c6d7
+```
+（**实现范围** 4 提交的回滚 `git revert 57d9cf1 e755951 e1a79f8 777a5da` 得同一棵树。）
+
+> ## ⛔ **g-f-a-R1 完成即停，等待人工复审。**
+> **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
