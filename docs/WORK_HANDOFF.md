@@ -3173,6 +3173,76 @@ git revert cbec1a3 57d9cf1 e755951 e1a79f8 777a5da
 
 > ## ⛔ **g-f-a-R1 完成即停，等待人工复审。**
 > **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
+
+### 7AY. M1.3g-f-b-a：readiness 版本发布边界与迁移方案审计（**纯文档，等待人工选方案**）
+
+`docs/task_cards/M1.3g.md` §bm–§bn。f-a-R1 已通过人工审核（§bl，`e087a05`）。
+
+**审计结论要点**：
+
+1. **readiness 语义**：`formal_env_ready` = 正式 env 链可发布；`formal_training_ready`
+   = 正式训练入口可发布。g-e-a/b/c/d 与 f-a 各轮返修均通过 ⇒ **formal env 可信链已闭合**；
+   但 `train.py` **没有训练循环**（preflight 后仍是
+   `raise TrainEntryError("…尚未实现…")`）⇒ `formal_training_ready` **不得**置 true。
+2. **工程硬约束（实测）**：v5 校验器 `_require(readiness == READINESS)` 硬要求
+   **both-false**；readiness 属于 `build_split_manifest_v5` 的**重建比对**；
+   `materializer_revision` 绑定 `B6_SPLIT_SOURCE_PATHS`（9 路径）的 git revision
+   ⇒ **改 readiness 语义必然使现有 v5 失效**。故 v5 **字节不得改写**。
+3. **绑定方向是单向的**：mapper manifest 以 path+sha256 绑定三份 v5
+   （`formal_split_v5_{train,validation,test}`，由 `build_mapper_manifest` **实时** hash）；
+   而 v5 的 `inputs` **九**个角色**不含** mapper manifest ⇒ **无环**。
+   v5 换版 ⇒ mapper manifest 必须重新物化；反之则不然。
+4. **级联实测**：`forecast_policy_v3` / `exogenous_drivers_v3.parquet` /
+   `m13f_arrival_intensity_policy_v1` **同时**是 v5 `inputs` **且**被 mapper 逐字节绑定
+   ⇒ 在上游 manifest 里翻 readiness 会同时打破两重绑定。
+
+**两方案与推荐**：
+
+- **方案 A（新版本 v6 triad + `m13g_arrival_mapper_v2.json`）**：语义单一，但触及
+  `B6_SPLIT_SOURCE_PATHS` ⇒ live revision 改变 ⇒ **v5 立即不可再被 loader 读取**；
+  需重新物化三份 v6 + 新 mapper manifest，迁移 11 个 readiness 测试与 handoff。
+  **且买不到任何东西**——训练循环仍缺，`make train` 仍 exit 2。
+- **方案 B（推荐）**：新增**独立可验签的 env-ready 发布产物**
+  （`configs/release/idc_formal_env_release_v1.json` + 严格 loader `scenario/env_release.py`），
+  产物内以 `binds` 逐字节绑定 v5 三份 + `refs_v4` + `m13g_arrival_mapper_v1`；
+  **完全不触碰 v5 与 mapper manifest**。`train.py` 的最终门改为**合取**：
+  ① v5 `readiness` 必须**精确等于**冻结常量 both-false（不忽略、不覆盖）；
+  ② 且发布产物验签通过并声明 `formal_env_ready=true`、`formal_training_ready=false`。
+  两者缺一即明确失败。
+  - ➕ 冻结资产**零改动**、无需重新物化、可独立回滚（换/删发布产物）。
+  - ➖ 两个 readiness 来源，须靠「合取门 + hash 绑定」防误读（本方案唯一需严格设计处）。
+
+**明确排除**的三类做法：运行时强行覆盖 v5 readiness；未经验证的配置开关；
+只在 `train.py` 忽略 false。
+
+**下一张实施卡边界**（待人工选方案）：先红测试（篡改 `binds`/`readiness`/
+`frozen_at_utc` 一律 fail closed；v5 被改 true 仍被拒；**env ready 发布后
+`make train` 仍 exit 2 且失败原因为 training 阻塞**——**不得**把训练成功当验收条件）；
+允许文件、物化顺序、幂等与回滚边界见 §bn.4。
+
+**验收**：`make check` exit 0（**2782 passed**，与上一卡一致——纯文档卡）；
+`git diff --check` / `git status --short` 空；冻结资产 hash
+`8608372f` / `3f16ad3a` / `aaacd459` / `efea87f2` **逐字节未变**；范围外修改**无**。
+
+**本卡回滚（newest-first，均已实测零冲突，无占位符）**：
+
+```bash
+# 已提交范围（审核收口 + 开卡，2 提交）—— 在 8b411fd 上实测
+git revert 8b411fd e087a05
+# == 14e6aec^{tree} = 13372b332b831749166343b957fc336f1432d16e
+
+# 含审计提交（3 提交）—— 在 d0a0876 上实测
+git revert d0a0876 8b411fd e087a05
+# == 14e6aec^{tree} = 13372b332b831749166343b957fc336f1432d16e
+```
+
+> **从本卡最终 HEAD 做逐树精确回滚**：需在最前面追加本条 handoff 提交自身
+> （newest-first，SHA 用 `git log -1 --format=%H` 读取——**本文件无法自引用**），
+> 再接上上面 3 个提交，得同一棵树 `13372b33…`。交接报告给出该 SHA 的实测值
+> 与完整命令，**本文件不写占位符**。
+
+> ## ⛔ **f-b-a 完成即停，等待人工选择发布方案。**
+> **未自行开始** f-b 实施、f-c、正式训练、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

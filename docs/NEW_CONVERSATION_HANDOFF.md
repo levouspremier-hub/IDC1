@@ -761,6 +761,48 @@ git revert cbec1a3 57d9cf1 e755951 e1a79f8 777a5da   # == 7de03c0^{tree}
 > ## ⛔ **g-f-a-R1 完成即停，等待人工复审。**
 > **未开始** f-b、f-c、正式训练、M6；readiness **仍为 false**。
 
+## 9.8 **env-ready 发布边界已审计，推荐独立发布产物（M1.3g-f-b-a，2026-09-21）**
+
+**纯文档卡**，交付物 = `docs/task_cards/M1.3g.md` **§bn**。f-a-R1 已通过人工审核
+（§bl，`e087a05`）。**等待人工选择发布方案**。
+
+**关键事实（只读实测）**：
+
+- v5 校验器 `_require(readiness == READINESS)` **硬要求 both-false**；readiness 属于
+  `build_split_manifest_v5` 的**重建比对**；`materializer_revision` 绑定
+  `B6_SPLIT_SOURCE_PATHS`（9 路径）的 git revision ⇒ **改 readiness 必然使现有 v5 失效**，
+  故 v5 **字节不得改写**（现为 `8608372f` / `3f16ad3a` / `aaacd459`）。
+- **绑定单向、无环**：mapper manifest（`efea87f2…`）以 path+sha256 绑定三份 v5；
+  而 v5 的 `inputs` 九角色**不含** mapper manifest。
+- `forecast_policy_v3` / `exogenous_drivers_v3.parquet` / `m13f_arrival_intensity_policy_v1`
+  **同时**是 v5 `inputs` 且被 mapper 绑定 ⇒ 在上游 manifest 翻 readiness 会双重破绑。
+- **formal env 可信链已闭合**（g-e-a/b/c/d + f-a 各轮返修均通过）；
+  但 `train.py` **无训练循环** ⇒ `formal_training_ready` **不得**为 true。
+
+**两方案**：**A** 新版本 v6 triad + `m13g_arrival_mapper_v2.json`（触及 9 路径 ⇒ v5
+立即不可读、爆炸半径最大、**且买不到训练能力**）；**B（推荐）** 独立可验签发布产物
+（`configs/release/idc_formal_env_release_v1.json` + `scenario/env_release.py`），以
+`binds` 逐字节绑定 v5 三份 + `refs_v4` + mapper manifest，**完全不触碰冻结资产**；
+`train.py` 最终门改**合取**：v5 readiness 必须仍**精确等于** both-false **且**发布产物
+验签声明 `formal_env_ready=true`、`formal_training_ready=false`。
+
+**排除**：运行时覆盖 v5 readiness / 未经验证的配置开关 / 只在 `train.py` 忽略 false。
+
+**下一张实施卡边界**：先红测试、允许文件、物化顺序、幂等与回滚边界见 §bn.4；
+**不得**把正式训练成功作为 env-ready 发布的验收条件。
+
+**验收**：`make check` exit 0（**2782 passed**，与上一卡一致）；冻结资产 hash
+**逐字节未变**；范围外修改**无**。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert d0a0876 8b411fd e087a05    # == 14e6aec^{tree}
+~~~
+
+> ## ⛔ **f-b-a 完成即停，等待人工选择发布方案。**
+> **未自行开始** f-b 实施、f-c、正式训练、M6；readiness **仍为 false**。
+
 ## 10. 后续顺序
 
 ~~~
