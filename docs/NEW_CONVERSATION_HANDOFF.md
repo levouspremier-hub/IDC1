@@ -650,6 +650,40 @@ git revert 950c131 ffb7cc2 3f836b7 bb5cc9e 2a15961   # == f6734e6^{tree}
 > ## ⛔ **g-e-d 完成即停，等待人工复审。**
 > **未开始** g-f（训练门禁）、训练接线、正式训练、评估、M6；readiness **仍为 false**。
 
+## 9.5 **formal info 未来工作量泄漏已收口（M1.3g-e-d-R1，2026-09-21）**
+
+新增 `tests/test_m13gedr1_info_leakage.py`（**5 passed**）。`g-e-d` 已收口
+observation / reward / `total_task_count`；本卡补 **info** 仅剩的两处由**整段**
+任务计算的出口：
+
+1. reset `_task_scale_info()` 的 `effective_total_workload` / `average_task_workload`
+   （改前 `Obtained 306.0` vs `Expected 281.0`）；
+2. step info 的 `completion_rate`（改前 `0.42038216560509556` vs `0.4697508896797153`）。
+
+**方法**：两个状态完全相同的 formal env，只在一个里复制一个 `arrival_time`
+晚于被测时点的 Task；先证 mutation 生效，再断言两出口不变，并对照当步
+`completed_work`（37.0 双侧）与 **reward**（0.3868284143 双侧）相同 —— 证明差异
+**只**出现在 info 出口。
+
+**最小实现**：formal 分支只统计**已到达**任务（含 initial backlog）；
+新增 `_arrived_available_work(current_time)`；step 的 `completion_rate` 用**本步
+时点 `t`** 而非已自增的 `current_step`；终点与整段一致。**未改** reward / 任务执行 /
+terminal settlement；legacy 走**原代码路径**（逐字不变）。
+
+**验收**：原 `g-e-d` **27 passed** 继续通过；相关 focused **840 passed**；
+`make check` exit 0（**2766 passed**）；`make smoke` exit 0；`make train` **exit 2**；
+`runs/train_real_*` **120 个全失败、0 success**、无 checkpoint；readiness **仍全 false**。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+# 本卡完整范围（4 提交，含记录提交）
+git revert fa82d78 2afb5a5 4d532bb 641cb19   # == bc22f01^{tree}
+~~~
+
+> ## ⛔ **g-e-d-R1 完成即停，等待人工复审。**
+> **未开始** g-f（训练门禁）、训练接线、正式训练、评估、M6；readiness **仍为 false**。
+
 ## 10. 后续顺序
 
 ~~~

@@ -3025,6 +3025,56 @@ git revert 950c131 ffb7cc2 3f836b7 bb5cc9e 2a15961
 
 > ## ⛔ **g-e-d 完成即停，等待人工复审。**
 > **未开始** g-f、训练接线、正式训练、评估、M6；readiness **仍为 false**。
+
+### 7AV. M1.3g-e-d-R1：收口 formal info 中的未来工作量泄漏（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §bd–§be。`g-e-d` 已收口 observation / reward /
+`total_task_count`，本卡只补 **info** 仅剩的两处由**整段**任务计算的出口：
+
+| # | 出口 | 改前 |
+|---|---|---|
+| 1 | reset `_task_scale_info()` 的 `effective_total_workload` / `average_task_workload` | `_total_available_work()`（`arrival_time < horizon`）+ `len(self.tasks)` |
+| 2 | step info `completion_rate` | 分母同为整段 `_total_available_work()` |
+
+**先红原文（逐字）**：
+```text
+test_reset_task_scale_info_excludes_future_workload
+  Obtained: 306.0    Expected: 281.0 ± 2.8e-04
+test_step_completion_rate_excludes_future_workload
+  Obtained: 0.42038216560509556   Expected: 0.4697508896797153 ± 4.7e-07
+```
+
+**mutation 对照（两个状态相同的 formal env，只在一个里复制未来任务）**：
+```text
+reset  : 9 -> 10 个任务 (arrival_time=1) [mutation 生效]
+         effective_total_workload ref=70.0      probe=70.0      ✅
+         average_task_workload    ref=35.000000 probe=35.000000 ✅
+step   : 9 -> 10 个任务 (arrival_time=3, 当前步=2) [mutation 生效]
+         completion_rate          ref=1.0000000000 probe=1.0000000000 ✅
+         对照 completed_work      ref=37.0  probe=37.0            ✅
+         对照 reward              ref=0.3868284143 probe=同值       ✅
+```
+
+**最小实现**：`_task_scale_info()` 的 formal 分支只统计已到达任务（含 initial
+backlog）；新增 `_arrived_available_work(current_time)`；step `completion_rate`
+的 formal 分母改用**本步时点 `t`**（不是已自增的 `current_step`，否则会把下一步
+到达计入）；终点 `t == horizon - 1` 时与整段一致。**未改** reward、任务执行、
+terminal settlement；legacy 走**原代码路径**。
+
+**验收**：新测试 **5 passed**；原 `g-e-d` **27 passed**（两文件合计 32）；相关
+focused **840 passed**；`make check` exit 0（**2766 passed**，ruff `All checks
+passed!`、mypy 通过）；`make smoke` exit 0；`make train` **exit 2**；
+`runs/train_real_*` **120 个全失败、0 success**、无 checkpoint；readiness **仍全 false**。
+
+**本卡完整回滚（4 提交，newest-first）**——在 `fa82d78` 上实测，零冲突：
+```bash
+git revert fa82d78 2afb5a5 4d532bb 641cb19
+# == bc22f01^{tree} = 2de461ec636ee4670c04bd771da94534b09ac11c
+```
+（**实现范围** 3 提交的回滚 `git revert 2afb5a5 4d532bb 641cb19` 得同一棵树。）
+
+> ## ⛔ **g-e-d-R1 完成即停，等待人工复审。**
+> **未开始** g-f、训练接线、正式训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
