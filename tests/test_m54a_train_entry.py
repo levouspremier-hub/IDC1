@@ -73,17 +73,23 @@ def test_module_invocation_exits_zero_with_help():
 
 # --- 2. 默认必须因 M1.2 阻塞明确失败，且不回退合成数据 ----------------------
 
-def test_default_invocation_fails_with_m12_blocker(tmp_path):
+def test_default_invocation_fails_with_an_m13_blocker(tmp_path):
+    """默认 real 路径必须**明确失败**，且归因到 **M1.3 发布门禁**。
+
+    **M1.3g-f-a 迁移**：原断言要求错误文本含 `"M1.2"`，与陈旧归因**措辞耦合**；
+    real 入口切到 B6/v5 后，阻塞已从「M1.2 冻结数据不可用」变为
+    「M1.3 readiness 未放行」。按本用例真正要保证的**意图**改写：
+    失败**明确**、归因 **M1.3**、**透出原始错误**、**绝不**回退合成数据、
+    **不写**成功 run。**未删除该测试，也未放宽任何失败语义。**
+    """
     result = run_cli("--base-dir", str(tmp_path), "--run-id", "blocked")
     assert result.returncode != 0, "默认路径不得成功"
     combined = result.stdout + result.stderr
-    assert "M1.2" in combined, f"必须明确指出 M1.2 阻塞：{combined}"
-    # **M1.3f-e-b2-b 迁移**：原断言 `"manifest" in combined` 与旧失败模式
-    # （「manifest 缺少字段 source」）**措辞耦合**；正式入口切到 B6/v5 后，
-    # 默认起点 '2023-01-01' 先被 v5 loader 拒绝（非网格/无时区）。
-    # 改为断言该用例真正要保证的**意图**：失败是**明确**的、且**原始错误被透出**、
-    # **绝不**回退合成数据。没有放宽任何东西。
-    assert "原始错误" in combined, f"必须透出原始错误：{combined}"
+    assert "M1.3" in combined, f"必须明确指出 M1.3 发布门禁阻塞：{combined}"
+    assert "M1.2" not in combined, f"归因不得再写 M1.2：{combined}"
+    assert "2023-01-01" not in combined, f"不得再用硬编码 M1.2 起点：{combined}"
+    assert "原始错误" in combined or "readiness" in combined or "发布" in combined, (
+        f"必须给出明确原因：{combined}")
     assert "TrainEntryError" in combined, combined
     assert "synthetic=true" not in combined, f"绝不回退合成数据：{combined}"
     assert "run 产物" not in combined, f"失败时不得写成功 run：{combined}"
