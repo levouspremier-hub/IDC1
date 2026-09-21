@@ -84,16 +84,19 @@ def _formal_buffer(steps: int = STEPS, corrector_on: bool = False):
     from safe_rl_v2.buffer import RolloutBuffer
     from safe_rl_v2.rollout import collect_rollout
 
-    kwargs = {}
-    if corrector_on:
-        from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S
-        kwargs = {"corrector_on": True,
-                  "corrector_time_limit_s": PRODUCTION_CORRECTOR_TIME_LIMIT_S}
     generator = torch.Generator()
     generator.manual_seed(0)
     buffer = RolloutBuffer()
-    collect_rollout(env, policy, buffer, steps=steps, seed=0, generator=generator,
-                    **kwargs)
+    if corrector_on:
+        from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S
+
+        collect_rollout(env, policy, buffer, steps=steps, seed=0,
+                        corrector_on=True,
+                        corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+                        generator=generator)
+    else:
+        collect_rollout(env, policy, buffer, steps=steps, seed=0,
+                        generator=generator)
     return buffer, policy, env
 
 
