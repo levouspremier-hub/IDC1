@@ -265,16 +265,38 @@ def test_empty_buffer_fails_closed():
 
 @needs_assets
 def test_non_finite_loss_fails_closed_without_stepping():
+    """**自然**触发非有限损失（不用任何测试专用后门）：
+
+    `old_raw_log_prob = -1e30` ⇒ `ratio = exp(new + 1e30) = inf` ⇒ 损失非有限。
+    """
     buffer, policy, _env = _formal_buffer()
     optimizer = _optimizer(policy)
     before = _param_vector(policy).copy()
+    n = len(buffer)
 
     m = pu()
     with pytest.raises((ValueError, RuntimeError)):
-        m.single_ppo_update(
-            policy, optimizer, _lagrangian(), buffer,
-            clip_epsilon=CLIP_EPSILON, gamma=0.99, lam=0.95,
-            _force_non_finite_loss=True)
+        m.single_ppo_update_from_arrays(
+            policy, optimizer, _lagrangian(),
+            observation=torch.as_tensor(
+                np.stack([t.observation for t in buffer.transitions]),
+                dtype=torch.float32),
+            raw_action=torch.as_tensor(
+                np.stack([t.raw_action for t in buffer.transitions]),
+                dtype=torch.float32),
+            old_raw_log_prob=torch.full((n,), -1e30, dtype=torch.float32),
+            rewards=torch.as_tensor([t.reward for t in buffer.transitions]),
+            business_violations=torch.as_tensor(
+                [t.business_cost for t in buffer.transitions]),
+            carbon_emissions=torch.as_tensor(
+                [t.carbon_cost for t in buffer.transitions]),
+            terminated=torch.zeros(n, dtype=torch.bool),
+            truncated=torch.zeros(n, dtype=torch.bool),
+            adv_reward=torch.ones(n, dtype=torch.float32),
+            adv_business=torch.zeros(n, dtype=torch.float32),
+            adv_carbon=torch.zeros(n, dtype=torch.float32),
+            clip_epsilon=CLIP_EPSILON, gamma=0.99, lam=0.95)
+
     assert np.array_equal(before, _param_vector(policy)), \
         "损失非有限时必须明确失败，且**不得**已经 step"
     assert len(optimizer.state) == 0
