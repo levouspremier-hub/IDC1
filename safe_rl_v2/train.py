@@ -54,6 +54,7 @@ from safe_rl_v2.lagrangian import Lagrangian, validate_constraint_signals
 from safe_rl_v2.models import compute_three_value_targets
 from safe_rl_v2.policy import SafePPOPolicy
 from safe_rl_v2.rollout import collect_rollout
+from scenario.splits import SplitName
 
 # 可导 likelihood 的来源（供审计断言，不参与计算）
 LOG_PROB_SOURCE = "evaluate_raw_actions(raw_action)"
@@ -425,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
 #
 # 不得自建 hash 校验器：完整性一律复用既有 verified public 链。
 
-FORMAL_TRAINING_SPLIT = "train"
+FORMAL_TRAINING_SPLIT: SplitName = "train"
 FORMAL_TRAINING_FORECAST_CUTOFF = 4
 # canonical 网格步长（分钟）：episode start 必须落在严格 30 分钟网格上。
 CANONICAL_GRID_MINUTES = 30
