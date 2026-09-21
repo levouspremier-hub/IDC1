@@ -2971,6 +2971,60 @@ git revert a51d7cf 5bab66d 98f4195 1edbade
 
 > ## ⛔ **g-e-c-R2 完成即停，等待人工复审。**
 > **未开始** g-e-d、g-f、训练、评估、M6；readiness **仍为 false**。
+
+### 7AU. M1.3g-e-d：跨层守恒、泄漏与重放回归（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §bb–§bc。**R2 已通过人工审核**（§ba，`2a15961`）。
+
+**四组回归 + 4 条真实先红**（`docs/task_cards/M1.3g.md` §bc.2 有逐字原文）：
+
+| 组 | 内容 | 结果 |
+|---|---|---|
+| 1 | 原始 aggregate 守恒（账本/搬运/逐步/终点，3 split） | **改前已绿** ✅ |
+| 2 | 半小时执行量与物理负载 | **先红**（负载低估 2×）→ 转绿 |
+| 3 | 因果性与未来任务数 | **先红 ×3** → 转绿 |
+| 4 | 重放（mapper 确定性 / reset / 独立 env 动作重放） | **改前已绿** ✅ |
+
+**修复的 4 个生产缺陷（最小修改，仅 `envs/idc_price_env.py`）**：
+
+1. **`_loads_from_group_completion` 单位错**：除以 `C_server`（work/hour）而非
+   `C_server × delta_t_hours`。formal 下任务负载被低估 **2×**（半油门完成全部
+   计划量得 `0.2`，应为 `0.4`）→ 连带 IDC 功率 / 能耗 / 成本 / 碳被低估。
+   legacy `delta_t_hours = 1.0`，**恒等变换**。
+2. **observation 泄漏**：`_get_task_pool_features` 的 `total_task_ref` 用了
+   `len(self.tasks)`（含**未到达**任务）→ 复制一个未来任务即改变观测。
+3. **reward 泄漏**：`step()` 6 处归一化分母用 `len(self.tasks)` → 已到达状态与
+   动作完全相同的当步 reward 随未来任务数变化（`0.183257 != 0.166743`）。
+4. **info 泄漏**：reset `info["total_task_count"]` = `len(self.tasks)`（9）而
+   t=0 已到达仅 2。
+
+统一引入 `_task_count_ref()`：**formal** 只数**已到达**任务；
+**legacy** 返回 `max(len(self.tasks), 1)`。终止结算的 `deadline_miss_norm` 同步收口。
+
+**legacy 不变（实测）**：`c_server × 1.0 == c_server`；
+`_task_count_ref() == max(len(self.tasks),1)`（13 == 13）；
+legacy `info["total_task_count"] == len(self.tasks)`。
+
+**守恒结论**：全仓库**无任何**写 `status = "failed"` 的路径（仅读取），故守恒式
+**不存在**误差项或工作量去向项；48 步压力 episode 逐步守恒 residual ≤ 1e-6，
+终点 `terminal_leftover_work == 最终 backlog == 1102.7789460006582`。
+**未**改 `C_server`、任务量、arrival 缩放、队列或容量。
+
+**验收**：新测试 **27 passed**；相关 focused **835 passed**；`make check`
+exit 0（**2761 passed**，ruff `All checks passed!`、mypy 通过）；`make smoke` exit 0；
+`make train` **exit 2**；`runs/train_real_*` **117 个全失败、0 success**、
+无 checkpoint；readiness **仍全 false**；冻结资产逐字节未变。
+
+**本卡完整回滚（5 提交，newest-first）**——在 `950c131` 上实测，零冲突：
+```bash
+git revert 950c131 ffb7cc2 3f836b7 bb5cc9e 2a15961
+# == f6734e6^{tree} = 1924f17d06ba893e8eb2d071acf6bde90ef1b4d7
+```
+（`f6734e6` 即本卡开工前的 R2 最终 HEAD。**实现范围** 4 提交的回滚
+`git revert ffb7cc2 3f836b7 bb5cc9e 2a15961` 得同一棵树。）
+
+> ## ⛔ **g-e-d 完成即停，等待人工复审。**
+> **未开始** g-f、训练接线、正式训练、评估、M6；readiness **仍为 false**。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

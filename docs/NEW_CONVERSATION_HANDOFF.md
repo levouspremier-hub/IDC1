@@ -610,6 +610,46 @@ git revert a51d7cf 5bab66d 98f4195 1edbade                    # == 1f1f61a^{tree
 > ## ⛔ **g-e-c-R2 完成即停，等待人工复审。**
 > **未开始** g-e-d（回归）、g-f（训练门禁）、训练、评估、M6。
 
+## 9.4 **跨层守恒 / 泄漏 / 重放回归已落地（M1.3g-e-d，2026-09-21）**
+
+**R2 已通过人工审核**（`docs/task_cards/M1.3g.md` §ba，提交 `2a15961`）。
+
+新增 `tests/test_m13ged_arrival_conservation.py`（**27 passed**），四组：
+**① 原始 aggregate 守恒**（mapper 整数账本 == `int(raw_aggregate[global_origin+k])×1e6`，
+initial backlog 单列，逐步/终点守恒，3 split）、**② 半小时执行量与物理负载**、
+**③ 因果性与未来任务数**、**④ 重放**（mapper 确定性、reset 重放、独立 env 动作重放）。
+
+**本轮修复了 4 个真实生产缺陷**（均先红后转绿，仅改 `envs/idc_price_env.py`）：
+
+1. `_loads_from_group_completion` 除以 `C_server` 而非 `C_server × delta_t_hours`
+   —— formal 下**任务负载被低估 2×**（半油门完成全部计划量得 `0.2`，应为 `0.4`），
+   连带 IDC 功率 / 能耗 / 成本 / 碳被低估；legacy `delta = 1.0` 为恒等变换；
+2. `_get_task_pool_features` 的 `total_task_ref` 用 `len(self.tasks)`（含未到达任务）
+   → 未来任务数进入 **observation**；
+3. `step()` 6 处归一化分母同源 → 当步 **reward** 随未来任务总数变化
+   （`0.183257 != 0.166743`，而已到达状态与动作完全相同）；
+4. reset `info["total_task_count"]` 含未来任务。
+
+统一以 `_task_count_ref()` 收口：**formal 只数已到达任务，legacy 逐字不变**
+（实测 `c_server × 1.0 == c_server`、`_task_count_ref() == len(self.tasks)`）。
+**未**修改 mapper 参数、B6/v3 数据、`refs_v4`、`formal_splits_v5`、冻结 manifest、
+`idc_model/`、训练 / PPO / 评估 / readiness；**未**丢弃任务、缩放 arrival、
+重置队列或放松容量。全仓库无写 `status = "failed"` 的路径，故守恒式**无误差项**。
+
+**验收**：`make check` exit 0（**2761 passed**）；`make smoke` exit 0；
+`make train` **exit 2**；`runs/train_real_*` **117 个全失败、0 success**、无 checkpoint；
+readiness **仍全 false**。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+# 本卡完整范围（5 提交，含记录提交）
+git revert 950c131 ffb7cc2 3f836b7 bb5cc9e 2a15961   # == f6734e6^{tree}
+~~~
+
+> ## ⛔ **g-e-d 完成即停，等待人工复审。**
+> **未开始** g-f（训练门禁）、训练接线、正式训练、评估、M6；readiness **仍为 false**。
+
 ## 10. 后续顺序
 
 ~~~
