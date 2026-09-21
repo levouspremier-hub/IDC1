@@ -148,8 +148,11 @@ def test_real_preflight_calls_the_training_purpose_gate(monkeypatch, tmp_path):
     monkeypatch.setattr(validators, "validate_forecast_purpose", spy)
     rc = train.main(["--base-dir", str(tmp_path), "--run-id", "gate"])
     assert rc != 0, "当前 readiness=false，real 入口必须非零退出"
-    assert calls == ["training"], (
-        f"real preflight 必须且只能以 purpose='training' 调用 gate，实际 {calls}")
+    # `build_formal_scenario_b6` 内部也会过门，故计数 ≥ 1；关键是 real preflight
+    # **自己**也必须显式调用（改前为 **0 次**，因为 build_scenario 提前失败）。
+    assert calls.count("training") >= 1, (
+        f"real preflight 必须显式以 purpose='training' 调用 gate，实际 {calls}")
+    assert set(calls) == {"training"}, f"real 入口不得使用任何非 training purpose：{calls}"
 
 
 # =============================================================================
@@ -176,7 +179,9 @@ def test_real_preflight_consults_the_verified_v5_loader(monkeypatch, tmp_path):
     monkeypatch.setattr(v5mod, "load_verified_split_manifest_v5", spy)
     rc = train.main(["--base-dir", str(tmp_path), "--run-id", "chain"])
     assert rc != 0
-    assert seen == ["train"], f"必须经 verified v5 loader 读取 train split，实际 {seen}"
+    # `load_verified_mapper_chain` 内部也会读 v5，故计数 ≥ 1。
+    assert seen.count("train") >= 1, f"必须经 verified v5 loader 读取 train split，实际 {seen}"
+    assert set(seen) == {"train"}, f"只允许读取 train split，实际 {seen}"
 
 
 def test_real_preflight_fails_closed_when_the_verified_chain_rejects(monkeypatch, tmp_path):
