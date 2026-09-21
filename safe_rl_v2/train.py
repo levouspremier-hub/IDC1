@@ -520,32 +520,65 @@ def _require_formal_training_entry(args) -> None:
             f"{type(exc).__name__}: {exc}"
         ) from exc
 
-    # ⑥ readiness（**最后**）：v5 明示 formal_*_ready=false 即 M1.3 发布门禁未放行
+    # ⑥ 发布状态判定（**最后**）—— **合取门**（M1.3g-f-b-b）：
+    #   ⑥a v5 自身的 readiness 必须**严格保持** both-false（v5 字节冻结，
+    #       不得被运行时覆盖；发布批准由**独立产物**给出，不改 v5）；
+    #   ⑥b 独立发布产物必须验签通过，且声明 formal_env_ready=true；
+    #   ⑥c formal_training_ready=false 继续**阻断训练**（本卡不让训练成功）。
     # 直接索引、**不**用 `.get()` 兜底（本模块红线，由 m51c 结构性守卫）；
     # 字段缺失时由入口自身明确 fail closed，而不是被动撞 KeyError。
     required = ("formal_env_ready", "formal_training_ready")
     if "readiness" not in payload:
         raise TrainEntryError(
             f"verified v5 train split 缺少 readiness 字段 {list(required)}，"
-            "无法判定 M1.3 发布门禁，故明确失败（**不**回退到合成数据）"
+            "无法判定 M1.3 发布状态，故明确失败（**不**回退到合成数据）"
         )
     readiness = payload["readiness"]
     absent = [name for name in required if name not in readiness]
     if absent:
         raise TrainEntryError(
             f"verified v5 train split 缺少 readiness 字段 {absent}，"
-            "无法判定 M1.3 发布门禁，故明确失败（**不**回退到合成数据）"
-        )
-    blocked = sorted(name for name in required if not readiness[name])
-    if blocked:
-        raise TrainEntryError(
-            f"M1.3 发布门禁未放行：verified v5 train split 声明 {blocked} 为 false，"
-            "故正式训练入口明确失败（**不**回退到合成数据、**不**写成功 run）。"
-            f"episode start={start}（由 candidate origin {origin} 推导）、"
-            f"split={split}、readiness={dict(readiness)}"
+            "无法判定 M1.3 发布状态，故明确失败（**不**回退到合成数据）"
         )
 
-    raise TrainEntryError(  # pragma: no cover - readiness 放行前不可达
+    # ⑥a：v5 的 readiness 必须是**严格的** both-false（合取门的第一半）
+    if any(readiness[name] is not False for name in required):
+        raise TrainEntryError(
+            "verified v5 train split 的 readiness 必须严格保持 both-false"
+            "（v5 字节冻结；发布批准由独立产物给出，不得运行时覆盖 v5）；"
+            f"实际 {dict(readiness)}"
+        )
+
+    # ⑥b：独立发布产物（方案 B）——env 的发布批准来自它，而不是 v5
+    from scenario.env_release import load_verified_env_release
+
+    try:
+        release = load_verified_env_release()
+    except Exception as exc:
+        raise TrainEntryError(
+            "M1.3 formal env 尚未发布：独立发布产物缺失或校验失败，"
+            "故正式训练入口明确失败（**不**回退到合成数据、**不**忽略 v5 readiness）。"
+            f"原始错误：{type(exc).__name__}: {exc}"
+        ) from exc
+    release_readiness = release["readiness"]
+    if release_readiness["formal_env_ready"] is not True:
+        raise TrainEntryError(
+            "M1.3 formal env 未放行：发布产物声明 formal_env_ready != true，"
+            f"故明确失败。readiness={dict(release_readiness)}"
+        )
+
+    # ⑥c：训练**仍未**放行 —— 本卡不把训练成功当作 env 发布的验收条件
+    if release_readiness["formal_training_ready"] is not True:
+        raise TrainEntryError(
+            "M1.3 训练未放行：发布产物声明 formal_training_ready=false，"
+            "且 train.py 尚无正式训练循环，故正式训练入口明确失败"
+            "（**不**回退到合成数据、**不**写成功 run）。"
+            f"env 已发布（formal_env_ready=true）；"
+            f"episode start={start}（由 candidate origin {origin} 推导）、"
+            f"split={split}、release_readiness={dict(release_readiness)}"
+        )
+
+    raise TrainEntryError(  # pragma: no cover - 训练放行前不可达
         "真实数据路径的正式训练尚未实现（需 M1.3g-f 的训练循环）"
     )
 
