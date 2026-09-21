@@ -465,7 +465,10 @@ def _require_formal_training_entry(args) -> None:
     任一上游缺失或校验失败**明确失败**，**不回退**旧 v1–v4、默认曲线或 synthetic。
     """
     from contracts.validators import validate_forecast_purpose
-    from scenario.arrival_mapper import load_verified_mapper_chain
+    from scenario.arrival_mapper import (
+        load_verified_mapper_chain,
+        load_verified_mapper_manifest,
+    )
     from scenario.b6_refs import (
         CANONICAL_MANIFEST_LOGICAL,
         CANONICAL_PARQUET_LOGICAL,
@@ -484,6 +487,11 @@ def _require_formal_training_entry(args) -> None:
         payload = load_verified_split_manifest_v5(expected_split=split)
         # ② 完整性：复用**同一条** verified public 链（B6 policy / v3 / refs_v4 / v5）
         load_verified_mapper_chain(split)
+        # ②b **M1.3g-f-a-R1**：`load_verified_mapper_chain()` **不**验证冻结 mapper
+        # 参数 manifest；必须显式调用它自己的公开 loader（canonical 位置 / 冻结参数 /
+        # 来源 hash / live revision / 锚定 refs_v4 冻结时刻）。这里**不**复制任何
+        # 参数或 hash 校验逻辑，也**不**重物化 mapper manifest。
+        load_verified_mapper_manifest()
         # ③ 起点来自 **verified candidate origin**，不是硬编码
         start = formal_training_episode_start(payload)
         origin = int(payload["candidate_origins"]["start"])
