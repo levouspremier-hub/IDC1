@@ -3462,6 +3462,54 @@ git revert 7b5afcb 3801f93 e40773d 58092b0 9c53071 a44d335 b1482c5 b7b0ff1 d28ec
 > ## ⛔ **f-c-c 完成即停，等待人工复审。**
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
+### 7BD. M1.3g-f-c-c-R1：单次 PPO 更新验收证据修正（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ca–§cc。f-c-c **复审不通过**（1 × P1 + 2 × P2）。
+
+**P1（唯一先红）**：`grad_norm_actor` 实为**全参数**（含 critic）范数，
+属**证据误标**。
+
+```text
+改前：grad_norm_actor = 51.312550 == 全参数范数；actor+log_std 实为 17.251099
+改后：grad_norm_actor = 17.251099（只 actor 与 log_std，5 参数逐一非零）
+      grad_norm_total = 51.312550（如实命名）
+```
+
+**P2-a（`∞` 结论写错）**：`§bz.5` 曾笼统写「`ratio → +inf` 不会产生非有限损失」，
+该结论**只在正优势时成立**：
+
+```text
+ratio=inf, A=+2 → min(inf, 2.4)     = 2.4    有限（上界 clip）
+ratio=inf, A=−2 → min(−inf, −2.4)   = −inf   **非有限**
+```
+
+实测负优势路径由**入口自身**在 step 前拒绝（`ValueError: 损失非有限（inf）`，
+`optimizer.state` 为空）。**结论已在三份文档更正**，并补正负优势对照；NaN 用例保留。
+
+**P2-b**：两个文件末尾空行已删（验收须跑 `git diff --check cc84c63..HEAD`，
+而非仅工作树）；f-c-c 卡范围实际改动 **5 个文件**，账本已更正。
+
+**单头扰动（改前已绿 ⇒ 回归守卫）**：全程不 step，只改一个输入字段 —— 改
+`reward`/`business_cost`/`carbon_cost` 各自**只**改变对应头的 target 与 MSE，
+另两头**逐位不变**。
+
+**验收**：测试 **18 passed**（原 10 + 新 8）；`make check` exit 0（**2852 passed**，
+ruff/mypy 145 files 全通过）；`make smoke` exit 0；`make train` **exit 2**；
+`runs/train_real_*` **139 个全失败、0 success**；`git diff --check cc84c63..HEAD` **空**。
+
+**资产未变**：v5 三份 / `refs_v4` / mapper manifest / **发布产物 v1 `017575dc`
+未重物化**。**未**修改 `train.py`、env、冻结资产。
+
+**本卡完整回滚（5 提交，newest-first）**——在 `d614bdc` 上实测，零冲突：
+```bash
+git revert d614bdc 09e4525 c5ce734 f24e801 17197e4
+# == cc84c63^{tree} = 07f9498ec6f03ef4f621ec0ffb939bc104779a2f
+```
+
+> ## ⛔ **f-c-c-R1 完成即停，等待人工复审。**
+> **未接**正式训练循环或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

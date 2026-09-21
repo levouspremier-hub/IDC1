@@ -960,6 +960,41 @@ git revert 7b5afcb 3801f93 e40773d 58092b0 9c53071 a44d335 b1482c5 b7b0ff1 d28ec
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.13 **单次 PPO 更新验收证据已修正（M1.3g-f-c-c-R1，2026-09-22）**
+
+f-c-c **复审不通过**（1 × P1 + 2 × P2），本卡只修证据与文档，**不改功能语义**。
+
+**P1（唯一先红）**：`grad_norm_actor` 误标为 actor 梯度，实为**全参数**范数。
+
+~~~text
+改后：grad_norm_actor = 17.251099（只 actor 与 log_std，5 参数逐一非零）
+      grad_norm_total = 51.312550（如实命名，含 critic）
+~~~
+
+**P2-a（重要数学更正）**：`ratio → +inf` 的后果**取决于优势符号** ——
+正优势 `→ min(inf, 1.2×A) = 1.2×A` **有限**；负优势 `→ min(−inf, 1.2×A) = −inf`
+**非有限**，由入口在 step 前拒绝。`§bz.5` 原结论**只在正优势时成立**，已更正。
+
+**P2-b**：两文件末尾空行已删（验收改用 `git diff --check cc84c63..HEAD`）；
+f-c-c 卡范围实际改动 **5 个文件**，账本已更正。
+
+**单头扰动（回归守卫，改前已绿）**：不 step，只改一个输入字段 ⇒ 只有对应头的
+target/MSE 变化，另两头逐位不变。
+
+**验收**：**18 passed**；`make check` exit 0（**2852 passed**）；`make smoke` exit 0；
+`make train` **exit 2**；`runs/train_real_*` **139 个全失败、0 success**；
+`git diff --check cc84c63..HEAD` 空。资产未变（发布产物 v1 `017575dc` 未重物化）。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert d614bdc 09e4525 c5ce734 f24e801 17197e4   # == cc84c63^{tree}
+~~~
+
+> ## ⛔ **f-c-c-R1 完成即停，等待人工复审。**
+> **未接**正式训练循环或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~
