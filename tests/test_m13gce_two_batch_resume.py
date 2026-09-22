@@ -179,24 +179,46 @@ def test_resumed_batch2_matches_continuous_batch2_bit_for_bit(tmp_path):
 
 
 @needs_assets
-def test_resume_restores_the_pre_batch2_object_state(tmp_path):
-    """恢复必须把**对象状态**写回去，而不是只返回一个 origin。"""
-    m = tb()
-    continuous = _continuous()
-    first, _second, _ckpt, objects = _saved_and_resumed(tmp_path)
-    policy2, optimizer2, lagrangian2, generator2 = objects
+def test_resume_writes_state_into_freshly_constructed_objects(tmp_path):
+    """**恢复边界**：`load` 必须把状态**写进调用方新建的对象**，而不是只返回 origin。
 
-    b1 = continuous["batches"][0]
-    # 恢复到的是**批 1 结束**时的状态（不是初始状态）
-    assert m._policy_state_digest(policy2) != b1["policy_state_digest"], \
-        "批 2 之后策略必须已前进（否则本用例区分不出恢复是否生效）"
-    assert lagrangian2._updates == 2, "恢复的 Lagrangian 必须累计到 2 次更新"
+    ⚠️ **R1 重命名**：原名为 `..._restores_the_pre_batch2_object_state`，但它实际
+    检查的是**批 2 之后**的状态（`_saved_and_resumed` 在返回前已跑完批 2），
+    名实不符。现改为在**批 2 开始之前**检查，并取一个准确的名字。
+    """
+    m = tb()
+    obs_dim = _obs_dim()
+    policy, optimizer, lagrangian, generator = _objects(obs_dim)
+    m.run_single_batch(policy, optimizer, lagrangian, generator,
+                       start=_start(0), **_batch_kwargs())
+    ckpt = tmp_path / "boundary.pt"
+    m.save_two_batch_checkpoint(
+        ckpt, policy=policy, optimizer=optimizer, lagrangian=lagrangian,
+        generator=generator, next_start=_start(1), obs_dim=obs_dim, action_dim=21)
+    boundary = _full_state(policy, optimizer, lagrangian, generator)
+
+    # 全新对象：构造后、load 前，状态必须是**初始**的
+    p2, o2, l2, g2 = _objects(obs_dim)
+    fresh = _full_state(p2, o2, l2, g2)
+    assert not fresh["optimizer"]["state"], "load 前 optimizer 状态应为空"
+    assert l2._updates == 0, "load 前 Lagrangian 应零更新"
+
+    resumed = m.resume_two_batch_checkpoint(
+        ckpt, policy=p2, optimizer=o2, lagrangian=l2, generator=g2,
+        expected_obs_dim=obs_dim, expected_action_dim=21)
+
+    # load 之后、**批 2 之前**：四个对象必须已等于批 1 结束时的状态
+    loaded = _full_state(p2, o2, l2, g2)
+    _assert_exact(boundary, loaded, "resumed")
+    assert resumed["next_start"] == _start(1)
+    assert l2._updates == 1, "load 后 Lagrangian 应已恢复到 1 次更新"
+
     # **RNG 前进**：恢复后的状态必须等于批 1 结束时的状态，而非初始种子状态
     initial = torch.Generator()
     initial.manual_seed(0)
-    assert m._generator_state_digest(generator2) != m._generator_state_digest(initial)
-    assert first["generator_state_digest"] == \
-           continuous["batches"][0]["generator_state_digest"]
+    assert m._generator_state_digest(g2) != m._generator_state_digest(initial)
+    assert not torch.equal(loaded["generator"], fresh["generator"]), \
+        "恢复后的 RNG 状态必须已从初始状态前进"
 
 
 # =============================================================================
@@ -333,3 +355,221 @@ def test_zero_state_rebuild_does_not_reproduce_the_result(tmp_path):
     assert zero["batch_digest"] != continuous["batches"][1]["batch_digest"]
     assert m._policy_state_digest(fresh_policy) != \
            continuous["final_policy_state_digest"]
+
+
+# =============================================================================
+# 5. M1.3g-f-c-e-R1：**完整状态**逐项精确对照
+# =============================================================================
+
+def _full_state(policy, optimizer, lagrangian, generator) -> dict:
+    """四个对象的**完整**状态快照（含嵌套 state_dict 的全部张量与标量）。"""
+    return {
+        "policy": {k: v.detach().clone() for k, v in policy.state_dict().items()},
+        "optimizer": optimizer.state_dict(),
+        "lagrangian": lagrangian.state_dict(),
+        "generator": generator.get_state(),
+    }
+
+
+def _assert_exact(a, b, path: str = "state") -> None:
+    """**逐项精确**比较嵌套结构：张量按 dtype / shape / 元素；标量与键集合亦精确。
+
+    「非空」或「digest 相同」**不**能替代本函数。
+    """
+    if torch.is_tensor(a) or torch.is_tensor(b):
+        assert torch.is_tensor(a) and torch.is_tensor(b), f"{path}: 类型不同"
+        assert a.dtype == b.dtype, f"{path}: dtype {a.dtype} != {b.dtype}"
+        assert a.shape == b.shape, f"{path}: shape {tuple(a.shape)} != {tuple(b.shape)}"
+        assert torch.equal(a, b), f"{path}: 张量元素不逐位相等"
+        return
+    if isinstance(a, dict) or isinstance(b, dict):
+        assert isinstance(a, dict) and isinstance(b, dict), f"{path}: 类型不同"
+        assert set(a) == set(b), f"{path}: 键集合不同 {sorted(set(a) ^ set(b))}"
+        for key in sorted(a):
+            _assert_exact(a[key], b[key], f"{path}.{key}")
+        return
+    if isinstance(a, (list, tuple)) or isinstance(b, (list, tuple)):
+        assert isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)), \
+            f"{path}: 类型不同"
+        assert len(a) == len(b), f"{path}: 长度 {len(a)} != {len(b)}"
+        for index, (left, right) in enumerate(zip(a, b, strict=True)):
+            _assert_exact(left, right, f"{path}[{index}]")
+        return
+    assert type(a) is type(b), f"{path}: 类型 {type(a)} != {type(b)}"
+    assert a == b, f"{path}: {a!r} != {b!r}"
+
+
+def _start(index: int) -> str:
+    return tb().TRAIN_CANDIDATE_STARTS[index]
+
+
+def _boundary_and_final_states(tmp_path) -> dict:
+    """连续路径与恢复路径的**边界**（批 2 前）与**最终**（批 2 后）完整状态。"""
+    m = tb()
+    obs_dim = _obs_dim()
+
+    # --- 连续：批1 → 边界快照 → 批2 ---
+    cp, co, cl, cg = _objects(obs_dim)
+    m.run_single_batch(cp, co, cl, cg, start=_start(0), **_batch_kwargs())
+    continuous_boundary = _full_state(cp, co, cl, cg)
+    continuous_second = m.run_single_batch(
+        cp, co, cl, cg, start=_start(1), **_batch_kwargs())
+    continuous_final = _full_state(cp, co, cl, cg)
+
+    # --- 恢复：批1 → 保存 → **全新对象** load → 边界快照 → 批2 ---
+    rp, ro, rl, rg = _objects(obs_dim)
+    m.run_single_batch(rp, ro, rl, rg, start=_start(0), **_batch_kwargs())
+    ckpt = tmp_path / "after_batch1.pt"
+    m.save_two_batch_checkpoint(
+        ckpt, policy=rp, optimizer=ro, lagrangian=rl, generator=rg,
+        next_start=_start(1), obs_dim=obs_dim, action_dim=21)
+
+    p2, o2, l2, g2 = _objects(obs_dim)
+    resumed = m.resume_two_batch_checkpoint(
+        ckpt, policy=p2, optimizer=o2, lagrangian=l2, generator=g2,
+        expected_obs_dim=obs_dim, expected_action_dim=21)
+    resumed_boundary = _full_state(p2, o2, l2, g2)
+    resumed_second = m.run_single_batch(
+        p2, o2, l2, g2, start=resumed["next_start"], **_batch_kwargs())
+    resumed_final = _full_state(p2, o2, l2, g2)
+
+    return {
+        "continuous_boundary": continuous_boundary,
+        "resumed_boundary": resumed_boundary,
+        "continuous_final": continuous_final,
+        "resumed_final": resumed_final,
+        "continuous_second": continuous_second,
+        "resumed_second": resumed_second,
+        "next_start": resumed["next_start"],
+        "resumed_objects": (p2, o2, l2, g2),
+    }
+
+
+@needs_assets
+def test_batch_boundary_state_is_exactly_restored(tmp_path):
+    """**恢复边界对照**：`load` 完、**批 2 开始前**，四个对象的**完整状态**
+    必须与连续路径在**批 1 结束时**的状态逐项精确一致。"""
+    s = _boundary_and_final_states(tmp_path)
+
+    _assert_exact(s["continuous_boundary"]["policy"], s["resumed_boundary"]["policy"],
+                  "boundary.policy")
+    _assert_exact(s["continuous_boundary"]["optimizer"],
+                  s["resumed_boundary"]["optimizer"], "boundary.optimizer")
+    _assert_exact(s["continuous_boundary"]["lagrangian"],
+                  s["resumed_boundary"]["lagrangian"], "boundary.lagrangian")
+    _assert_exact(s["continuous_boundary"]["generator"],
+                  s["resumed_boundary"]["generator"], "boundary.generator")
+    assert s["next_start"] == _start(1), "恢复必须给出**下一** origin"
+
+    # 非空洞性：边界状态既不是初始状态，也不是最终状态
+    initial_policy, *_ = _objects(_obs_dim())
+    _assert_exact(initial_policy.state_dict()["log_std"],
+                  initial_policy.state_dict()["log_std"], "sanity")
+    assert not torch.equal(
+        s["continuous_boundary"]["policy"]["log_std"],
+        initial_policy.state_dict()["log_std"]), \
+        "批 1 之后 log_std 必须已前进（否则边界对照无意义）"
+    assert not torch.equal(
+        s["continuous_boundary"]["policy"]["log_std"],
+        s["continuous_final"]["policy"]["log_std"]), \
+        "边界状态必须不同于最终状态（证明对照发生在批 2 **之前**）"
+    # 非空洞性：optimizer 状态必须**真的**含逐参数张量（不是空 dict）
+    assert s["continuous_boundary"]["optimizer"]["state"], \
+        "边界 optimizer 状态不得为空"
+
+
+@needs_assets
+def test_final_state_after_batch2_is_exactly_equal(tmp_path):
+    """**批 2 之后**：完整 optimizer / Lagrangian 状态与 policy / RNG 状态
+    必须与连续路径逐项精确一致。"""
+    s = _boundary_and_final_states(tmp_path)
+
+    _assert_exact(s["continuous_final"]["policy"], s["resumed_final"]["policy"],
+                  "final.policy")
+    _assert_exact(s["continuous_final"]["optimizer"], s["resumed_final"]["optimizer"],
+                  "final.optimizer")
+    _assert_exact(s["continuous_final"]["lagrangian"],
+                  s["resumed_final"]["lagrangian"], "final.lagrangian")
+    _assert_exact(s["continuous_final"]["generator"],
+                  s["resumed_final"]["generator"], "final.generator")
+
+    # 过渡证据（不是替代）：loss 与参数变化量
+    assert s["resumed_second"]["loss_total"] == pytest.approx(
+        s["continuous_second"]["loss_total"], rel=1e-12)
+    assert s["resumed_second"]["param_delta_norm"] == pytest.approx(
+        s["continuous_second"]["param_delta_norm"], rel=1e-12)
+
+    # 非空洞性：最终状态必须已从边界**前进**
+    assert not torch.equal(s["continuous_boundary"]["policy"]["log_std"],
+                           s["continuous_final"]["policy"]["log_std"])
+    # Adam 的 step 计数必须真的推进到 2
+    steps = {float(v["step"]) for v in s["continuous_final"]["optimizer"]["state"].values()
+             if isinstance(v, dict) and "step" in v}
+    assert steps == {2.0}, f"两次更新后 Adam step 应为 2，实际 {steps}"
+
+
+@needs_assets
+def test_boundary_restore_is_not_explainable_by_fresh_or_reseeded_objects(tmp_path):
+    """**反空洞**：全新（未 load）对象的边界状态与恢复后的边界状态必须**不同**。"""
+    s = _boundary_and_final_states(tmp_path)
+    fresh_policy, fresh_optimizer, fresh_lagrangian, fresh_generator = \
+        _objects(_obs_dim())
+    fresh = _full_state(fresh_policy, fresh_optimizer, fresh_lagrangian,
+                        fresh_generator)
+
+    with pytest.raises(AssertionError):
+        _assert_exact(s["resumed_boundary"], fresh, "boundary")
+    assert not torch.equal(s["resumed_boundary"]["policy"]["log_std"],
+                           fresh["policy"]["log_std"])
+    assert s["resumed_boundary"]["optimizer"]["state"], "恢复的 optimizer 必须非空"
+    assert not fresh["optimizer"]["state"], "全新 optimizer 的 state 应为空"
+    _ = s["resumed_objects"]
+
+
+@needs_assets
+def test_full_state_comparator_detects_a_single_element_difference(tmp_path):
+    """**比较器灵敏度**（防证据空洞）：`_assert_exact` 必须抓到**单元素**差异。
+
+    否则上面「完整状态逐项精确一致」的结论可能只是因为比较器太松。
+    """
+    s = _boundary_and_final_states(tmp_path)
+    base = s["continuous_boundary"]
+
+    # 单元素扰动：policy 的 log_std 第 0 个元素 +1e-9
+    import copy as _copy
+
+    perturbed_policy = {k: v.clone() for k, v in base["policy"].items()}
+    perturbed_policy["log_std"][0] += 1e-9
+    with pytest.raises(AssertionError, match="张量元素不逐位相等"):
+        _assert_exact(base["policy"], perturbed_policy, "policy")
+
+    # 键集合差异
+    missing = {k: v for k, v in base["policy"].items() if k != "log_std"}
+    with pytest.raises(AssertionError, match="键集合不同"):
+        _assert_exact(base["policy"], missing, "policy")
+
+    # Adam 的 step 标量差异（嵌套在 optimizer.state.<i>.step）
+    perturbed_optimizer = _copy.deepcopy(base["optimizer"])
+    index = next(iter(perturbed_optimizer["state"]))
+    perturbed_optimizer["state"][index]["step"] = (
+        perturbed_optimizer["state"][index]["step"] + 1)
+    with pytest.raises(AssertionError, match="张量元素不逐位相等"):
+        _assert_exact(base["optimizer"], perturbed_optimizer, "optimizer")
+
+    # Lagrangian 的量级差异（嵌套在 constraints.<name>.multiplier）
+    perturbed_lagrangian = _copy.deepcopy(base["lagrangian"])
+    if perturbed_lagrangian.get("constraints"):
+        name = sorted(perturbed_lagrangian["constraints"])[0]
+        perturbed_lagrangian["constraints"][name]["multiplier"] = (
+            perturbed_lagrangian["constraints"][name]["multiplier"] + 1e-9)
+        with pytest.raises(AssertionError):
+            _assert_exact(base["lagrangian"], perturbed_lagrangian, "lagrangian")
+
+    # RNG 状态差异
+    perturbed_generator = base["generator"].clone()
+    perturbed_generator[0] = (int(perturbed_generator[0]) + 1) % 256
+    with pytest.raises(AssertionError, match="张量元素不逐位相等"):
+        _assert_exact(base["generator"], perturbed_generator, "generator")
+
+    # 自身比较必须通过（非空洞性的另一半）
+    _assert_exact(base, {k: v for k, v in base.items()}, "self")
