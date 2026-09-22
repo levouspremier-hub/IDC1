@@ -3610,6 +3610,65 @@ git revert 7ef3c60 6a28606 a5fc1f1 ebbfc99 2b8f748 7b32a9e
 > ## ⛔ **f-c-d-R1 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
+### 7BG. M1.3g-f-c-e：双批次 probe 的 checkpoint/resume 等价性（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ck–§cl。f-c-d-R1 已通过人工审核（§cj，`7e9c22f`）。
+
+**新增**：`tests/test_m13gce_two_batch_resume.py`（**10 passed**）；
+`safe_rl_v2/ppo_two_batch.py` **小幅拆分**出 `run_single_batch`（两批入口与
+checkpoint 适配**同源**），并新增测试用适配
+`save_two_batch_checkpoint` / `resume_two_batch_checkpoint`（复用现有
+`checkpointing.VersionedCheckpoint`）。
+
+**先红**：`AttributeError: module 'safe_rl_v2.ppo_two_batch' has no attribute
+'run_single_batch'` × 9 + `... 'resume_two_batch_checkpoint'` ⇒ **10 failed**。
+
+**恢复边界与逐位对照（实测）**：
+
+```text
+批2 observation / raw_action / old_log_prob / batch_digest  digest 全相同
+最终 policy_state_digest 相同
+批2 loss        连续=5.846147537231      恢复=5.846147537231
+批2 param_delta 连续=1.322283230107e-01  恢复=1.322283230107e-01
+批2 乘子相同；批2 后 RNG 状态 digest 相同
+恢复的 optimizer 已推进；恢复的 Lagrangian 更新次数 = 2
+```
+
+**反空洞**：重播种状态 ≠ 真实恢复状态；零状态跑批 2 的 digest ≠ 连续批 2 digest。
+
+**契约拒收**：`contract_version_id` / `action_dim=23` / `obs_dim=280` /
+`schema_hash` / 缺 `metadata` / 缺 `next_start` —— **一律明确拒绝**。
+
+**边界声明**：本卡**只**证明**批次边界**恢复；**不**声称中途恢复、正式训练或收敛。
+checkpoint **只写测试 `tmp_path`**，仓库内无 `.pt` 落盘。
+
+**验收**：新档 **10 passed**；`tests/test_m13gcd_two_batch.py` **13 passed** 仍全绿；
+`make check` exit 0（**2875 passed**，ruff/mypy 148 files 全通过）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（`017575dc…`，未重物化）；`make train` **exit 2**；
+`runs/train_real_*` **145 个全失败、0 success**；两处 `git diff --check` **均空**。
+
+**改动 5 个文件**；**未**修改 `train.py`、`checkpointing/versioned.py`、单次 PPO 数学、
+env、冻结资产、发布产物 v1。
+
+**⚠️ 一次观测到的测试 flake（非本卡缺陷）**：首次 `make check` 为
+`1 failed, 2874 passed`，失败项
+`test_m51c_train_buffer_integration.py::test_full_decision_payload_is_identical_across_independent_runs[True]`
+（`corrector_on=True`，两次独立 MILP 运行；与既有 `test_m54g` 墙钟预算 flake 同类）。
+隔离复跑 2 次均通过；该文件**不导入** `ppo_two_batch`（实测全仓库仅自身与两个测试文件
+引用它）；不并发负载后重跑 `make check` ⇒ **exit 0 / 2875 passed**。
+两次运行耗时均远超常规，说明当时机器负载偏高。**本卡不修该 flake**。
+
+**本卡完整回滚（含记录与修正提交）**——newest-first，见 §7BG 末与
+`docs/NEW_CONVERSATION_HANDOFF.md` §9.16；卡范围 5 提交实测零冲突：
+```bash
+git revert a95bc16 2ae7bea b1c5104 8ae456e 7e9c22f
+# == 6cff8c6^{tree} = 425f15d75c53da4ae2f4c19782b4af23eb5d3129
+```
+
+> ## ⛔ **f-c-e 完成即停，等待人工复审。**
+> **未接**正式运行入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

@@ -1055,6 +1055,47 @@ git revert 7ef3c60 6a28606 a5fc1f1 ebbfc99 2b8f748 7b32a9e   # == d9e6003^{tree}
 > **未接**正式训练入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.16 **双批次 checkpoint/resume 等价性已验证（M1.3g-f-c-e，2026-09-22）**
+
+新增 `tests/test_m13gce_two_batch_resume.py`（**10 passed**）；
+`ppo_two_batch` 小幅拆分出 `run_single_batch`，并加**测试用**适配
+`save_two_batch_checkpoint` / `resume_two_batch_checkpoint`（复用现有
+`VersionedCheckpoint`）。
+
+~~~text
+批2 observation / raw_action / old_log_prob / batch_digest  digest 全相同
+批2 loss        连续=5.846147537231      恢复=5.846147537231
+批2 param_delta 连续=1.322283230107e-01  恢复=1.322283230107e-01
+批2 乘子相同；批2 后 RNG 状态 digest 相同
+恢复的 optimizer 已推进；恢复的 Lagrangian 更新次数 = 2
+~~~
+
+**反空洞**：重播种 ≠ 真实恢复；零状态跑批 2 的 digest ≠ 连续批 2 digest。
+**契约拒收**：contract_version / action_dim=23 / obs_dim=280 / schema_hash /
+缺 metadata / 缺 next_start 一律拒绝。
+
+**⚠️ 边界**：**只**证明**批次边界**恢复，**不**声称中途恢复 / 正式训练 / 收敛。
+checkpoint 只写测试 `tmp_path`。
+
+**验收**：`make check` exit 0（**2875 passed**）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（未重物化）；`make train` **exit 2**；
+`runs/train_real_*` **145 个全失败、0 success**。改动 **5 个文件**。
+
+**⚠️ 一次 flake（非本卡缺陷）**：首次 `make check` 有 1 项失败
+（`test_m51c_..._independent_runs[True]`，corrector MILP 墙钟预算，与既有
+`test_m54g` 同类）；隔离复跑 2 次均通过，该文件不导入 `ppo_two_batch`；
+不并发负载后重跑 **exit 0 / 2875 passed**。
+
+**回滚（卡范围 5 提交，实测零冲突）**：
+
+~~~bash
+git revert a95bc16 2ae7bea b1c5104 8ae456e 7e9c22f   # == 6cff8c6^{tree}
+~~~
+
+> ## ⛔ **f-c-e 完成即停，等待人工复审。**
+> **未接**正式运行入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~
