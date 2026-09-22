@@ -124,6 +124,7 @@
 # M1.3f-d：arrival intensity 审计文档（同上）
 !docs/AUDIT_ARRIVAL_INTENSITY.md
 !docs/WORK_HANDOFF.md
+!docs/CHATGPT_HANDOFF_CURRENT.md
 !docs/GRID_IEEE14_AUDIT.md
 !docs/task_cards/
 !docs/task_cards/*.md

@@ -1,6 +1,10 @@
 # IDC 项目完整交接（新对话起点）
 
-快照：2026-09-17（Asia/Shanghai）。本文是新对话的独立起点；逐卡证据、精确回滚和全部历史以 docs/WORK_HANDOFF.md、任务卡及 Git 历史为准。
+> **⚠️ 当前入口已迁移：** 本文件是累计历史账本，顶部快照和末尾“下一步”均可能
+> 早于当前 HEAD。新 ChatGPT 对话请先读
+> [`docs/CHATGPT_HANDOFF_CURRENT.md`](CHATGPT_HANDOFF_CURRENT.md)，再按需从本文追溯历史。
+
+历史快照起点：2026-09-17（Asia/Shanghai）。本文保留累计过程；当前入口见上方链接，逐卡证据、精确回滚和全部历史以 docs/WORK_HANDOFF.md、任务卡及 Git 历史为准。
 
 ## 1. 必读文件与协作协议
 
