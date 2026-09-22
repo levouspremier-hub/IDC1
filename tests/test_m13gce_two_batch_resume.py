@@ -237,10 +237,11 @@ def test_resume_rejects_mismatched_metadata(tmp_path, field, bad, expect):
     m.run_single_batch(policy, optimizer, lagrangian, generator,
                        start=tb().TRAIN_CANDIDATE_STARTS[0], **_batch_kwargs())
     path = tmp_path / "c.pt"
+    meta = {"obs_dim": obs_dim, "action_dim": 21}
+    meta[field] = bad
     m.save_two_batch_checkpoint(
         path, policy=policy, optimizer=optimizer, lagrangian=lagrangian,
-        generator=generator, next_start=tb().TRAIN_CANDIDATE_STARTS[1],
-        obs_dim=obs_dim, action_dim=21, **{field: bad})
+        generator=generator, next_start=tb().TRAIN_CANDIDATE_STARTS[1], **meta)
 
     p2, o2, l2, g2 = _objects(obs_dim)
     with pytest.raises(Exception) as exc:
