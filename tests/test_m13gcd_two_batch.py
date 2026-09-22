@@ -340,9 +340,6 @@ def test_probe_constructs_no_objects_and_reseeds_nothing(monkeypatch):
     def boom(*args, **kwargs):
         raise AssertionError("probe 不得在内部构造训练对象")
 
-    monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
-    monkeypatch.setattr(lag_mod, "Lagrangian", boom)
-    monkeypatch.setattr(lag_mod, "ConstraintSpec", boom)
     # 对象必须**在 monkeypatch 生效前**由调用方构造好
     policy, optimizer, lagrangian, generator = _make_example_objects(_obs_dim())
     monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
