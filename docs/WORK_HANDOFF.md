@@ -3669,6 +3669,56 @@ git revert a95bc16 2ae7bea b1c5104 8ae456e 7e9c22f
 > ## ⛔ **f-c-e 完成即停，等待人工复审。**
 > **未接**正式运行入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
+### 7BH. M1.3g-f-c-e-R1：批次边界状态等价证据补齐（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §cm–§cn。**只补证据，不接正式训练入口。**
+
+**是否发现生产缺陷：否。** 全部新增断言在当前实现上**直接通过** ⇒ 如实登记为
+**「验收证据补齐」**，**未**人为制造先红；`safe_rl_v2/ppo_two_batch.py` **未改**。
+
+**边界对照（批 2 开始前，实测）**：
+
+```text
+policy / optimizer / lagrangian / generator  逐项精确相同: True ×4
+  optimizer state 条目数=9，param_groups=1；lagrangian constraints=['business','carbon']
+next_start = 2024-01-03T00:00:00+08:00
+非空洞性：边界 log_std != 初始（True）；边界 log_std != 最终（True）；全新 optimizer state 为空（True）
+```
+
+**最终状态对照（批 2 之后，实测）**：四项逐项精确相同；
+`Adam step 集合 = {2.0}`、`Lagrangian updates = 2`。
+
+**比较器严格性**：`_assert_exact` 对嵌套 `state_dict` 逐项精确比较，
+并由灵敏度测试证明 —— 单元素 `log_std` 扰动、键集合差异、Adam `step` 标量差异、
+Lagrangian multiplier 差异、RNG 字节差异**全部被抓到**。
+排除「靠 optimizer 非空 / 只比 loss 或参数 digest」的弱证据。
+
+**名实不符测试已修正**：原 `test_resume_restores_the_pre_batch2_object_state`
+名为「批 2 之前」实则检查批 2 **之后** ⇒ 改为**真正检查恢复边界**并重命名为
+`test_resume_writes_state_into_freshly_constructed_objects`。
+原有 transition / 反空洞 / 契约拒收测试**全部保留**。
+
+**验收**：新档 **14 passed**（原 10 + 新 4）；`tests/test_m13gcd_two_batch.py`
+**13 passed**；两文件合计 **27 passed**；`make check` exit 0（**2879 passed**，
+ruff/mypy 148 files 全通过）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（`017575dc…`，未重物化）。
+
+> 本卡为测试/文档卡，未反复执行 `make train`。**training 仍未放行**：
+> 发布产物声明 `formal_training_ready=false`，`train.py` 仍无训练循环
+> ⇒ `make train` 仍 **exit 2**。
+
+**改动 4 个文件**（测试 + 任务卡 + 两份 handoff）；**未**修改 `train.py`、
+`checkpointing/versioned.py`、`ppo_two_batch.py`、env、冻结资产、发布产物 v1。
+
+**本卡回滚（2 提交）**：
+```bash
+git revert 3efb6a7 530e51c
+# == fce9553^{tree} = 8bc27601df5cac99f62b9c6b905274ca73719353
+```
+
+> ## ⛔ **f-c-e-R1 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

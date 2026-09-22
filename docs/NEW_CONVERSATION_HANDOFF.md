@@ -1096,6 +1096,40 @@ git revert a95bc16 2ae7bea b1c5104 8ae456e 7e9c22f   # == 6cff8c6^{tree}
 > **未接**正式运行入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.17 **批次边界状态等价证据已补齐（M1.3g-f-c-e-R1，2026-09-22）**
+
+**是否发现生产缺陷：否** —— 新增断言在当前实现上直接通过，如实登记为
+**「验收证据补齐」**，未人为制造先红；`ppo_two_batch.py` **未改**。
+
+~~~text
+边界（批2前）：policy / optimizer / lagrangian / generator 逐项精确相同 True ×4
+              optimizer state 条目=9、param_groups=1；next_start=2024-01-03T00:00:00+08:00
+最终（批2后）：四项逐项精确相同；Adam step={2.0}；Lagrangian updates=2
+非空洞性：边界 != 初始、边界 != 最终、全新 optimizer state 为空
+~~~
+
+**比较器严格性**：`_assert_exact` 逐项精确比较嵌套 `state_dict`；灵敏度测试证明
+单元素 log_std 扰动、键集合差异、Adam step 标量、Lagrangian multiplier、RNG 字节
+差异**全部被抓到**。
+
+**名实不符测试已修正**：原 `test_resume_restores_the_pre_batch2_object_state`
+实检批 2 **之后**的状态 ⇒ 改为真正检查恢复边界并重命名
+`test_resume_writes_state_into_freshly_constructed_objects`。原有测试全保留。
+
+**验收**：**14 passed**（resume 档）+ **13 passed**（f-c-d 档）= **27 passed**；
+`make check` exit 0（**2879 passed**）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（未重物化）。**training 仍未放行**（`make train` exit 2）。
+改动 **4 个文件**。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert 3efb6a7 530e51c   # == fce9553^{tree}
+~~~
+
+> ## ⛔ **f-c-e-R1 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+
 ## 10. 后续顺序
 
 ~~~
