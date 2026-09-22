@@ -143,10 +143,14 @@ def test_cumulative_steps_and_multiplier_updates_are_exactly_two():
     assert b2["lagrangian_updates_cumulative"] == 2
     assert out["lagrangian_updates_total"] == 2
 
-    # 乘子在每批之后都可能变化（用**更新前**值参与该批 actor 目标）
-    assert b1["multipliers_pre_update"] != b1["multipliers_post_update"]
+    # 乘子更新**确实发生**了（计数），而不是断言其数值必然变化：
+    # Lagrangian 的乘子被钳在 [0, max]；当违规量低于 budget 时候选值为负 ⇒ 留在 0。
+    # 故「数值是否变化」依赖数据，**不可**作为判据；这里断言的是**同一 Lagrangian**
+    # 在两个批次间被连续使用（批 2 的更新前值 == 批 1 的更新后值）。
     assert b2["multipliers_pre_update"] == b1["multipliers_post_update"], \
-        "批 2 的更新前乘子必须等于批 1 更新后的乘子（同一 Lagrangian）"
+        "批 2 的更新前乘子必须等于批 1 更新后的乘子（同一 Lagrangian 连续使用）"
+    assert b1["multipliers_pre_update"] == {"business": 0.0, "carbon": 0.0}, \
+        "初始乘子必须为 0（否则本用例的连续性对照无意义）"
     # 参数确实逐批变化
     assert b1["policy_state_digest"] != out["final_policy_state_digest"]
     assert all(b["param_delta_norm"] > 0.0 for b in (b1, b2))
