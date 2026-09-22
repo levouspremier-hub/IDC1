@@ -573,3 +573,95 @@ def test_full_state_comparator_detects_a_single_element_difference(tmp_path):
 
     # 自身比较必须通过（非空洞性的另一半）
     _assert_exact(base, {k: v for k, v in base.items()}, "self")
+
+
+# =============================================================================
+# 6. M1.3g-f-c-e-R2：边界快照必须是**真正独立**的深快照
+# =============================================================================
+
+def _adam_steps(state: dict) -> set:
+    """从 state_dict 形状的状态里取 Adam 的 step 集合。"""
+    return {float(v["step"]) for v in state["optimizer"]["state"].values()
+            if isinstance(v, dict) and "step" in v}
+
+
+def _first_exp_avg(state: dict):
+    for value in state["optimizer"]["state"].values():
+        if isinstance(value, dict) and "exp_avg" in value:
+            return value["exp_avg"]
+    raise AssertionError("optimizer 状态里找不到 exp_avg")
+
+
+@needs_assets
+def test_boundary_snapshot_is_not_mutated_by_the_second_batch(tmp_path):
+    """**R2 先红**：批 1 后的快照必须**不受**批 2 影响。
+
+    改前 `_full_state` 直接放 `optimizer.state_dict()`，其内层张量是**活引用** ⇒
+    批 2 的 `optimizer.step()` **原位改写**了快照，本用例必须失败。
+    """
+    m = tb()
+    obs_dim = _obs_dim()
+    policy, optimizer, lagrangian, generator = _objects(obs_dim)
+
+    m.run_single_batch(policy, optimizer, lagrangian, generator,
+                       start=_start(0), **_batch_kwargs())
+    boundary = _full_state(policy, optimizer, lagrangian, generator)
+
+    # 批 1 结束时：快照的 Adam step 必须是 1
+    assert _adam_steps(boundary) == {1.0}, \
+        f"批 1 后快照的 Adam step 应为 1，实际 {_adam_steps(boundary)}"
+    boundary_exp_avg = _first_exp_avg(boundary).clone()
+
+    # 用**同一** optimizer 跑批 2
+    m.run_single_batch(policy, optimizer, lagrangian, generator,
+                       start=_start(1), **_batch_kwargs())
+    live = _full_state(policy, optimizer, lagrangian, generator)
+
+    # 活状态必须已前进到 step 2
+    assert _adam_steps(live) == {2.0}, \
+        f"批 2 后活状态 Adam step 应为 2，实际 {_adam_steps(live)}"
+    # **先前快照必须仍为 1** —— 这是本用例的核心
+    assert _adam_steps(boundary) == {1.0}, (
+        "批 1 后的快照被批 2 原位改写了（快照别名活状态，不是独立深快照）："
+        f"实际 {_adam_steps(boundary)}")
+    # 至少一个 Adam 状态张量必须保持原值
+    assert torch.equal(_first_exp_avg(boundary), boundary_exp_avg), \
+        "快照里的 exp_avg 被批 2 原位改写"
+    assert not torch.equal(_first_exp_avg(boundary), _first_exp_avg(live)), \
+        "非空洞性：exp_avg 在批 2 后必须真的变化"
+
+
+@needs_assets
+def test_full_state_is_a_deep_copy_of_the_live_objects(tmp_path):
+    """**R2**：`_full_state` 的每个张量都不得与活对象共享存储。"""
+    m = tb()
+    obs_dim = _obs_dim()
+    policy, optimizer, lagrangian, generator = _objects(obs_dim)
+    m.run_single_batch(policy, optimizer, lagrangian, generator,
+                       start=_start(0), **_batch_kwargs())
+
+    snap = _full_state(policy, optimizer, lagrangian, generator)
+
+    # policy 参数
+    for name, tensor in policy.state_dict().items():
+        assert snap["policy"][name].data_ptr() != tensor.data_ptr(), \
+            f"policy.{name} 与活参数共享存储"
+    # Adam 状态张量
+    for index, value in optimizer.state_dict()["state"].items():
+        if not isinstance(value, dict):
+            continue
+        for key in ("exp_avg", "exp_avg_sq", "step"):
+            if key in value and torch.is_tensor(value[key]):
+                assert snap["optimizer"]["state"][index][key].data_ptr() != \
+                       value[key].data_ptr(), \
+                    f"optimizer.state[{index}].{key} 与活状态共享存储"
+    # generator 状态
+    assert snap["generator"].data_ptr() != generator.get_state().data_ptr(), \
+        "generator 状态与活状态共享存储"
+
+    # 变更活对象后，快照必须不变
+    for tensor in policy.parameters():
+        with torch.no_grad():
+            tensor.add_(1.0)
+    assert not torch.equal(policy.state_dict()["log_std"], snap["policy"]["log_std"]), \
+        "改动活参数后快照必须保持不变"
