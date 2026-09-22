@@ -343,19 +343,14 @@ def test_probe_constructs_no_objects_and_reseeds_nothing(monkeypatch):
     monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
     monkeypatch.setattr(lag_mod, "Lagrangian", boom)
     monkeypatch.setattr(lag_mod, "ConstraintSpec", boom)
-    monkeypatch.setattr(torch.optim, "Adam", boom)
-    monkeypatch.setattr(torch.Generator, "manual_seed", boom)
-
-    m = tb()
-    # 对象必须**在 monkeypatch 生效前**由调用方构造好（这里用未打补丁的构造路径）
-    monkeypatch.undo()
+    # 对象必须**在 monkeypatch 生效前**由调用方构造好
     policy, optimizer, lagrangian, generator = _make_example_objects(_obs_dim())
     monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
     monkeypatch.setattr(lag_mod, "Lagrangian", boom)
     monkeypatch.setattr(lag_mod, "ConstraintSpec", boom)
     monkeypatch.setattr(torch.optim, "Adam", boom)
-    monkeypatch.setattr(torch.Generator, "manual_seed", boom)
 
+    m = tb()
     out = m.run_two_batch_probe(
         policy, optimizer, lagrangian, generator,
         clip_epsilon=CLIP_EPSILON, gamma=GAMMA, lam=LAM, steps=STEPS,
@@ -379,3 +374,17 @@ def test_probe_signature_requires_all_four_objects():
     for forbidden in ("adam_lr", "learning_rate", "budget", "max_multiplier",
                       "hidden", "policy_seed", "sampling_seed"):
         assert forbidden not in params, f"probe 不得拥有超参数入参 {forbidden}"
+
+
+@needs_assets
+def test_probe_module_never_constructs_or_reseeds():
+    """**R1 源码级守卫**：模块内**不得**出现构造训练对象或播种 RNG 的调用。
+
+    （`torch.Generator` 是 C 扩展类型，`manual_seed` 无法 monkeypatch，
+    故用源码级检查补齐这一项。）
+    """
+    source = (REPO_ROOT / "safe_rl_v2" / "ppo_two_batch.py").read_text(encoding="utf-8")
+    for forbidden in ("manual_seed(", "SafePPOPolicy(", "torch.optim.Adam(",
+                      "Lagrangian((", "ConstraintSpec("):
+        assert forbidden not in source, \
+            f"probe 不得在内部构造/播种：发现 {forbidden!r}"
