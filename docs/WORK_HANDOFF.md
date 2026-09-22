@@ -3510,6 +3510,56 @@ git revert d614bdc 09e4525 c5ce734 f24e801 17197e4
 > ## ⛔ **f-c-c-R1 完成即停，等待人工复审。**
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
+### 7BE. M1.3g-f-c-d：双批次 formal PPO 更新连通性探针（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §ce–§cf。f-c-c-R1 已通过人工审核（§cd，`b3487f7`）。
+
+**新增**：`safe_rl_v2/ppo_two_batch.py`、`tests/test_m13gcd_two_batch.py`（**7 passed**）。
+两个**不同**的 formal episode（verified train v5 candidate origins **48** / **96**），
+**同一** policy / optimizer / Lagrangian / **连续**显式采样 RNG；
+每批依次 `collect_rollout → single_ppo_update`。所有超参数由调用方显式给出。
+
+**先红**：`ModuleNotFoundError: safe_rl_v2.ppo_two_batch` × 7。
+
+**两批状态证据（实测）**：
+
+```text
+批 0: origin=48  2024-01-02  transitions=3  loss=15.001939  param_delta=1.556808e-01
+      policy_state_digest=5ae2ba7c5d783788  gen_state=1ccf17250133dec5
+      optimizer_steps_cum=1  lagrangian_updates_cum=1
+批 1: origin=96  2024-01-03  transitions=3  loss=5.846148   param_delta=1.322283e-01
+      policy_state_digest=0989eea0a7e11847  gen_state=a57c15fca50c7cd2
+      optimizer_steps_cum=2  lagrangian_updates_cum=2
+total_transitions=6  optimizer_steps_total=2  lagrangian_updates_total=2
+claims 三项全 false
+```
+
+**连续性证据**：两批 `policy_state_digest` **不同**（策略确被批 0 更新改变）；
+`gen_state` **不同**（**连续 RNG 前进**，未重播种）。批 2 的
+`old_raw_log_prob` 用**批 2 采集时刻**策略重算一致、用**批 1 采集时刻**重算不同。
+
+**验收**：`make check` exit 0（**2859 passed**，ruff/mypy 全通过）；
+`make smoke` exit 0；`make train` **exit 2**；`runs/train_real_*` **141 个全失败、
+0 success**、无正式 checkpoint。
+
+**改动仅 3 个文件**；**未**修改 `train.py`、env、冻结资产；发布产物 v1
+`017575dc` **未重物化**。
+
+**本卡修正的自身缺陷**：初版断言乘子「数值必然变化」—— Lagrangian 乘子被钳在
+`[0, max]`，违规低于 budget 时留在 `0.0`，故该断言**依赖数据**且首轮失败；
+`04f5476` 改为断言实质属性（累计计数恰为 2 + 同一 Lagrangian 连续使用），
+**未**放宽失败语义。
+
+**本卡完整回滚（5 提交，newest-first）**——在 `f01f7a4` 上实测，零冲突：
+```bash
+git revert f01f7a4 04f5476 19f8ec9 949448c b3487f7
+# == 60c5e70^{tree} = 46bc3279f324a878e43db5c8ac53569a1dcba254
+```
+
+> ## ⛔ **f-c-d 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

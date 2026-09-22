@@ -995,6 +995,38 @@ git revert d614bdc 09e4525 c5ce734 f24e801 17197e4   # == cc84c63^{tree}
 > **未接**正式训练循环或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.14 **双批次 formal 更新连通性已验证（M1.3g-f-c-d，2026-09-22）**
+
+新增 `safe_rl_v2/ppo_two_batch.py` 与 `tests/test_m13gcd_two_batch.py`（**7 passed**）。
+两个**不同** formal episode（verified train v5 candidate origins **48** / **96**），
+**同一** policy / optimizer / Lagrangian / **连续**采样 RNG；每批
+`collect_rollout → single_ppo_update`。
+
+~~~text
+批 0: origin=48 2024-01-02  transitions=3  loss=15.001939  param_delta=1.556808e-01
+批 1: origin=96 2024-01-03  transitions=3  loss=5.846148   param_delta=1.322283e-01
+total_transitions=6  optimizer_steps_total=2  lagrangian_updates_total=2
+claims 三项全 false
+~~~
+
+**连续性证据**：两批 `policy_state_digest` **不同**、`gen_state` **不同**
+（RNG **前进**未重播种）；批 2 的 `old_raw_log_prob` 对应**批 2 采集时刻**的策略
+（用批 1 采集时刻重算则不同）。
+
+**验收**：`make check` exit 0（**2859 passed**）；`make smoke` exit 0；
+`make train` **exit 2**；`runs/train_real_*` **141 个全失败、0 success**。
+资产未变（发布产物 v1 `017575dc` 未重物化）。改动仅 3 个文件。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert f01f7a4 04f5476 19f8ec9 949448c b3487f7   # == 60c5e70^{tree}
+~~~
+
+> ## ⛔ **f-c-d 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~
