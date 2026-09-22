@@ -1027,6 +1027,34 @@ git revert f01f7a4 04f5476 19f8ec9 949448c b3487f7   # == 60c5e70^{tree}
 > **未接**正式训练入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 
+## 9.15 **双批次 probe 参数所有权已修正（M1.3g-f-c-d-R1，2026-09-22）**
+
+f-c-d **复审不通过**（1 × P1）：probe **自行构造** policy / `Adam(lr=1e-3)` /
+`Lagrangian` 并**自行播种** generator，等于替调用方冻结训练配置。
+
+**修复**：`run_two_batch_probe(policy, optimizer, lagrangian, generator, *, …)`
+四个对象改为**必填位置参数**；probe 只在其间**持续使用**，不构造、不播种。
+测试中的数值**明确标注**为示例输入，**不是**正式训练超参数。
+
+**所有权证据**：对象同一性四项 `is True`；仅改调用方 lr ⇒ 两批 `param_delta_norm`
+与最终状态**都变**；仅改调用方 budget ⇒ 乘子轨迹**变**；内部构造函数与
+`torch.optim.Adam` 被 monkeypatch 抛错后仍跑通；`torch.Generator` 不可
+monkeypatch ⇒ 补**源码级守卫**。
+
+**验收**：**13 passed**；`make check` exit 0（**2865 passed**）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（`017575dc…`，未重物化）；`make train` **exit 2**；
+`runs/train_real_*` **143 个全失败、0 success**。改动 **5 个文件**。
+
+**回滚（实测零冲突、逐树一致）**：
+
+~~~bash
+git revert 7ef3c60 6a28606 a5fc1f1 ebbfc99 2b8f748 7b32a9e   # == d9e6003^{tree}
+~~~
+
+> ## ⛔ **f-c-d-R1 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
 ## 10. 后续顺序
 
 ~~~

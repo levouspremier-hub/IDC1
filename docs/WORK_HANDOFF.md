@@ -3560,6 +3560,56 @@ git revert f01f7a4 04f5476 19f8ec9 949448c b3487f7
 > ## ⛔ **f-c-d 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 > **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
+
+### 7BF. M1.3g-f-c-d-R1：双批次 probe 的参数所有权修正（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §cg–§ci。f-c-d **复审不通过**（1 × P1：参数所有权越界）。
+
+**P1**：probe **自行构造** `SafePPOPolicy` / `Adam(lr=1e-3)` / `Lagrangian((
+ConstraintSpec(budget=…, learning_rate=…, max_multiplier=…)))` 并**自行播种**
+generator —— 等于用探针替调用方冻结训练配置，且这些数值会被误读为「正式训练参数」。
+
+**修复**：`run_two_batch_probe(policy, optimizer, lagrangian, generator, *, …)`
+四个对象改为**必填位置参数**（无默认值）；probe **只**负责在两批之间持续使用它们，
+**不构造**、**不播种**。测试中的数值**明确标注**为示例输入
+（`EXAMPLE_ADAM_LR` / `EXAMPLE_BUSINESS_SPEC` / …）。
+
+**先红**：`TypeError: run_two_batch_probe() got an unexpected keyword argument
+'env_seed'` × 10 + `AssertionError: 缺少必填参数 policy` ⇒ **13 failed**。
+
+**参数所有权证据（实测）**：
+
+```text
+对象同一性：policy/optimizer/lagrangian/generator 四项均 is True；调用方 optimizer 已推进、Lagrangian 更新 2 次
+学习率敏感：仅改调用方 Adam(lr) —— 批0 delta 0.15568084 -> 1.55680862；批1 0.13222832 -> 1.13214433；最终状态不同
+预算敏感  ：仅改调用方 budget —— {0.0, 0.0} -> {0.0, 0.01822663237651189}
+内部构造被禁：SafePPOPolicy/Lagrangian/ConstraintSpec/torch.optim.Adam 全部 monkeypatch 抛错后仍跑通
+播种被禁  ：torch.Generator 为 C 扩展类型不可 monkeypatch ⇒ 补**源码级守卫**断言模块内无 manual_seed( 等调用
+```
+
+**验收**：`pytest tests/test_m13gcd_two_batch.py` **13 passed**；`make check` exit 0
+（**2865 passed**，ruff/mypy 147 files 全通过）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**（`sha256=017575dc…`，**未重物化**）；
+`make train` **exit 2**（training 未放行）；`runs/train_real_*` **143 个全失败、
+0 success**；`git diff --check d9e6003..HEAD` 与 `git status --short` **均空**。
+
+**改动文件数 = 5 个**（`safe_rl_v2/ppo_two_batch.py`、`tests/test_m13gcd_two_batch.py`、
+`docs/task_cards/M1.3g.md`、`docs/WORK_HANDOFF.md`、`docs/NEW_CONVERSATION_HANDOFF.md`）。
+**未**修改 `train.py`、单次 PPO 数学、env、冻结资产。
+
+**本卡修正的自身缺陷**：① `torch.Generator.manual_seed` **不可 monkeypatch**
+（immutable C type）⇒ 改用源码级守卫；② monkeypatch 顺序错误（在构造示例对象
+**之前**打补丁）⇒ 把构造移到补丁之前。
+
+**本卡完整回滚（6 提交，newest-first）**——在 `7ef3c60` 上实测，零冲突：
+```bash
+git revert 7ef3c60 6a28606 a5fc1f1 ebbfc99 2b8f748 7b32a9e
+# == d9e6003^{tree} = bacc85d6b849d31a8289df08e5b22eef39259147
+```
+
+> ## ⛔ **f-c-d-R1 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+> **后续修改 `train.py` 会使发布产物 v1 的 revision 失效，必须另开版本迁移卡。**
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
