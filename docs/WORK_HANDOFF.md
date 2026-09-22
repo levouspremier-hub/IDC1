@@ -3719,6 +3719,61 @@ git revert 3efb6a7 530e51c
 
 > ## ⛔ **f-c-e-R1 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
+
+### 7BI. M1.3g-f-c-e-R2：边界快照引用修复（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §co–§cq。f-c-e-R1 **复审不通过**（1 × P1：证据缺陷）。
+
+**P1**：`_full_state` 直接用 `optimizer.state_dict()` —— 其**外层 dict 是新的**，
+但 `state` 里的 `exp_avg` / `exp_avg_sq` / `step` 是**活张量的同一对象**，
+Adam 的 `step()` **原位**更新它们。于是「批 2 之前」取的快照被批 2 改写，
+`test_batch_boundary_state_is_exactly_restored` 实际比较的是
+**「批 2 后 vs 批 2 后」** —— 对照**空洞**。
+（`policy` 已显式 clone、`lagrangian.state_dict()` 返回副本、`generator.get_state()`
+每次新张量，均无此问题。）
+
+**先红原文（逐字）**：
+
+```text
+test_boundary_snapshot_is_not_mutated_by_the_second_batch
+  AssertionError: 批 1 后的快照被批 2 原位改写了（快照别名活状态，不是独立深快照）：实际 {2.0}
+test_full_state_is_a_deep_copy_of_the_live_objects
+  AssertionError: optimizer.state[0].exp_avg 与活状态共享存储
+⇒ 2 failed, 14 passed
+```
+
+**最小修复**：`_full_state` 经 `_deep_snapshot()` **递归**取快照（张量
+`detach().clone()`，容器递归重建）；**保留**原精确比较器 `_assert_exact`。
+
+**边界 step=1 / 最终 step=2 实测（修复后）**：
+
+```text
+边界（批2前）：连续/恢复 Adam step = [1.0]，Lagrangian updates = 1，四对象逐项精确相同 ×4
+             边界 exp_avg 独立于最终 exp_avg = True
+最终（批2后）：连续/恢复 Adam step = [2.0]，Lagrangian updates = 2，四对象逐项精确相同 ×4
+```
+
+并加了**显式 step 锚点**（边界 `{1.0}` / 最终 `{2.0}`，两侧 + `lagrangian.updates`
+1/2），结构上防止「两次误比最终状态」。
+
+**验收**：resume 档 **16 passed**（R1 的 14 + 新 2）；f-c-d 档 **13 passed**；
+合计 **29 passed**；`make check` exit 0（**2881 passed**，ruff/mypy 148 files 全通过）；
+`make smoke` exit 0；**发布产物 v1 `--verify` exit 0**（`017575dc…`，未重物化）。
+
+> 本卡为测试/文档卡，按卡 §cp.5 **未**重复执行 `make train`。
+> **training 仍未放行** ⇒ `make train` 仍 **exit 2**。
+
+**生产代码零改动**（`git diff --name-only 43ddcde HEAD -- safe_rl_v2/ envs/ scenario/
+checkpointing/` 为空）；冻结资产与发布产物 v1 hash **未变**。
+
+**本卡完整回滚（4 提交，newest-first）**——**先验证后登记**，零冲突：
+```bash
+git revert 31797dc 747d297 52b7395 1999fee
+# == 43ddcde^{tree} = 2cfda82bf98c0b4761faad4233919a591b7740ba
+```
+
+> ## ⛔ **f-c-e-R2 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；

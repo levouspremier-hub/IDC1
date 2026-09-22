@@ -1130,6 +1130,40 @@ git revert 3efb6a7 530e51c   # == fce9553^{tree}
 > ## ⛔ **f-c-e-R1 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 
+## 9.18 **边界快照别名缺陷已修（M1.3g-f-c-e-R2，2026-09-22）**
+
+f-c-e-R1 **复审不通过**（1 × P1，**证据缺陷**）：`_full_state` 直接用
+`optimizer.state_dict()`，其 `state` 内层张量（`exp_avg` / `exp_avg_sq` / `step`）
+是**活引用**，被批 2 的 `step()` **原位改写** ⇒「批 2 前」的对照实为
+「批 2 后 vs 批 2 后」，**空洞**。
+
+~~~text
+先红：快照被批 2 原位改写：实际 {2.0}；optimizer.state[0].exp_avg 与活状态共享存储
+修复：_full_state 经 _deep_snapshot() 递归取快照（张量 detach().clone()）
+~~~
+
+**边界 step=1 / 最终 step=2（修复后实测）**：
+
+~~~text
+边界（批2前）：Adam step = [1.0]，Lagrangian updates = 1，四对象逐项精确相同 ×4
+最终（批2后）：Adam step = [2.0]，Lagrangian updates = 2，四对象逐项精确相同 ×4
+并加显式 step 锚点，防止「两次误比最终状态」
+~~~
+
+**验收**：resume 档 **16 passed** + f-c-d 档 **13 passed** = **29 passed**；
+`make check` exit 0（**2881 passed**）；`make smoke` exit 0；
+**发布产物 v1 `--verify` exit 0**。**生产代码零改动**；冻结资产未变。
+未重复执行 `make train`（测试/文档卡），**training 仍未放行**（仍 exit 2）。
+
+**回滚（先验证后登记，实测零冲突）**：
+
+~~~bash
+git revert 31797dc 747d297 52b7395 1999fee   # == 43ddcde^{tree}
+~~~
+
+> ## ⛔ **f-c-e-R2 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
+
 ## 10. 后续顺序
 
 ~~~
