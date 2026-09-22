@@ -13,9 +13,12 @@
 **不做性能或收敛评价**、不以 probe 声称训练有效（`claims` 三项恒 `False`）；
 不修改 `train.py` / env / 冻结资产 / 发布产物 v1。
 
-**不得**为「制造一致」而每批重建 policy / optimizer / Lagrangian，
-或重播种采样 RNG —— 本模块按构造即共用一份，且把 RNG 的**前进**与策略状态的
-**变化**记入证据，供测试独立核对。
+**参数所有权（M1.3g-f-c-d-R1）**：`policy` / `optimizer` / `Lagrangian` /
+**显式采样 generator** 全部由**调用方**构造并传入；本模块**只负责在两批之间
+持续使用它们**，内部**不得**选择 Adam 学习率、乘子预算 / 学习率 / 上限、
+策略隐藏层尺寸，也**不得**播种 RNG。故调用方的训练配置不会在探测过程中被
+默默冻结或被误读为「正式训练参数」；RNG 的**前进**与策略状态的**变化**被记入
+证据，供测试独立核对。
 """
 
 from __future__ import annotations
@@ -81,6 +84,10 @@ def build_formal_env(start: str, *, horizon: int, forecast_cutoff: int,
 
 
 def run_two_batch_probe(
+    policy: Any,
+    optimizer: Any,
+    lagrangian: Any,
+    generator: torch.Generator,
     *,
     clip_epsilon: float,
     gamma: float,
@@ -89,47 +96,28 @@ def run_two_batch_probe(
     horizon: int,
     forecast_cutoff: int,
     delta_t_hours: float,
-    seed: int,
-    policy_seed: int,
+    env_seed: int,
     env_seed_kwargs: dict[str, int],
     starts: tuple[str, ...] = TRAIN_CANDIDATE_STARTS,
 ) -> dict[str, Any]:
     """跑两个 formal 批次（每批 `collect_rollout → single_ppo_update`）并返回证据。
 
-    所有超参数由调用方**显式给出**；本函数不选择、不冻结任何超参数。
+    `policy` / `optimizer` / `lagrangian` / `generator` 由**调用方**提供并贯穿两批；
+    本函数只做编排与证据记录，**不构造**任何上述对象，也**不**播种 `generator`。
+    其余超参数（`clip_epsilon` / `gamma` / `lam` / 步数 / horizon 等）同样由调用方
+    显式给出，本函数不选择、不冻结。
     """
     from safe_rl_v2.buffer import RolloutBuffer
-    from safe_rl_v2.lagrangian import (
-        UNIT_KG_CO2E,
-        UNIT_VIOLATION_TASK_STEPS,
-        ConstraintSpec,
-        Lagrangian,
-    )
-    from safe_rl_v2.policy import SafePPOPolicy
     from safe_rl_v2.rollout import collect_rollout
 
     if len(starts) != 2:
         raise ValueError(f"本 probe 恰好需要两个 origin，实际 {len(starts)}")
 
-    # --- 共用一份：policy / optimizer / Lagrangian / **连续** generator --------
+    # **调用方**提供对象；本函数不构造、不播种。obs_dim 由环境推出。
     first_env, _ = build_formal_env(
         starts[0], horizon=horizon, forecast_cutoff=forecast_cutoff,
         delta_t_hours=delta_t_hours, env_seed_kwargs=env_seed_kwargs)
     obs_dim = int(first_env.obs_dim)
-
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(policy_seed)
-        policy = SafePPOPolicy(obs_dim=obs_dim)
-    optimizer = torch.optim.Adam(policy.parameters(), lr=1e-3)
-    lagrangian = Lagrangian((
-        ConstraintSpec(name="business", budget=5.0, unit=UNIT_VIOLATION_TASK_STEPS,
-                       learning_rate=0.01, max_multiplier=100.0),
-        ConstraintSpec(name="carbon", budget=3.0, unit=UNIT_KG_CO2E,
-                       learning_rate=0.01, max_multiplier=100.0),
-    ))
-    # **同一** generator 贯穿两批：不重播种（重播种会掩盖 RNG 未前进的问题）
-    generator = torch.Generator()
-    generator.manual_seed(seed)
 
     batches: list[dict[str, Any]] = []
     batch_digests: list[str] = []
@@ -145,7 +133,7 @@ def run_two_batch_probe(
         generator_state_at_collection = _generator_state_digest(generator)
 
         buffer = RolloutBuffer()
-        stats = collect_rollout(env, policy, buffer, steps=steps, seed=seed,
+        stats = collect_rollout(env, policy, buffer, steps=steps, seed=env_seed,
                                 generator=generator)
         if stats["transitions"] == 0:
             raise RuntimeError(f"批 {index} 未采集到任何 transition")
@@ -206,6 +194,11 @@ def run_two_batch_probe(
         "entry": "safe_rl_v2.ppo_two_batch.run_two_batch_probe",
         "probe_only": True,
         "obs_dim": obs_dim,
+        # 调用方对象原样回传（供测试断言**同一性**，而非仅相等）
+        "policy": policy,
+        "optimizer": optimizer,
+        "lagrangian": lagrangian,
+        "generator": generator,
         "batches": batches,
         "batch_digests": batch_digests,
         "total_transitions": int(sum(b["transitions"] for b in batches)),
@@ -213,9 +206,9 @@ def run_two_batch_probe(
         "lagrangian_updates_total": int(batches[-1]["lagrangian_updates_cumulative"]),
         "final_policy_state_digest": final_digest,
         "rerun_digest": hashlib.sha256(rerun_payload.encode()).hexdigest(),
-        # 结构性事实：本函数**按构造**只建一份 policy / optimizer / Lagrangian，
+        # 结构性事实：调用方只传一份对象，本函数在两批之间**持续使用**同一份，
         # 且从不重播种 generator；实质核对由测试用 digest 完成（RNG 前进、
-        # 策略状态在两批之间变化）。
+        # 策略状态在两批之间变化）与对象**同一性**断言完成。
         "shared_policy": True,
         "shared_optimizer": True,
         "shared_lagrangian": True,
