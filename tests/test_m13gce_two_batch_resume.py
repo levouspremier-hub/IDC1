@@ -15,6 +15,7 @@ checkpoint 只写 `tmp_path`，**不写仓库**。
 checkpoint 适配入口。
 """
 
+import copy
 import importlib
 import pathlib
 
@@ -361,14 +362,35 @@ def test_zero_state_rebuild_does_not_reproduce_the_result(tmp_path):
 # 5. M1.3g-f-c-e-R1：**完整状态**逐项精确对照
 # =============================================================================
 
+def _deep_snapshot(value):
+    """**递归**深快照：张量逐项 clone，容器新建。
+
+    ⚠️ **R2 修复**：`torch.optim.Optimizer.state_dict()` 返回**新的外层 dict**，
+    但其 `state` 里的 `exp_avg` / `exp_avg_sq` / `step` 是**活张量的同一对象**，
+    Adam 的 `step()` 会**原位**更新它们。若直接把 `state_dict()` 放进快照，
+    快照会随活状态一起变化 —— 「批 2 之前」的对照就成了「批 2 之后 vs 批 2 之后」，
+    断言**空洞**。故此处必须递归 clone。
+    """
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    if isinstance(value, dict):
+        return {key: _deep_snapshot(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(_deep_snapshot(item) for item in value)
+    return copy.deepcopy(value)
+
+
 def _full_state(policy, optimizer, lagrangian, generator) -> dict:
-    """四个对象的**完整**状态快照（含嵌套 state_dict 的全部张量与标量）。"""
-    return {
-        "policy": {k: v.detach().clone() for k, v in policy.state_dict().items()},
+    """四个对象的**完整**状态快照（含嵌套 state_dict 的全部张量与标量）。
+
+    快照**独立于活对象**：取完之后再更新活对象，快照不得变化。
+    """
+    return _deep_snapshot({
+        "policy": policy.state_dict(),
         "optimizer": optimizer.state_dict(),
         "lagrangian": lagrangian.state_dict(),
         "generator": generator.get_state(),
-    }
+    })
 
 
 def _assert_exact(a, b, path: str = "state") -> None:
@@ -460,6 +482,14 @@ def test_batch_boundary_state_is_exactly_restored(tmp_path):
     _assert_exact(s["continuous_boundary"]["generator"],
                   s["resumed_boundary"]["generator"], "boundary.generator")
     assert s["next_start"] == _start(1), "恢复必须给出**下一** origin"
+    # **R2 显式锚点**：边界必须是**批 2 之前**的状态（Adam 恰好 1 次更新），
+    # 否则「边界对照」可能退化成了两次比最终状态。
+    assert _adam_steps(s["continuous_boundary"]) == {1.0}, \
+        f"边界（连续）Adam step 应为 1，实际 {_adam_steps(s['continuous_boundary'])}"
+    assert _adam_steps(s["resumed_boundary"]) == {1.0}, \
+        f"边界（恢复）Adam step 应为 1，实际 {_adam_steps(s['resumed_boundary'])}"
+    assert s["continuous_boundary"]["lagrangian"]["updates"] == 1
+    assert s["resumed_boundary"]["lagrangian"]["updates"] == 1
 
     # 非空洞性：边界状态既不是初始状态，也不是最终状态
     initial_policy, *_ = _objects(_obs_dim())
@@ -503,9 +533,13 @@ def test_final_state_after_batch2_is_exactly_equal(tmp_path):
     assert not torch.equal(s["continuous_boundary"]["policy"]["log_std"],
                            s["continuous_final"]["policy"]["log_std"])
     # Adam 的 step 计数必须真的推进到 2
-    steps = {float(v["step"]) for v in s["continuous_final"]["optimizer"]["state"].values()
-             if isinstance(v, dict) and "step" in v}
-    assert steps == {2.0}, f"两次更新后 Adam step 应为 2，实际 {steps}"
+    # **R2 显式锚点**：最终必须是**批 2 之后**的状态（Adam 恰好 2 次更新）。
+    assert _adam_steps(s["continuous_final"]) == {2.0}, \
+        f"最终（连续）Adam step 应为 2，实际 {_adam_steps(s['continuous_final'])}"
+    assert _adam_steps(s["resumed_final"]) == {2.0}, \
+        f"最终（恢复）Adam step 应为 2，实际 {_adam_steps(s['resumed_final'])}"
+    assert s["continuous_final"]["lagrangian"]["updates"] == 2
+    assert s["resumed_final"]["lagrangian"]["updates"] == 2
 
 
 @needs_assets
