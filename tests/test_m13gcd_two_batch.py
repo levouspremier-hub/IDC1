@@ -51,14 +51,70 @@ needs_assets = pytest.mark.skipif(
     not _upstream_present(), reason="真实冻结上游资产不在本机")
 
 
+# ⚠️ 下面这些数值只是**示例输入**，由**调用方**构造并显式传入；
+# 它们**不是**正式训练超参数，probe 内部不得选择或冻结其中任何一个。
+EXAMPLE_POLICY_SEED = 0          # 示例：策略权重初始化种子
+EXAMPLE_ADAM_LR = 1e-3           # 示例：Adam 学习率
+EXAMPLE_ADAM_BETAS = (0.9, 0.999)
+EXAMPLE_ADAM_EPS = 1e-8
+EXAMPLE_BUSINESS_SPEC = {"budget": 5.0, "learning_rate": 0.01, "max_multiplier": 100.0}
+EXAMPLE_CARBON_SPEC = {"budget": 3.0, "learning_rate": 0.01, "max_multiplier": 100.0}
+EXAMPLE_SAMPLING_SEED = 0        # 示例：显式采样 RNG 的种子
+EXAMPLE_ENV_SEED = 0             # 示例：环境 episode 种子
+
+
+def _make_example_objects(obs_dim: int, *, policy_seed: int = EXAMPLE_POLICY_SEED,
+                          adam_lr: float = EXAMPLE_ADAM_LR,
+                          sampling_seed: int = EXAMPLE_SAMPLING_SEED,
+                          business: dict | None = None, carbon: dict | None = None):
+    """构造**示例** policy / optimizer / Lagrangian / 显式 generator（调用方所有）。"""
+    from safe_rl_v2.lagrangian import (
+        UNIT_KG_CO2E,
+        UNIT_VIOLATION_TASK_STEPS,
+        ConstraintSpec,
+        Lagrangian,
+    )
+    from safe_rl_v2.policy import SafePPOPolicy
+
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(policy_seed)
+        policy = SafePPOPolicy(obs_dim=obs_dim)
+    optimizer = torch.optim.Adam(policy.parameters(), lr=adam_lr,
+                                 betas=EXAMPLE_ADAM_BETAS, eps=EXAMPLE_ADAM_EPS)
+    b = {**EXAMPLE_BUSINESS_SPEC, **(business or {})}
+    c = {**EXAMPLE_CARBON_SPEC, **(carbon or {})}
+    lagrangian = Lagrangian((
+        ConstraintSpec(name="business", unit=UNIT_VIOLATION_TASK_STEPS, **b),
+        ConstraintSpec(name="carbon", unit=UNIT_KG_CO2E, **c),
+    ))
+    generator = torch.Generator()
+    generator.manual_seed(sampling_seed)
+    return policy, optimizer, lagrangian, generator
+
+
+def _obs_dim() -> int:
+    env, _inj = tb().build_formal_env(
+        tb().TRAIN_CANDIDATE_STARTS[0], horizon=HORIZON,
+        forecast_cutoff=FORECAST_CUTOFF, delta_t_hours=DELTA_HOURS,
+        env_seed_kwargs=dict(ENV_SEED_KWARGS))
+    return int(env.obs_dim)
+
+
 def _run(**overrides):
     m = tb()
+    obs_dim = _obs_dim()
+    obj_overrides = {}
+    for key in ("adam_lr", "sampling_seed", "policy_seed", "business", "carbon"):
+        if key in overrides:
+            obj_overrides[key] = overrides.pop(key)
+    policy, optimizer, lagrangian, generator = _make_example_objects(
+        obs_dim, **obj_overrides)
     kwargs = {"clip_epsilon": CLIP_EPSILON, "gamma": GAMMA, "lam": LAM,
               "steps": STEPS, "horizon": HORIZON, "forecast_cutoff": FORECAST_CUTOFF,
-              "delta_t_hours": DELTA_HOURS, "seed": 0, "policy_seed": 0,
+              "delta_t_hours": DELTA_HOURS, "env_seed": EXAMPLE_ENV_SEED,
               "env_seed_kwargs": dict(ENV_SEED_KWARGS)}
     kwargs.update(overrides)
-    return m.run_two_batch_probe(**kwargs)
+    return m.run_two_batch_probe(policy, optimizer, lagrangian, generator, **kwargs)
 
 
 def _policy_from_snapshot(obs_dim: int, state_dict: dict):
@@ -171,7 +227,7 @@ def test_full_rerun_from_the_same_initial_state_is_bit_identical():
     assert [x["multipliers_post_update"] for x in a["batches"]] == \
            [x["multipliers_post_update"] for x in b["batches"]]
     # **不同初始种子**必须给出不同结果（否则 digest 可能恒等、测不出东西）
-    c = _run(policy_seed=1, seed=1)
+    c = _run(policy_seed=1, sampling_seed=1)
     assert c["rerun_digest"] != a["rerun_digest"]
     assert c["batch_digests"] != a["batch_digests"]
 
@@ -221,3 +277,105 @@ def test_probe_does_not_claim_training_success():
     # 非空洞性：确实完成了两次真实更新
     assert out["optimizer_steps_total"] == 2
     assert out["total_transitions"] == 2 * STEPS
+
+
+# =============================================================================
+# 7. M1.3g-f-c-d-R1：参数所有权（**调用方**提供对象）
+# =============================================================================
+
+@needs_assets
+def test_probe_uses_the_caller_provided_objects():
+    """**R1**：两批必须**使用调用方**传入的 policy / optimizer / Lagrangian / RNG。"""
+    m = tb()
+    policy, optimizer, lagrangian, generator = _make_example_objects(_obs_dim())
+    out = m.run_two_batch_probe(
+        policy, optimizer, lagrangian, generator,
+        clip_epsilon=CLIP_EPSILON, gamma=GAMMA, lam=LAM, steps=STEPS,
+        horizon=HORIZON, forecast_cutoff=FORECAST_CUTOFF, delta_t_hours=DELTA_HOURS,
+        env_seed=EXAMPLE_ENV_SEED, env_seed_kwargs=dict(ENV_SEED_KWARGS))
+
+    # **同一性**（不是相等）：probe 直接用调用方对象，未另建自己的
+    assert out["policy"] is policy
+    assert out["optimizer"] is optimizer
+    assert out["lagrangian"] is lagrangian
+    assert out["generator"] is generator
+    # 更新确实落在调用方的 optimizer / Lagrangian 上
+    assert len(optimizer.state) > 0, "调用方 optimizer 必须被推进"
+    assert lagrangian._updates == 2, "调用方 Lagrangian 必须被推进两次"
+    # 非空洞性：两批都真的采到 transition
+    assert out["total_transitions"] == 2 * STEPS
+
+
+@needs_assets
+def test_caller_optimizer_learning_rate_changes_the_update_result():
+    """**R1**：probe **不拥有**学习率 —— 改调用方 lr 必须改变更新结果。"""
+    slow = _run(adam_lr=1e-3)
+    fast = _run(adam_lr=1e-2)
+    assert slow["optimizer_steps_total"] == fast["optimizer_steps_total"] == 2
+    # 同一初始状态、同一数据、仅 lr 不同 ⇒ 参数变化量必须不同
+    for index in (0, 1):
+        assert slow["batches"][index]["param_delta_norm"] != pytest.approx(
+            fast["batches"][index]["param_delta_norm"], rel=1e-6), \
+            f"批 {index} 的参数变化量必须随调用方学习率变化"
+    assert slow["final_policy_state_digest"] != fast["final_policy_state_digest"]
+
+
+@needs_assets
+def test_caller_lagrangian_spec_changes_the_multiplier_trajectory():
+    """**R1**：probe **不拥有**乘子预算 / 学习率 —— 改调用方 spec 必须改变乘子轨迹。"""
+    base = _run()
+    generous = _run(business={"budget": 0.0}, carbon={"budget": 0.0})
+    assert base["batches"][0]["multipliers_post_update"] != \
+           generous["batches"][0]["multipliers_post_update"], \
+        "把 budget 降到 0 必须改变乘子轨迹（否则 probe 未使用调用方 spec）"
+
+
+@needs_assets
+def test_probe_constructs_no_objects_and_reseeds_nothing(monkeypatch):
+    """**R1 结构性守卫**：probe 内部**不得**构造 policy/optimizer/Lagrangian，
+    也**不得**重播种 generator —— 把这些入口全部 monkeypatch 成抛错后仍须跑通。"""
+    import safe_rl_v2.lagrangian as lag_mod
+    import safe_rl_v2.policy as policy_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("probe 不得在内部构造训练对象")
+
+    monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
+    monkeypatch.setattr(lag_mod, "Lagrangian", boom)
+    monkeypatch.setattr(lag_mod, "ConstraintSpec", boom)
+    monkeypatch.setattr(torch.optim, "Adam", boom)
+    monkeypatch.setattr(torch.Generator, "manual_seed", boom)
+
+    m = tb()
+    # 对象必须**在 monkeypatch 生效前**由调用方构造好（这里用未打补丁的构造路径）
+    monkeypatch.undo()
+    policy, optimizer, lagrangian, generator = _make_example_objects(_obs_dim())
+    monkeypatch.setattr(policy_mod, "SafePPOPolicy", boom)
+    monkeypatch.setattr(lag_mod, "Lagrangian", boom)
+    monkeypatch.setattr(lag_mod, "ConstraintSpec", boom)
+    monkeypatch.setattr(torch.optim, "Adam", boom)
+    monkeypatch.setattr(torch.Generator, "manual_seed", boom)
+
+    out = m.run_two_batch_probe(
+        policy, optimizer, lagrangian, generator,
+        clip_epsilon=CLIP_EPSILON, gamma=GAMMA, lam=LAM, steps=STEPS,
+        horizon=HORIZON, forecast_cutoff=FORECAST_CUTOFF, delta_t_hours=DELTA_HOURS,
+        env_seed=EXAMPLE_ENV_SEED, env_seed_kwargs=dict(ENV_SEED_KWARGS))
+    assert out["total_transitions"] == 2 * STEPS
+    assert out["optimizer_steps_total"] == 2
+
+
+@needs_assets
+def test_probe_signature_requires_all_four_objects():
+    """**R1 结构性守卫**：四个对象必须是**必填**位置参数（**无默认值**）。"""
+    import inspect
+
+    params = inspect.signature(tb().run_two_batch_probe).parameters
+    for name in ("policy", "optimizer", "lagrangian", "generator"):
+        assert name in params, f"缺少必填参数 {name}"
+        assert params[name].default is inspect.Parameter.empty, \
+            f"{name} 不得有默认值（probe 不得替调用方选择）"
+    # 不得再出现任何「替调用方选择超参数」的入参
+    for forbidden in ("adam_lr", "learning_rate", "budget", "max_multiplier",
+                      "hidden", "policy_seed", "sampling_seed"):
+        assert forbidden not in params, f"probe 不得拥有超参数入参 {forbidden}"
