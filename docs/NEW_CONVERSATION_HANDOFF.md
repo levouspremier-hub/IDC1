@@ -1281,3 +1281,40 @@ git revert 609d794 646ab5a a53a87a 81fc237 # 卡范围
 
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
+
+## 9.20 **回滚证据与账本已修正（M1.3g-f-c-f-R1，2026-09-23）**
+
+**纯文档证据修正卡**，不改代码、不跑正式训练。
+
+**D1｜「完整范围回滚」原为过期快照**：`8cd2772..a5f4a29` 实际是 **7 个提交**
+（原写「6 个」是在**较早快照 `541498c`** 上验证的，**遗漏 `a5f4a29` 自身**）。
+已在**最终 HEAD** 重验：
+
+~~~bash
+git revert --no-edit a5f4a29 541498c ab6ef31 609d794 646ab5a a53a87a 81fc237
+# 7 个 revert 零冲突；HEAD^{tree} = 5b37d0d11b08082f27267cb8b445c0bb36024f5c == 8cd2772^{tree} ✅
+~~~
+
+**D2｜`runs/train_real_*` 实测 149**（原文「150」系**未经实测的推断**）：
+
+~~~bash
+ls -d runs/train_real_* | wc -l              → 149
+ls -d runs/train_real_*/report.json | wc -l  → 149
+→ 目录 149，含 failure 149，success 0，无 report.json 0
+~~~
+
+**D3｜全范围 `diff --check` 现 exit 0**：`docs/CHATGPT_HANDOFF_CURRENT.md` 第 3–5 行
+行尾双空格改为 CommonMark 行尾反斜杠（硬换行语义不变、文字未改）。
+
+**验收**：7 提交回滚**逐树一致**；`git diff --check 8cd2772..HEAD` **exit 0**；
+`git status --short` **空**；`env release --verify` **exit 0**。改动 4 个文件；
+未改 probe / 测试 / 训练入口 / 环境 / 冻结资产 / env release v1。
+
+**回滚（2 提交，实测零冲突）**：
+
+~~~bash
+git revert 58f0fb9 f91e4a3   # == a5f4a29^{tree}
+~~~
+
+> ## ⛔ **f-c-f-R1 完成即停，等待人工复审。**
+> **未接**训练配置审计卡、正式训练或 M6。

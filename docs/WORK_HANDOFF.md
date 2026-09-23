@@ -3824,11 +3824,67 @@ probe 源码无 `SafePPOPolicy(` / `Adam(` / `Lagrangian((` / `ConstraintSpec(` 
 `configs/release/`）；冻结资产逐字节未变。本卡未运行 `make train`；
 **training readiness 继续为 false**。
 
-**回滚（先验证后登记，零冲突）**：
+> ⚠️ **本节回滚表述已由 `M1.3g-f-c-f-R1`（§7BK）更正。** 原文的「卡范围（4 提交）」
+> 只是**前缀**；「完整范围」当时写成 6 个提交，且是在**较早快照 `541498c`** 上验证的，
+> **遗漏了 `a5f4a29` 自身**。`8cd2772..a5f4a29` 实际是 **7 个提交**。
+> 以 §7BK 的 7 提交实测为准。
+
+**实现批次（1 提交）**：
 ```bash
-git revert 609d794                        # 实现批次（1 提交）→ 646ab5a^{tree}
-git revert 609d794 646ab5a a53a87a 81fc237 # 卡范围（4 提交）→ 8cd2772^{tree}
+git revert 609d794
+# == 646ab5a^{tree} = 8cdc037835d3590d3119533d49a921f4de306b87
 ```
+
+---
+
+### 7BK. M1.3g-f-c-f-R1：回滚证据与账本修正（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §cu–§cv。**纯文档证据修正卡**，不改代码、不跑正式训练。
+
+**D1｜「完整范围回滚」是过期快照（已在最终 HEAD 重验）**：
+
+```bash
+# 在独立 worktree、从最终 HEAD a5f4a29 起，newest-first 回滚全部 7 个提交
+git revert --no-edit a5f4a29 541498c ab6ef31 609d794 646ab5a a53a87a 81fc237
+# 7 个 revert 全部干净应用，**零冲突**
+# 最终 HEAD^{tree} = 5b37d0d11b08082f27267cb8b445c0bb36024f5c == 8cd2772^{tree} ✅
+```
+
+原文错在：在 `541498c` 上验证了「6 提交」后**又创建 `a5f4a29`** 却未重验，
+仍以「完整范围」表述 ⇒ 遗漏 `a5f4a29` 自身。
+
+**D2｜运行数实测为 149（原文 150 系未实测数字）**：
+
+```bash
+ls -d runs/train_real_* | wc -l              → 149
+ls -d runs/train_real_*/report.json | wc -l  → 149
+→ 目录总数=149，含 failure=149，success=0，无 report.json=0
+```
+
+f-c-f 期间**未**运行 `make train`，也无任何命令输出 150；该数字属**未经实测的推断**。
+
+**D3｜全范围 `diff --check` 现 exit 0**：`docs/CHATGPT_HANDOFF_CURRENT.md` 第 3–5 行
+的行尾双空格改为 **CommonMark 行尾反斜杠**（硬换行语义与渲染不变、文字一字未改），
+由 `58f0fb9` 提交。注意 `git diff --check <range>` 查的是**累计** diff，
+仅改工作树不提交时告警不会消失。
+
+**验收**：完整回滚（7 提交）**逐树一致**；`git diff --check 8cd2772..HEAD` **exit 0**；
+工作树 `diff --check` **exit 0**；`git status --short` **空**；
+`env release --verify` **exit 0**（`017575dc…`，env=true / training=false）。
+本卡为文档卡，**未**重跑 PPO 全套测试。
+
+**改动 4 个文件**：`docs/task_cards/M1.3g.md`、`docs/CHATGPT_HANDOFF_CURRENT.md`
+（仅第 3–5 行写法）、`docs/WORK_HANDOFF.md`、`docs/NEW_CONVERSATION_HANDOFF.md`。
+**未**改 probe / 测试 / 训练入口 / 环境 / 冻结资产 / env release v1。
+
+**本卡回滚（2 提交，实测零冲突）**：
+```bash
+git revert 58f0fb9 f91e4a3
+# == a5f4a29^{tree} = 36d213af1155620405ff0380407ef3662fa6bc98
+```
+
+> ## ⛔ **f-c-f-R1 完成即停，等待人工复审。**
+> **未接**训练配置审计卡、正式训练或 M6。
 
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
