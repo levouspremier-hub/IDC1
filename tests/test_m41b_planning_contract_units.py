@@ -61,11 +61,20 @@ def test_no_alias_or_dual_field():
 
 
 def test_adapter_populates_new_field_with_env_capability():
+    """`group_work_capacity` 必须是环境实际使用的**每步**能力（work/step）。
+
+    **M1.3g-f-c-h2 更新**：原断言写的是未折算的 `C_server` 原值（work/hour）——
+    那是**旧口径**。环境的每步能力是
+    `action × max_task_load_per_server × C_server × delta_t_hours`
+    （`envs/idc_price_env.py:778-784`），规划器的 `exec_compute = used / cap`
+    必须与之一致，故此处改为同一口径。**测试保留，未删除。**
+    """
     env = _env()
     snap = build_snapshot(env)
-    assert snap.group_work_capacity == pytest.approx(
-        [float(c) for c in np.asarray(env.model.C_server, dtype=np.float64)]
-    )
+    expected = (np.asarray(env.model.C_server, dtype=np.float64)
+                * float(env.max_task_load_per_server)
+                * float(env.delta_t_hours))
+    assert snap.group_work_capacity == pytest.approx([float(c) for c in expected])
 
 
 # --- 2. 规划近似字段保留且语义明确 ---
