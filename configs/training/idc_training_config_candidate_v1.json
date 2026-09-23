@@ -78,11 +78,12 @@
     "business_budget": 1.3038194444444444,
     "business_budget_unit": "violation_task_steps (per transition mean)",
     "business_budget_from_proposal": 1.0,
-    "carbon_budget": 1.0279280449520944,
+    "carbon_budget": 1.0278989607183693,
     "carbon_budget_unit": "kgCO2e (per transition mean)",
     "carbon_budget_from_proposal": 1.0,
     "qualified_proposals": [
-      1.0
+      1.0,
+      0.5
     ]
   },
   "multipliers": {
@@ -101,12 +102,12 @@
     "carbon": {
       "constraint": "carbon",
       "reference_proposal": 1.0,
-      "reference_transition_mean": 1.0279280449520944,
-      "scale": 1.0279280449520944,
+      "reference_transition_mean": 1.0278989607183693,
+      "scale": 1.0278989607183693,
       "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
-      "learning_rate": 0.009463996474822895,
+      "learning_rate": 0.009464532046878296,
       "learning_rate_formula": "0.01 / scale^2",
-      "max_multiplier": 9.728307393798211,
+      "max_multiplier": 9.7285826546719,
       "max_multiplier_formula": "10 / scale",
       "initial_multiplier": 0.0
     }
