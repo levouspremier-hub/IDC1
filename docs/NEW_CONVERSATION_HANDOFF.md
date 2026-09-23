@@ -1347,10 +1347,11 @@ git revert 58f0fb9 f91e4a3   # == a5f4a29^{tree}
 **验收**：两处 `git diff --check` exit 0；`git status --short` 空；
 `env release --verify` exit 0。**禁区零改动**。未运行正式训练、未改 readiness。
 
-**回滚（实测量零冲突）**：
+**回滚（实测零冲突、逐树一致）**：
 
 ~~~bash
-git revert 6d5f1c4 cbabfb0 6fb10cf   # == 5e7f5ed^{tree}
+git revert 6d5f1c4 cbabfb0 6fb10cf
+# == 5e7f5ed^{tree} = e2c5ff9ec9d92c842e230690eec7f92cab97809f
 ~~~
 
 > ## ⛔ **f-c-g 完成即停，等待人工裁决。**
