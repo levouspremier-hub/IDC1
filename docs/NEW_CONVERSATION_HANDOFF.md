@@ -1588,3 +1588,51 @@ git revert a296991 a5bbae3 c581e2c 28ea6d7   # == d037679^{tree}
 
 > ## ⛔ **f-c-h1-R1 完成即停，等待复审。**
 > **未冻结预算**；**未接**训练循环、正式训练或 M6。
+
+## 9.28 **规划快照每步能力口径已修正（M1.3g-f-c-h2，2026-09-23）**
+
+`planning/snapshot_adapter.py` 原把 `C_server`（**work/hour**）直接交给规划器，
+而 `exec_compute = used / cap` 必须与环境的 `action × max_task_load × C_server × delta`
+一致。
+
+~~~text
+group_work_capacity           : C_server            -> C_server × max_task_load × delta_t_hours
+group_power_coeff_kw_per_work : (Pmax−Pidle)/C_server -> (Pmax−Pidle)/(C_server × delta_t_hours)
+先红 9 failed / 7 passed（严格早于实现）；改后 16 passed
+~~~
+
+**服务差值（server_seed=1, compute=0.5, corrector on）**：
+
+~~~text
+48   : completed 1503.483884 -> 1551.000001 (+47.516) | sla 100 ->  75
+4848 : completed 1509.498550 -> 1554.000000 (+44.501) | sla 106 ->  79
+10176: completed 1500.977430 -> 1544.000000 (+43.023) | sla 114 ->  63
+timeouts=0, fallbacks=0（前后均如此）
+~~~
+
+**剩余缺口**：完成量 ≈98.4–98.9%、SLA 63–79/episode；**未调整预算凑结果**。
+
+**重标定（新 run-id，历史未覆盖）**：`business_mean` 由「三档**饱和**同值
+1.9704861111」变为「**随强度变化** 1.3038/1.3090/1.4019」⇒ 强度敏感性恢复；
+`business_budget` 1.9704861111111112 → **1.3038194444444444**；
+`carbon_budget` 1.02089273465195 → **1.0279280449520944**；
+乘子 business `lr` 0.005882542761449005 / `cap` 7.669773635153129；
+carbon `lr` 0.009463996474822895 / `cap` 9.728307393798211。
+候选 `status` 仍 `candidate_not_frozen`。
+
+**新 corrector 探针（0.25 s）**：off/on **均 reproducible**；
+`insufficient_evidence` 来自探针**既有**功效判据，非本卡回归；**M5.4 保持 blocked**。
+
+**验收**：`make check` **2939 passed**（ruff/mypy 153 files 全通过）；
+`make smoke` exit 0；`env release --verify` exit 0；`git status --short` 空。
+未运行 `make train`、未改 readiness。
+
+**回滚（实测两侧 tree 一致、零冲突）**：
+
+~~~bash
+git revert e0aacd0 e7c1e94 d055ba6 0d958df 1082216 8efaf60 6910edf 2c77526
+# == 513b172^{tree}
+~~~
+
+> ## ⛔ **f-c-h2 完成即停，等待复审。**
+> **未**接训练循环、正式训练或 M6；**未冻结**预算。

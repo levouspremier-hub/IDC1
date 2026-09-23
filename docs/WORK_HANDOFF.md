@@ -4239,6 +4239,72 @@ git revert a296991 a5bbae3 c581e2c 28ea6d7
 > ## ⛔ **f-c-h1-R1 完成即停，等待复审。**
 > **未冻结预算**；**未接**训练循环、正式训练或 M6。
 
+### 7BS. M1.3g-f-c-h2：修正规划快照的每步能力口径（**执行完成，等待复审**）
+
+`docs/task_cards/M1.3g.md` §do–§dp。
+
+**缺陷**：`planning/snapshot_adapter.py` 把 `C_server` 原值（**work/hour**）直接交给
+规划器，而规划器映射 `exec_compute = used / cap`（`planning/model.py:1123`）必须与
+环境的 action 语义（`action × max_task_load_per_server × C_server × delta_t_hours`，
+`envs/idc_price_env.py:778-784`）一致。
+
+**修正前后**：
+
+| | 前 | 后 |
+|---|---|---|
+| `group_work_capacity[g]` | `C_server[g]`（work/hour） | `C_server[g] × max_task_load_per_server × delta_t_hours`（work/step） |
+| `group_power_coeff_kw_per_work[g]` | `(P_max − P_idle)/C_server[g]` | `(P_max − P_idle)/(C_server[g] × delta_t_hours)` |
+
+先红 **9 failed / 7 passed**（严格早于实现 `1082216`）；改后 **16 passed**。
+
+**服务差值（server_seed=1, compute=0.5, corrector on）**：
+
+```text
+origin  48: completed 1503.483884 → 1551.000001 (+47.516) | sla 100 →  75 (−25)
+origin 4848: completed 1509.498550 → 1554.000000 (+44.501) | sla 106 →  79 (−27)
+origin 10176:completed 1500.977430 → 1544.000000 (+43.023) | sla 114 →  63 (−51)
+timeouts=0, zero_action_fallbacks=0（前后均如此）
+```
+
+**剩余服务缺口（如实报告）**：完成量仍为账本+积压的约 **98.4–98.9%**，
+SLA 违约 **63–79 / episode**；**未据此调整任何预算凑结果**。
+
+**重标定（新 run-id `m13gch2_calibration_recap`，历史 run 未覆盖）**：
+
+```text
+business_mean  旧（三档相同）1.9704861111 → 新 1.3038194444 / 1.3090277778 / 1.4019097222
+  ⇒ 修复前**饱和**、修复后**随强度单调变化** —— 强度敏感性被恢复，即原「饱和」是口径缺陷的症状
+business_budget 1.9704861111111112 → 1.3038194444444444
+carbon_budget   1.02089273465195   → 1.0279280449520944
+乘子 business: lr 0.00257545071707194 → 0.005882542761449005 ; cap 5.074889867841409 → 7.669773635153129
+乘子 carbon  : lr 0.009594884999059906 → 0.009463996474822895 ; cap 9.79534838536124 → 9.728307393798211
+候选 status 仍为 candidate_not_frozen
+```
+
+**新 corrector 探针（生产默认 0.25 s）**：`probe_corrector_repro` →
+off/on **均 reproducible**；`overall=insufficient_evidence`（探针**既有**功效判据
+`underpowered_sources`），**非本卡回归**；**M5.4 保持 blocked**。
+
+**验收**：新档 **16 passed**；相关 planning/corrector/m4 focused 全绿
+（`test_m41b` 旧断言已**更新**为正确口径，**未删测试**）；`make check` exit 0
+（**2939 passed**，ruff/mypy 153 files 全通过）；`make smoke` exit 0；
+`env release --verify` exit 0；两处 `git diff --check` **空**、`git status --short` **空**。
+**未**运行 `make train`、**未**改 readiness。
+
+**本卡自行修正的自身缺陷**：① e2e 用例误比 `cap`（上界）与 env 的
+`planned_capacity_vec`（**投影后**实际计划，`sum` 388.5 vs 50.0）⇒ 改为上界关系；
+② 最初把**非 formal** env 与 formal 口径相比（非 formal **不**乘 delta）⇒
+改为 legacy `delta=1.0` + **新增 formal 链 e2e 用例**；③ `ledger_micro_sum` 属性名错误。
+
+**回滚（8 提交，先验证后登记）**：
+```bash
+git revert e0aacd0 e7c1e94 d055ba6 0d958df 1082216 8efaf60 6910edf 2c77526
+# == 513b172^{tree} = f6c2a302850ef7176755db7a6bc0c37d452da0aa
+```
+
+> ## ⛔ **f-c-h2 完成即停，等待复审。**
+> **未**接训练循环、正式训练或 M6；**未冻结**预算。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
