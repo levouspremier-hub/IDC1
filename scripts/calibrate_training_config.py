@@ -383,7 +383,8 @@ def main(argv: list[str] | None = None) -> int:
              "business_mean": r["business_mean"],
              "carbon_mean": r["carbon_mean"],
              "zero_action_fallbacks": r["zero_action_fallbacks"],
-             "timeouts": r["timeouts"]}
+             "timeouts": r["timeouts"],
+             "deadline_shortfall": r["deadline_shortfall"]}
             for r in results]
     report = {
         "entry": "python -m scripts.calibrate_training_config",
@@ -400,7 +401,10 @@ def main(argv: list[str] | None = None) -> int:
                        "business_mean": r["business_mean"],
                        "carbon_mean": r["carbon_mean"],
                        "zero_action_fallbacks": r["zero_action_fallbacks"],
-             "timeouts": r["timeouts"]}
+                       "timeouts": r["timeouts"],
+                       "deadline_shortfall": r["deadline_shortfall"],
+                       "reasons": r["reasons"],
+                       "per_origin": r["per_origin"]}
                       for r in results],
         "budgets": budgets,
         "multipliers": multipliers,

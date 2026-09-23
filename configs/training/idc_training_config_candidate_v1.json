@@ -1,0 +1,112 @@
+{
+  "schema": "idc-training-config-candidate-v1",
+  "status": "candidate_not_frozen",
+  "note": "本文件是**候选**；冻结须另开卡。docs/training_config_candidates.json 为历史审计，分级不予改写。",
+  "corrector": {
+    "mode": "on",
+    "time_limit_s": 0.25,
+    "source": "production_default (M5.4i)",
+    "note": "训练/评估同一修正语义；off 留作日后独立重训的机制对照。"
+  },
+  "backend": {
+    "device": "cpu",
+    "torch_num_threads": 1,
+    "note": "求解器既有确定性选项不改（DETERMINISTIC_RANDOM_SEED=0, DETERMINISTIC_PARALLEL=False）。"
+  },
+  "policy": {
+    "hidden": 64,
+    "hidden_layers": 1,
+    "activation": "Tanh",
+    "log_std_init": 0.0,
+    "action_dim": 21,
+    "critic_heads": 3,
+    "obs_dim": 520,
+    "obs_dim_source": "formal env（horizon=48 时实测；不硬编码）"
+  },
+  "optimizer": {
+    "name": "Adam",
+    "lr": 0.0003,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "eps": 1e-08,
+    "weight_decay": 0.0,
+    "schedule": "none"
+  },
+  "ppo": {
+    "clip_epsilon": 0.2,
+    "gae_lambda": 0.95,
+    "gamma_per_hour": 0.99,
+    "gamma_per_step": 0.99498743710662,
+    "gamma_formula": "sqrt(0.99)（半小时一步，按每小时 0.99 定义）"
+  },
+  "sampling": {
+    "horizon": 48,
+    "episodes_per_batch": 4,
+    "transitions_per_batch": 192,
+    "epochs_per_batch": 4,
+    "minibatch_size": 48,
+    "minibatches_per_epoch": 4,
+    "frozen_within_batch": [
+      "old_raw_log_prob",
+      "advantage",
+      "critic_target"
+    ],
+    "lagrangian_updates_per_batch": 1
+  },
+  "scale": {
+    "batches_per_seed": 512,
+    "transitions_per_seed": 98304,
+    "train_seeds": [
+      0,
+      1,
+      2
+    ],
+    "seed_offsets": {
+      "task": 0,
+      "server": 1,
+      "forecast": 300000
+    },
+    "seed_note": "各 RNG 由主种子按固定偏移显式派生；不重播种全局 RNG。"
+  },
+  "budgets": {
+    "business_budget": 1.9704861111111112,
+    "business_budget_unit": "violation_task_steps (per transition mean)",
+    "business_budget_from_proposal": 1.0,
+    "carbon_budget": 1.02089273465195,
+    "carbon_budget_unit": "kgCO2e (per transition mean)",
+    "carbon_budget_from_proposal": 1.0,
+    "qualified_proposals": [
+      1.0,
+      0.5,
+      0.25
+    ]
+  },
+  "multipliers": {
+    "business": {
+      "constraint": "business",
+      "reference_proposal": 1.0,
+      "reference_transition_mean": 1.9704861111111112,
+      "scale": 1.9704861111111112,
+      "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+      "learning_rate": 0.00257545071707194,
+      "learning_rate_formula": "0.01 / scale^2",
+      "max_multiplier": 5.074889867841409,
+      "max_multiplier_formula": "10 / scale",
+      "initial_multiplier": 0.0
+    },
+    "carbon": {
+      "constraint": "carbon",
+      "reference_proposal": 1.0,
+      "reference_transition_mean": 1.02089273465195,
+      "scale": 1.02089273465195,
+      "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+      "learning_rate": 0.009594884999059906,
+      "learning_rate_formula": "0.01 / scale^2",
+      "max_multiplier": 9.79534838536124,
+      "max_multiplier_formula": "10 / scale",
+      "initial_multiplier": 0.0
+    }
+  }
+}
