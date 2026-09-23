@@ -131,7 +131,7 @@
 | **代码位置** | `safe_rl_v2/lagrangian.py:37-46` `UNIT_VIOLATION_TASK_STEPS = "violation_task_steps"`、`UNIT_KG_CO2E = "kgCO2e"`；`REQUIRED_UNITS` 强制 `business→violation_task_steps`、`carbon→kgCO2e` |
 | **单位来源** | **F**（契约强制；`ConstraintSpec.__post_init__` 校验） |
 | **聚合口径来源** | **F**：`safe_rl_v2/lagrangian.py:40` `AGGREGATION_PER_TRANSITION_MEAN = "per_transition_mean"`，且 `lagrangian.py:200-204` **不符即抛错**。<br>⚠️ **R1 补充（初稿缺失）**：约束估计量是**每 transition 均值**，而更新式为 `mult += lr*(estimate − budget)`（`lagrangian.py:245`）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。 |
-| **预算现值来源** | **P**：`budget=5.0`（business，单位 violation·step）/ `budget=3.0`（carbon，单位 kgCO2e）—— 仅出现在测试示例（`test_m13gcd_two_batch.py:60-61` 等） |
+| **预算现值来源** | **S/P**：`budget=5.0`（business，单位 violation·step）/ `budget=3.0`（carbon，单位 kgCO2e）。示例值**同时**出现在两处：**synthetic smoke** `safe_rl_v2/train.py:623-631` **与** **probe** `tests/test_m13gcd_two_batch.py:60-61`。**S/P 不等于正式训练参数** —— 两处均为示例。<br>⚠️ **R3 更正**：初稿写「**P**、仅测试示例」，**漏了 smoke 出处**且分级偏低。 |
 | **候选** | ① 沿用 5.0 / 3.0；② 由 **train split** 的违规/碳排分布标定；③ 由人工给定的物理目标 |
 | **待裁决** | 在**固定 `per_transition_mean` 口径下**，决定两个 budget 的**数值**及其 **train-only／物理标定依据**。<br>⚠️ **R2 口径更正**：初稿问「是否按 episode 长度归一」，暗示**聚合方式可选** —— 但聚合方式由 `lagrangian.py:40,200-204` **固定**，**不是**可选训练参数。 |
 
