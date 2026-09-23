@@ -1356,3 +1356,46 @@ git revert 6d5f1c4 cbabfb0 6fb10cf
 
 > ## ⛔ **f-c-g 完成即停，等待人工裁决。**
 > **未接**冻结卡、正式训练或 M6。
+
+## 9.22 **训练配置审计证据已修正（M1.3g-f-c-g-R1，2026-09-23）**
+
+**纯文档证据修正卡**：不改代码、不冻结数值、不重跑 PPO 全套。
+
+**四项修正（自行复核代码后认定；卡面未点名）**：
+
+~~~text
+D1 policy_architecture : 整项 U -> U（架构）+ F（action_dim=21）
+  依据 IMPLEMENTATION_PLAN.md:203、AGENTS.md:13 红线 6、buffer.py:30
+D2 solver_determinism  : F -> U（常量仅在 planning/model.py:50-51，
+  无批准记录 / 无冻结资产 / 无契约强制，不满足 F 定义）
+D3/D4 business/carbon_budget : 补「聚合口径 F」
+  lagrangian.py:40 AGGREGATION_PER_TRANSITION_MEAN，:200-204 不符即抛错，
+  :245 更新式 => budget 必须与 estimate 同口径（per-transition）
+D5 审计 §7 标题 :「乘子预算」->「约束预算」（budget 属 ConstraintSpec，不属乘子）
+~~~
+
+**计数由脚本从 JSON 实际条目重新生成**（命令写入审计 §13.1）：
+
+~~~text
+total_items = 18          （初稿 19 系估算，错）
+口径A 逐字段 : F=6 M=1 P=5 S=5 S/P=1 S/U=1 U=2 U/M=1
+口径B 逐条目 : F=1 M=1 P=5 S=5 S/P=1 S/U=1 U=2 U/M=1 mixed(见 source_grades)=1
+主分级 F（整项可直接用）(1): corrector_time_limit
+含任一 F 字段(5): business_budget, carbon_budget, corrector_time_limit,
+                policy_architecture, seeds
+「❌ 需人工裁决」= 17      （初稿 14 系估算，错）
+~~~
+
+§0 的「没有任何一项属于 F」也已更正为「有 5 个条目含 F 字段，但整项可直接用仅 1 项」。
+
+**验收**：两处 `git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0。未改代码 / 冻结资产 / readiness。
+
+**回滚（实测零冲突）**：
+
+~~~bash
+git revert 8c91765 27da85d   # == 11f0bf3^{tree}
+~~~
+
+> ## ⛔ **f-c-g-R1 完成即停，等待复审。**
+> 通过后才将清单交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
