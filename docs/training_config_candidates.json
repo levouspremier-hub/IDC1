@@ -174,18 +174,21 @@
       "unit": "violation_task_steps",
       "unit_source_grade": "F",
       "unit_location": "safe_rl_v2/lagrangian.py:37,43-46",
-      "value_source_grade": "P",
+      "value_source_grade": "S/P",
       "example_value_from": "tests/test_m13gcd_two_batch.py:60",
       "candidates": [
         "沿用 5.0",
         "由 train split 分布标定",
         "人工给定物理目标"
       ],
-      "needs_human_decision": "预算数值与标定方法；是否按 episode 长度归一",
+      "needs_human_decision": "在**固定 per-transition mean 口径下**，决定**预算数值**及其 **train-only／物理标定依据**。（聚合方式由 lagrangian.py:40,200-204 **固定**，**不是**可选训练参数。）",
       "related_frozen": "不得按 validation/test 重算（红线）",
       "caliber_source_grade": "F",
       "caliber_location": "safe_rl_v2/lagrangian.py:40,200-204,245",
-      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。"
+      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。",
+      "example_value_from_smoke": "safe_rl_v2/train.py:623-631",
+      "example_value_from_probe": "tests/test_m13gcd_two_batch.py:60-61",
+      "grade_note": "示例值**同时**出现在 synthetic smoke（train.py:623-631）与 probe （test_m13gcd_two_batch.py:60-61）两处 ⇒ 分级为 **S/P**。**S/P 不等于正式训练参数**：两处均为示例。"
     },
     {
       "id": "carbon_budget",
@@ -195,25 +198,28 @@
       "unit": "kgCO2e",
       "unit_source_grade": "F",
       "unit_location": "safe_rl_v2/lagrangian.py:38,43-46",
-      "value_source_grade": "P",
+      "value_source_grade": "S/P",
       "example_value_from": "tests/test_m13gcd_two_batch.py:61",
       "candidates": [
         "沿用 3.0",
         "由 train split 碳排分布标定",
         "人工给定"
       ],
-      "needs_human_decision": "预算数值与标定方法",
+      "needs_human_decision": "在**固定 per-transition mean 口径下**，决定**预算数值**及其 **train-only／物理标定依据**。（聚合方式由 lagrangian.py:40,200-204 **固定**，**不是**可选训练参数。）",
       "related_frozen": "carbon 物理量来自 realized carbon_factor_t；refs_v4.carbon_factor_ref=0.402（train_derived）",
       "caliber_source_grade": "F",
       "caliber_location": "safe_rl_v2/lagrangian.py:40,200-204,245",
-      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。"
+      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。",
+      "example_value_from_smoke": "safe_rl_v2/train.py:623-631",
+      "example_value_from_probe": "tests/test_m13gcd_two_batch.py:60-61",
+      "grade_note": "示例值**同时**出现在 synthetic smoke（train.py:623-631）与 probe （test_m13gcd_two_batch.py:60-61）两处 ⇒ 分级为 **S/P**。**S/P 不等于正式训练参数**：两处均为示例。"
     },
     {
       "id": "multiplier_learning_rate",
       "name": "乘子学习率",
       "code_location": "safe_rl_v2/lagrangian.py:149（ConstraintSpec.learning_rate）；更新式 lagrangian.py:245",
       "current_value": 0.01,
-      "source_grade": "P",
+      "source_grade": "S/P",
       "example_value_from": "tests/test_m13gcd_two_batch.py:60-61",
       "candidates": [
         "沿用 0.01",
@@ -221,21 +227,27 @@
         "双时间尺度"
       ],
       "needs_human_decision": "两个约束各自的 learning_rate",
-      "related_frozen": null
+      "related_frozen": null,
+      "example_value_from_smoke": "safe_rl_v2/train.py:623-631",
+      "example_value_from_probe": "tests/test_m13gcd_two_batch.py:60-61",
+      "grade_note": "示例值**同时**出现在 synthetic smoke（train.py:623-631）与 probe （test_m13gcd_two_batch.py:60-61）两处 ⇒ 分级为 **S/P**。**S/P 不等于正式训练参数**：两处均为示例。"
     },
     {
       "id": "multiplier_max",
       "name": "乘子上限",
       "code_location": "safe_rl_v2/lagrangian.py:149（ConstraintSpec.max_multiplier）；钳位 lagrangian.py:249",
       "current_value": 100.0,
-      "source_grade": "P",
+      "source_grade": "S/P",
       "example_value_from": "tests/test_m13gcd_two_batch.py:60-61",
       "candidates": [
         "沿用 100.0",
         "其他上限"
       ],
       "needs_human_decision": "两个约束各自的 max_multiplier",
-      "related_frozen": null
+      "related_frozen": null,
+      "example_value_from_smoke": "safe_rl_v2/train.py:623-631",
+      "example_value_from_probe": "tests/test_m13gcd_two_batch.py:60-61",
+      "grade_note": "示例值**同时**出现在 synthetic smoke（train.py:623-631）与 probe （test_m13gcd_two_batch.py:60-61）两处 ⇒ 分级为 **S/P**。**S/P 不等于正式训练参数**：两处均为示例。"
     },
     {
       "id": "seeds",
@@ -308,14 +320,11 @@
         "random_seed": 0,
         "parallel": false
       },
-      "source_grade": "U",
-      "candidates": [
-        "沿用 random_seed=0 / parallel=False",
-        "其他（需人工裁决）"
-      ],
-      "needs_human_decision": "求解器确定性选项是否冻结为现状",
+      "source_grade": "F",
+      "candidates": [],
+      "needs_human_decision": null,
       "related_frozen": "刻意设定；model.py:42-47 记录 HiGHS threads 选项经 scipy 会崩溃（实测）",
-      "source_grade_note": "原标 F **过高**：DETERMINISTIC_RANDOM_SEED / DETERMINISTIC_PARALLEL 仅出现在 planning/model.py:50-51，全仓库无其他引用、无人工批准记录、无冻结资产或契约强制；属**代码内工程选择**，不满足 F 的定义（F = 由冻结资产 / verified 链 / 已批准契约强制）。"
+      "note": "**R2 恢复**：M1.3g-f-c-g-R1 曾将其改为 U，属**范围外重分类**；现恢复 R1 前状态。本卡**不重新裁决**求解器选项。依据：`planning/model.py:50-51` 的确定性设定经 `model.py:42-47` 文档化，且 `probe_rollout_deterministic` 等回归依赖它。"
     }
   ],
   "frozen_constraints": [
@@ -346,48 +355,53 @@
   ],
   "summary": {
     "total_items": 18,
-    "generated_by": "从 items 的实际分级字段脚本生成（口径见下），非手写",
-    "caliber_A_by_field_occurrence": {
-      "F": 6,
+    "generated_by": "脚本从 items 的**实际字段**计算（M1.3g-f-c-g-R2），禁止手写",
+    "grade_counts_by_field_occurrence": {
+      "F": 7,
       "M": 1,
-      "P": 5,
+      "P": 1,
       "S": 5,
-      "S/P": 1,
+      "S/P": 5,
       "S/U": 1,
-      "U": 2,
+      "U": 1,
       "U/M": 1
     },
-    "caliber_B_by_item_primary_grade": {
+    "grade_counts_in_composite_source_grades": {
       "F": 1,
-      "M": 1,
-      "P": 5,
-      "S": 5,
-      "S/P": 1,
-      "S/U": 1,
-      "U": 2,
-      "U/M": 1,
-      "mixed(见 source_grades)": 1
+      "U": 4
     },
-    "caliber_B_rule": "primary = source_grade ＞ value_source_grade ＞ source_grades(复合) ＞ '?'",
-    "items_with_any_F_field": [
+    "grade_rule": "逐**字段**计数：一个条目可同时有多个分级字段（如 business_budget = unit F + value S/P + caliber F）。",
+    "nonempty_needs_human_decision_count": 17,
+    "nonempty_needs_human_decision_items": [
+      "batch_arrangement",
       "business_budget",
       "carbon_budget",
+      "clip_epsilon",
+      "corrector_mode",
       "corrector_time_limit",
+      "cpu_backend",
+      "gamma_lambda",
+      "horizon",
+      "learning_rate",
+      "multiplier_learning_rate",
+      "multiplier_max",
+      "optimizer",
       "policy_architecture",
-      "seeds"
+      "rollout_length",
+      "seeds",
+      "update_count"
     ],
-    "items_fully_formal_primary_F": [
-      "corrector_time_limit"
-    ],
-    "items_without_code_location": [
+    "code_location_null_count": 2,
+    "code_location_null_items": [
       "batch_arrangement",
       "cpu_backend"
     ],
-    "ready_to_use_as_formal": [
-      "corrector_time_limit"
-    ],
-    "needs_human_decision_count": 17,
-    "needs_human_decision_note": "除主分级为 F 的条目外均需人工裁决（含复合分级项）。",
-    "counts_note": "**M1.3g-f-c-g-R1 重新生成**：初稿 total_items=19 与「❌ 14 项」均为估算，已废弃。"
+    "cross_check": {
+      "total_items_expected": 18,
+      "code_location_null_expected": 2,
+      "total_items_actual": 18,
+      "code_location_null_actual": 2
+    },
+    "counts_note": "**不得**用「总数减主分级 F」代替实际字段计数。历史账本：未提交草稿曾写 19 / 14，**从未进入任何提交**；已提交基线 11f0bf3 为 18 条 + 汇总 15。"
   }
 }
