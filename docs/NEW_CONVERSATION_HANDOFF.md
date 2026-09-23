@@ -1514,3 +1514,41 @@ git revert b56adcd f9d3294 6b661bd   # == 8141a04^{tree}
 
 > ## ⛔ **f-c-h 完成即停，等待复审。**
 > **未接**训练循环、正式训练或 M6。
+
+## 9.26 **业务敏感性已定位到任务可用量层（M1.3g-f-c-h1，2026-09-23）**
+
+**配置口径**：候选与标定报告写明 `forecast_cutoff=48` + causal 来源
+（`train.py` 预检仍为 4，接线须改同值，**未**改 `train.py`）；
+标定脚本删除硬编码 `0.25`，改用 `resolve_corrector_budget(...)` ⇒
+来源 `production_default`；历史 run **未覆盖**（新 run-id 重算，数值逐位相同）。
+
+~~~text
+诊断（origin 48/4848/10176，固定种子，corrector on）：
+  compute 0.25 vs 1.0：exec_action=0 planned_capacity=0 completed_work=0
+                       sla_violation_count=**None（全程不分叉）**
+决定性对照（corrector=OFF，exec == raw）：
+  planned_capacity 总和 0.25→2331.1051 | 1.0→9324.4206（差 4.00×）
+  completed_work  总和 0.25→1569.0    | 1.0→1569.0   （逐位相同）
+  completed_work_total == initial_Q(50.0) + Σ mapper ledger（6/6 全等）
+~~~
+
+**绑定层**：容量**不是**（差 4× 而完成量相同）；**任务可用量是**；
+修正器投影**不是** 0.25-vs-1.0 不变的原因。
+⇒ **未找到**低于现候选 business budget 的可执行轨迹。
+
+**未定位**：修正器 ON 相对 OFF 使完成量 ↓4.2%、SLA 0→100–114，**机制未定位**。
+预测窗口 4 vs 48 的相同结论是**零对照**（参考提案与 forecast 无关）。
+
+**原报告**「某约束先绑定」已降级为**待验证假设**。
+
+**验收**：**15 + 17 = 32 passed**；`git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0。禁区零改动；**未**冻结任何 budget。
+
+**回滚（实测两侧 tree 一致、零冲突）**：
+
+~~~bash
+git revert 462d99a dd7b544 eb10aca 8030b4a   # == cdb3152^{tree}
+~~~
+
+> ## ⛔ **f-c-h1 完成即停，等待复审。**
+> **未自行修改或冻结** business / carbon budget。

@@ -4147,6 +4147,55 @@ git revert b56adcd f9d3294 6b661bd
 > ## ⛔ **f-c-h 完成即停，等待复审。**
 > **未接**训练循环、正式训练或 M6；长训前须先完成 M9.1 工时预算。
 
+### 7BQ. M1.3g-f-c-h1：业务敏感性诊断与配置口径补全（**执行完成，等待复审**）
+
+`docs/task_cards/M1.3g.md` §dj–§dk。**不冻结预算、不运行 `make train`、不改 readiness。**
+
+**配置口径**：① 候选与标定报告写明 `forecast_cutoff = 48` + causal 来源
+（B6 `ScenarioBundle`）+「`train.py` 预检仍为 4、接线必须改为 48」（**未**改 `train.py`）；
+② 标定脚本**删除**硬编码 `0.25`，改为
+`resolve_corrector_budget(None, enabled=True)` ⇒ `(0.25, 'production_default')`，
+候选 `corrector.source = "production_default"`；③ 历史 run
+`runs/m13gch_calibration/` **未覆盖**，重算走新 run-id，数值与历史**逐位相同**。
+
+**诊断（origin 48 / 4848 / 10176，固定种子）**：
+
+```text
+compute 0.25 vs 1.0（corrector on）首次分叉：
+  exec_action=0  planned_capacity=0  completed_work=0  sla_violation_count=**None（全程不分叉）**
+
+决定性对照（corrector=OFF，exec == raw）：
+  planned_capacity 总和  0.25 → 2331.1051 | 1.0 → 9324.4206  （差 4.00×）
+  completed_work  总和   0.25 → 1569.0    | 1.0 → 1569.0     （**逐位相同**）
+  completed_work_total == initial_Q(50.0) + Σ mapper ledger  （3 origin **6/6 全等**）
+```
+
+**绑定层结论（实测支持）**：**接入容量不是**绑定层（能力差 4× 而完成量相同 ⇒ 排除）；
+**任务可用量是**绑定层（关闭修正器时全部可用工作量被做完 ⇒ 支持）；
+**修正器投影不是** 0.25-vs-1.0 不变的原因（不变性在 `exec == raw` 时同样成立 ⇒ 排除）。
+⇒ **未找到**低于现候选 `business_budget` 的 corrector-on 可执行轨迹。
+
+**未定位（明确登记）**：修正器 ON 相对 OFF 使完成量 ↓ 约 **4.2%**、SLA 计数
+**0 → 100–114**；**机制未定位**，建议单独诊断卡。
+**预测窗口 4 vs 48** 结果相同，但参考提案是**常量、与 forecast 无关** ⇒
+这是**零对照**，不能推断策略如何使用预测窗口。
+
+**原报告降级**：`§3.1`「某约束先绑定」无直接证据 ⇒ 改为**待验证假设**，
+并由 §7 实测**部分证实/排除**。
+
+**验收**：新档 **15 passed**、标定档 **17 passed**、合计 **32 passed**；
+`git diff --check` **exit 0**；`git status --short` **空**；
+`env release --verify` **exit 0**（`017575dc…`）。**禁区零改动**。
+
+**回滚（4 提交，先验证后登记）**：
+```bash
+git revert 462d99a dd7b544 eb10aca 8030b4a
+# == cdb3152^{tree} = dc1b3675267d73a8b9e8fd98e0a53843f8bc32c1
+```
+
+> ## ⛔ **f-c-h1 完成即停，等待复审。**
+> **未自行修改或冻结** business / carbon budget。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
