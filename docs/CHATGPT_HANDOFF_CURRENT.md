@@ -1,8 +1,8 @@
 # IDC 项目交接：新 ChatGPT 对话当前入口
 
-更新时间：2026-09-23（Asia/Shanghai）  
-代码快照：`8cd2772e9b2c8d1c8d8bdc3f0215a201f79a59f8`  
-分支：`p4-safeppo-m51a-rollout-contract-m12-integration`  
+更新时间：2026-09-23（Asia/Shanghai）\
+代码快照：`8cd2772e9b2c8d1c8d8bdc3f0215a201f79a59f8`\
+分支：`p4-safeppo-m51a-rollout-contract-m12-integration`\
 仓库：`/Users/levous/Desktop/IDC`
 
 > 本文是新 ChatGPT 对话的**当前入口**。它提供上下文，不自动授权执行修改；
