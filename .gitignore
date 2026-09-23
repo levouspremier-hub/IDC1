@@ -32,6 +32,9 @@
 !configs/frozen_refs/*.json
 !configs/release/
 !configs/release/*.json
+# M1.3g-f-c-h：训练配置**候选**（configs/ 为逐目录白名单）
+!configs/training/
+!configs/training/*.json
 !data_io/
 !data_io/*.py
 !idc_model/
@@ -123,6 +126,8 @@
 !docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md
 # M1.3f-d：arrival intensity 审计文档（同上）
 !docs/AUDIT_ARRIVAL_INTENSITY.md
+# M1.3g-f-c-h：训练配置标定证据报告（同上）
+!docs/AUDIT_TRAINING_CONFIG_CALIBRATION.md
 !docs/WORK_HANDOFF.md
 !docs/CHATGPT_HANDOFF_CURRENT.md
 # M1.3g-f-c-g：正式训练配置审计（docs/ 为逐文件白名单）
