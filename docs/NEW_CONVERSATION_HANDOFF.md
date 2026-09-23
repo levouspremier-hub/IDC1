@@ -1318,3 +1318,40 @@ git revert 58f0fb9 f91e4a3   # == a5f4a29^{tree}
 
 > ## ⛔ **f-c-f-R1 完成即停，等待人工复审。**
 > **未接**训练配置审计卡、正式训练或 M6。
+
+## 9.21 **正式训练配置候选审计已出（M1.3g-f-c-g，2026-09-23）**
+
+**只读审计卡**：`docs/AUDIT_TRAINING_CONFIG.md` + `docs/training_config_candidates.json`
+（schema `idc-training-config-candidates-v1`，18 条目）。
+
+**来源分级**：F=正式约束 / S=synthetic smoke 示例 / P=probe 示例 / U=未决定 / M=缺失。
+**S 与 P 均不得自动升级为正式训练参数。**
+
+~~~text
+条目总数 = 18
+  F=2  S=5  P=5  U=2  M=1  S/P=1  S/U=1  U/M=1
+✅ 可直接用 : 1（求解器确定性选项）
+⚠️ 数值正式、启用待裁决 : 1（corrector 0.25 s）
+❌ 需人工裁决 : 15；其中无代码位置（缺失）= 1（batch_arrangement）
+~~~
+
+**核心结论**：正式训练配置**整体尚未冻结**，**没有任何 PPO 超参数属于 F**；
+`batch_arrangement` 与 `cpu_backend` **无代码位置**，需先补设计。
+
+**逐项可定位**：11 域均标 `文件:行`，18 处行号**逐条核对通过**。
+
+**与冻结约束的关系**：`refs_v4` 供归一化参考值（非超参数）；verified train split
+限定 `candidate_origins=[48,10224)`；`delta_t_hours=0.5` 决定 γ 时间语义；
+`corrector 0.25 s` 为 M5.4i 已审核生产默认。
+
+**验收**：两处 `git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0。**禁区零改动**。未运行正式训练、未改 readiness。
+
+**回滚（实测量零冲突）**：
+
+~~~bash
+git revert 6d5f1c4 cbabfb0 6fb10cf   # == 5e7f5ed^{tree}
+~~~
+
+> ## ⛔ **f-c-g 完成即停，等待人工裁决。**
+> **未接**冻结卡、正式训练或 M6。

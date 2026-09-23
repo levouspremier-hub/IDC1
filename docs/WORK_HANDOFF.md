@@ -3886,6 +3886,58 @@ git revert 58f0fb9 f91e4a3
 > ## ⛔ **f-c-f-R1 完成即停，等待人工复审。**
 > **未接**训练配置审计卡、正式训练或 M6。
 
+### 7BL. M1.3g-f-c-g：正式训练配置候选审计（**执行完成，等待人工裁决**）
+
+`docs/task_cards/M1.3g.md` §cx–§cy。**只读审计卡**：不选值、不冻结、不改代码。
+
+**交付物**：`docs/AUDIT_TRAINING_CONFIG.md`（审计正文，11 域逐项）、
+`docs/training_config_candidates.json`（机器可读，schema
+`idc-training-config-candidates-v1`，18 条目）、`.gitignore` 最窄放行。
+
+**来源分级**：F=正式约束 / S=synthetic smoke 示例 / P=probe 示例 /
+U=尚未决定 / M=缺失。**S 与 P 均不得自动升级为正式训练参数。**
+
+**实测统计（脚本计数，非估算）**：
+
+```text
+条目总数 = 18
+  F=2（solver_determinism、corrector_time_limit 数值）
+  S=5  P=5  U=2  M=1  S/P=1  S/U=1  U/M=1
+✅ 可直接用   : 1（solver_determinism）
+⚠️ 数值正式、启用待裁决 : 1（corrector 0.25 s）
+❌ 需人工裁决 : 15；其中无代码位置（缺失）= 1（batch_arrangement）
+```
+
+**核心结论**：正式训练配置**整体尚未冻结**；**没有任何 PPO 超参数属于 F**。
+`batch_arrangement` 与 `cpu_backend` **无代码位置**，需先补设计。
+
+**逐项可定位**：11 个域均标 `文件:行`，**18 处行号逐条核对通过**；
+缺失项以 `code_location: null` + M/U 标记。
+
+**与冻结约束的关系**：`refs_v4` 供 13 项归一化参考值（非超参数）；
+verified train split 限定 `candidate_origins=[48,10224)` ⇒ 约束 horizon/rollout；
+`delta_t_hours=0.5` 决定 γ 时间语义与 `lambda_ref=31.994 work/step`；
+`corrector 0.25 s` 为 M5.4i 已审核生产默认（启用与否待裁决）。
+
+**⚠️ 本卡内自行发现并修正的两处未实测数字**：初稿 JSON `total_items: 19`、
+审计 §13「❌ 的 14 项」均为**估算**；实测更正为 **18** 与 **15**。
+与 f-c-f-R1 被指出的 D2 同类，本卡自行发现。
+
+**验收**：两处 `git diff --check` **exit 0**（工作树与 `5e7f5ed..HEAD`）；
+`git status --short` **空**；`env release --verify` **exit 0**（`017575dc…`）。
+**禁区零改动**（`safe_rl_v2/`、`envs/`、`scenario/`、`checkpointing/`、`planning/`、
+`configs/`、`tests/` 均未变）；冻结资产 hash 未变。
+本卡为只读审计，未制造先红、未重跑 PPO 全套、未运行正式训练、未改 readiness。
+
+**回滚（3 提交，先验证后登记，零冲突）**：
+```bash
+git revert 6d5f1c4 cbabfb0 6fb10cf
+# == 5e7f5ed^{tree} = e2c5ff9ec9d92c842e230690eec7f92cab97809f
+```
+
+> ## ⛔ **f-c-g 完成即停，等待人工裁决。**
+> **未接**冻结卡、正式训练或 M6。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
