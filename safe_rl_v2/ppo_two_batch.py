@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import importlib
 from typing import Any
@@ -35,6 +36,7 @@ from safe_rl_v2.ppo_update import single_ppo_update
 __all__ = [
     "TRAIN_CANDIDATE_STARTS",
     "build_formal_env",
+    "deep_snapshot",
     "resume_two_batch_checkpoint",
     "run_single_batch",
     "run_two_batch_probe",
@@ -150,6 +152,12 @@ def run_single_batch(
         "index": index,
         "start": start,
         "origin": local_origin_from_start("train", start),
+        # **M1.3g-f-c-f 最小扩展**：暴露**完整** transition 记录，供逐字段精确对照
+        # （observation / next_observation / raw_action / old_raw_log_prob /
+        # exec_action / reward / 三类 cost / terminated / truncated /
+        # correction_info / contract_version）。**不改变**既有键
+        # `transitions`（它仍是**计数**）。
+        "transition_records": transitions,
         "formal": bool(env.formal),
         "injection_local_origin": getattr(injection, "local_origin", None),
         "transitions": int(stats["transitions"]),
@@ -171,6 +179,23 @@ def run_single_batch(
         "optimizer_steps_cumulative": _optimizer_steps(optimizer),
         "lagrangian_updates_cumulative": int(update["lagrangian_updates_after"]),
     }
+
+
+def deep_snapshot(value: Any) -> Any:
+    """**递归**深快照：张量 `detach().clone()`，容器重建，其余 `deepcopy`。
+
+    ⚠️ **必须的语义**（M1.3g-f-c-e-R2 的教训）：`torch.optim.Optimizer.state_dict()`
+    返回**新的外层 dict**，但其 `state` 里的 `exp_avg` / `exp_avg_sq` / `step` 是
+    **活张量的同一对象**，会被后续 `step()` **原位改写**。若快照直接持有它们，
+    「某批次**之前**」的对照会退化成「之后 vs 之后」——**空洞**。
+    """
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    if isinstance(value, dict):
+        return {key: deep_snapshot(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return type(value)(deep_snapshot(item) for item in value)
+    return copy.deepcopy(value)
 
 
 def _optimizer_steps(optimizer: Any) -> int:
