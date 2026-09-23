@@ -11,10 +11,11 @@
 
 | 项 | 值 | 依据 |
 |---|---|---|
-| corrector | **on**，`0.25 s` | 唯一生产预算（M5.4i 已审核）；训练/评估同一修正语义。`off` 留作日后独立重训的机制对照 |
+| corrector | **on**，`0.25 s`，来源 **`production_default`** | 经 `planning.corrector.resolve_corrector_budget(None, enabled=True)` 解析（**非**本地硬编码）；M5.4i 已审核。训练/评估同一修正语义。`off` 留作日后独立重训的机制对照 |
 | 后端 | CPU 单进程，`torch_num_threads=1` | 求解器既有确定性选项**不改** |
 | policy | 单隐层 `Tanh`、`hidden=64`、`log_std` 初值 0、`action_dim=21`、三头 critic | 保持现状 |
 | `obs_dim` | **520**（实测，`horizon=48`） | **从 formal env 取得，不硬编码**；= `6 + 10 + 6×20 + 8×48` |
+| `forecast_cutoff` | **48** | 因果预测来源为 B6 `ScenarioBundle` 的 causal forecast（可见窗口 `[t, t+48)`）。<br>⚠️ **当前 `safe_rl_v2/train.py` 预检仍为 4；后续训练接线必须改为同值 48**（本卡**未**改 `train.py`） |
 | Adam | `lr=3e-4`、`betas=(0.9,0.999)`、`eps=1e-8`、`weight_decay=0`、不退火 | 本卡选定 |
 | PPO | `clip=0.2`、`lambda=0.95` | 本卡选定 |
 | gamma | **每小时 0.99** ⇒ 半小时一步取 **√0.99 = 0.99498743710662** | 按小时定义，避免步长歧义 |
@@ -80,8 +81,12 @@ compute=0.25: exec_action[:3] 首步 = [0.25   0.00140557 0.25 ]  completed_work
 ```
 
 即：**`exec_action` 确实随提案不同**，但**完成工作量相同** ⇒ 业务违约数**饱和**
-（90.5% 的步为 `deadline_shortfall`）。原因是最紧的约束（任务可用量 / 接入容量）
-在三种计算强度下**都先绑定**，故提高计算强度并未改善违约。
+（90.5% 的步为 `deadline_shortfall`）。
+
+> ⚠️ **原表述已降级（M1.3g-f-c-h1）**：本节初稿写「最紧的约束（任务可用量 / 接入容量）
+> 在三种计算强度下**都先绑定**」—— 该因果**当时没有直接证据**，现降级为
+> **待验证假设**。该假设已在 **§7** 用实测**部分证实**（任务可用量绑定成立；
+> 接入容量经实测**不是**绑定层）。
 
 **后果（必须如实理解）**：`business_budget = 1.9704861…` **并不代表"多做就能更低"**，
 而是**该参考策略族下已饱和的违约水平**。它是**训练集上已展示可达到的参考水平**，
@@ -128,3 +133,102 @@ exogenous_v3_parquet    07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb7
 - `configs/training/idc_training_config_candidate_v1.json` 的 `status` 为
   **`candidate_not_frozen`** —— 冻结须另开卡；
 - **M9.1 工时预算**尚未按实际完整链吞吐完成（§1 警示）。
+
+---
+
+## 7. 业务敏感性诊断（M1.3g-f-c-h1）
+
+> 诊断脚本：`scripts/diagnose_business_sensitivity.py`；
+> 运行产物：`runs/m13gch1_diagnosis/`（**独立** run，历史 `runs/m13gch_calibration/` 未覆盖）。
+> 仅用 verified train 的 origin **48 / 4848 / 10176**，**固定同一环境种子**（`task=0, server=0, forecast=300000`）。
+
+### 7.1 ⚠️ `corrector=off` 不是基线
+
+`corrector=off` **只用于定位动作作用**，**不得**称为安全或服务合格的基线。
+其 `exec_action == raw_action`（逐步实测均为 `True`），故动作差异最纯粹。
+
+### 7.2 最早分叉步骤
+
+**compute 0 vs 0.25（corrector on）**：
+
+| origin | exec_action | planned_capacity | completed_work | sla_violation_count |
+|---|---|---|---|---|
+| 48 | **0** | **0** | **0** | 2 |
+| 4848 | **0** | **0** | **0** | 2 |
+| 10176 | **0** | **0** | **0** | 2 |
+
+**compute 0.25 vs 1.0（corrector on）**：
+
+| origin | exec_action | planned_capacity | completed_work | **sla_violation_count** |
+|---|---|---|---|---|
+| 48 | **0** | **0** | **0** | **None（全程不分叉）** |
+| 4848 | **0** | **0** | **0** | **None** |
+| 10176 | **0** | **0** | **0** | **None** |
+
+即：`exec_action` / `planned_capacity` / `completed_work` 在 **step 0** 就分叉，
+但 **`sla_violation_count` 全程零分叉** —— 业务指标对 0.25→1.0 的强度提升**完全不敏感**。
+
+### 7.3 绑定层定位（**实测结论**）
+
+**决定性对照（corrector = off，`exec == raw`）**：
+
+```text
+origin  48:  planned_capacity 总和  0.25 → 2331.1051 | 1.0 → 9324.4206   （差 4.00×）
+             completed_work  总和    0.25 → 1569.000000 | 1.0 → 1569.000000（**完全相同**）
+origin 4848: planned_capacity 总和  0.25 → 2331.1051 | 1.0 → 9324.4206   （差 4.00×）
+             completed_work  总和    0.25 → 1579.000000 | 1.0 → 1579.000000（**完全相同**）
+origin 10176:planned_capacity 总和  0.25 → 2331.1051 | 1.0 → 9324.4206   （差 4.00×）
+             completed_work  总和    0.25 → 1567.000000 | 1.0 → 1567.000000（**完全相同**）
+```
+
+**完成量 = 全部可用任务工作量（6/6 全等）**：
+
+```text
+completed_work_total == initial_Q(50.0) + Σ mapper ledger
+  origin  48: 50.0 + 1519.0 = 1569.0  ✅
+  origin 4848: 50.0 + 1529.0 = 1579.0  ✅
+  origin 10176:50.0 + 1517.0 = 1567.0  ✅
+（compute=0.25 与 1.0 **各自**都满足；corrector on/off 亦然）
+```
+
+**结论（有实测支持）**：
+
+1. **接入容量／计划能力不是绑定层** —— `planned_capacity` 相差 **4.00×**，
+   总完成量**逐位相同**。⇒ **排除**「物理容量先绑定」。
+2. **绑定层是「任务可用量」** —— 关闭修正器时，环境把
+   **全部可用任务工作量**（mapper 账本 + 初始积压 50.0）**做完**，
+   在 compute 0.25 与 1.0 下**都是 100%**。⇒ **支持**「任务可用量先绑定」。
+3. **修正器投影不是 0.25-vs-1.0 业务不变的原因** —— 该不变性在
+   **关闭修正器**（`exec == raw`）时同样成立。⇒ **排除**「修正器投影导致」。
+
+> 上列三条均基于上表实测；**未**放松容量、SOC、任务或期限约束。
+
+### 7.4 未定位项（**明确记为未定位**）
+
+**修正器 ON 相对 OFF 改变了结局**（origin 48）：
+
+```text
+corrector=off: completed_work 总 = 1569.000000   sla_total = 0
+corrector=on : completed_work 总 = 1503.483884   sla_total = 100
+（origin 4848: 1579.0 / 0  →  1509.498549 / 106；
+  origin 10176: 1567.0 / 0  →  1500.977430 / 114）
+```
+
+即修正器 ON 使完成量下降约 **4.2%**，并出现 **100–114** 次 SLA 违约计数
+（OFF 为 **0**）。**本卡未能定位其机制**（修正器是在满足若干物理约束下最小化
+相对 raw 提案的偏移；为何该投影会减少完成量、引入违约，需要**单独诊断卡**）。
+**记为未定位**，本节不作因果结论。
+
+### 7.5 预测窗口 4 vs 48（**零对照**）
+
+corrector=on、同一 origin、同一提案下，`forecast_cutoff` ∈ {4, 48}：
+
+```text
+first_divergence_sla_violation_count : 全部 None（三个 origin × 三档 compute）
+completed_work 总量                  : c4 与 c48 相同（仅浮点级逐步差）
+sla_total                            : 100/100、106/106、114/114（c4 与 c48 相同）
+```
+
+⚠️ **必须注明**：本节三种参考提案是**常量动作、与 forecast 无关**，
+故该对照是环境动力学的**零对照（null control）**，**不能**用来说明
+「策略会如何使用预测窗口」。它只说明：**改变预测窗口不影响环境对这些常量动作的响应**。
