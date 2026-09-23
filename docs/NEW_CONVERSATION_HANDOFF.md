@@ -1251,3 +1251,33 @@ ab7f5b58f4f49690bc2716732535431bfa2c9efbcd38c842ec16a9b3ada6094f  configs/frozen
 ## 14. 新对话首条消息模板
 
 请先读取 AGENTS.md、docs/IMPLEMENTATION_PLAN.md、docs/VSCODE_CLAUDE_EXECUTION_PROTOCOL.md、docs/WORK_HANDOFF.md 和 docs/NEW_CONVERSATION_HANDOFF.md。当前分支为 p4-safeppo-m51a-rollout-contract-m12-integration，HEAD 以交接文档为准。不要启动 M6 或正式训练；先复核工作树、M1.3g-c focused 测试及 **v4** triad 的 --verify，随后复核 M1.3g-e-a **R2** 的审计文档（`docs/AUDIT_ARRIVAL_TO_TASK_MAPPING.md`）与 **§7AB**。**在 `D-INTENSITY` 与 D1–D11 裁决完成、且人工明确放行之前，不要实现 g-e-b / g-e / g-f。**
+
+## 9.19 **三批 formal 更新连续性已验证（M1.3g-f-c-f，2026-09-23）**
+
+新增 `safe_rl_v2/ppo_three_batch.py` 与 `tests/test_m13gcf_three_batch.py`
+（**10 passed**）；`ppo_two_batch.py` 两处最小修改（公开 `deep_snapshot`；
+`run_single_batch` 增 `transition_records`）。
+
+~~~text
+三个 origin：local 48 / 96 / 144（2024-01-02 / 01-03 / 01-04），互不相同
+第三批 transition：13 字段 × 3 条**逐项精确相同**（非 digest、非近似）
+边界：Adam step=[2.0]，Lagrangian updates=2（A / B 两侧）
+最终：Adam step=[3.0]，Lagrangian updates=3；四对象逐项精确相同 ×4
+边界快照独立于批 3 活状态（防 R2 同类别名假绿）
+~~~
+
+**验收**：新档 **10 passed**；三档 focused **39 passed**；`make check` exit 0
+（**2891 passed**）；`make smoke` exit 0；env release `--verify` exit 0；
+禁区零改动；冻结资产未变。未运行 `make train`；**training 仍未放行**。
+
+**开工前收口**：复审方的 ChatGPT 入口文档等三处未提交变更单独提交为 `81fc237`。
+
+**回滚（先验证后登记，实测零冲突）**：
+
+~~~bash
+git revert 609d794                         # 实现批次
+git revert 609d794 646ab5a a53a87a 81fc237 # 卡范围
+~~~
+
+> ## ⛔ **f-c-f 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。

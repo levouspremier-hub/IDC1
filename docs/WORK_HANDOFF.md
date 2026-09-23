@@ -3774,6 +3774,64 @@ git revert 31797dc 747d297 52b7395 1999fee
 
 > ## ⛔ **f-c-e-R2 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
+
+### 7BJ. M1.3g-f-c-f：三批 formal PPO 更新连续性 probe（**执行完成，等待人工复审**）
+
+`docs/task_cards/M1.3g.md` §cs–§ct。
+
+**开工前收口**：发现三处**非本卡**的未提交变更（复审方的 ChatGPT 当前入口文档 +
+`.gitignore` 放行 + 旧文档指针），**单独提交**为 `81fc237`（未覆盖/未 stash/未 reset）。
+随后提交 R2 审核通过记录 `a53a87a`、本卡 `646ab5a`。
+
+**新增**：`safe_rl_v2/ppo_three_batch.py`、`tests/test_m13gcf_three_batch.py`（**10 passed**）。
+**`ppo_two_batch.py` 两处最小修改**：公开 `deep_snapshot`；`run_single_batch` 增
+`transition_records`（完整 transition 证据；既有键 `transitions`（计数）未改）。
+
+**改前真实结果**：两个目标文件均不存在 ⇒ `pytest` 报
+`ERROR: file or directory not found`。⚠️ **如实登记**：本卡为新模块+新测试卡，
+测试与实现作为**同一批次**（`609d794`）提交（卡 §cs.9 明示允许），
+故**未**产生独立先红提交；新断言全部在实现上一并通过，**未**破坏任何既有绿测试。
+
+**三个 origin（verified 链实时核验）**：local **48 / 96 / 144**
+（`2024-01-02 / 01-03 / 01-04`），互不相同；三批均 `formal=True`、各 3 条 transition、
+`contract-v9`。
+
+**第三批 transition 逐项对照**：**13 字段 × 3 条全部逐项精确相同**
+（observation / next_observation / raw_action / old_raw_log_prob / exec_action /
+reward / business_cost / carbon_cost / electricity_cost_sgd / terminated /
+truncated / correction_info / contract_version）。比较器灵敏度实测：单元素
+observation / reward / old_raw_log_prob / contract_version 扰动**全部被抓到**。
+> 注：probe 未开 corrector，按契约 `exec_action == raw_action`（已显式断言），
+> 该字段属**契约核对**而非判别性对照。
+
+**边界 step=2 / 最终 step=3**：
+
+```text
+边界 A / 边界 B：Adam step=[2.0]，Lagrangian updates=2
+最终 A / 最终 B：Adam step=[3.0]，Lagrangian updates=3
+最终 policy / optimizer / lagrangian / generator 逐项精确相同 ×4
+边界快照独立于批 3 活状态（exp_avg 不同；log_std data_ptr 不同）✅
+```
+
+**参数所有权**：四个对象 `is` 调用方对象；入参无任何超参数名；
+probe 源码无 `SafePPOPolicy(` / `Adam(` / `Lagrangian((` / `ConstraintSpec(` /
+`manual_seed(`；路径 B 的恢复对象亦由调用方提供。`claims` 三项恒 false。
+
+**验收**：新档 **10 passed**；三档 focused **39 passed**；
+`make check` exit 0（**2891 passed**，ruff/mypy 150 files 全通过）；
+`make smoke` exit 0；env release `--verify` exit 0（`017575dc…`）。
+**禁区零改动**（`train.py` / `envs/` / `scenario/` / `checkpointing/` /
+`configs/release/`）；冻结资产逐字节未变。本卡未运行 `make train`；
+**training readiness 继续为 false**。
+
+**回滚（先验证后登记，零冲突）**：
+```bash
+git revert 609d794                        # 实现批次（1 提交）→ 646ab5a^{tree}
+git revert 609d794 646ab5a a53a87a 81fc237 # 卡范围（4 提交）→ 8cd2772^{tree}
+```
+
+> ## ⛔ **f-c-f 完成即停，等待人工复审。**
+> **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
 回归（g-e-d）、训练（g-f）、评估或 M6**。
 `make train` 的错误归因**仍是 M1.2**（属 g-f 范围，本卡未改）；
