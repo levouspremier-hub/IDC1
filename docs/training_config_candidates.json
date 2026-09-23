@@ -26,7 +26,6 @@
         "action_dim": 21,
         "critic_heads": 3
       },
-      "source_grade": "U",
       "candidates": [
         "保持 64×1 层",
         "加宽/加深",
@@ -34,7 +33,16 @@
         "log_std 非零初值"
       ],
       "needs_human_decision": "架构是否冻结为现状；容量是否与 obs_dim 匹配",
-      "related_frozen": "obs_dim 由 formal env 决定（horizon=8 时实测 200），非超参数"
+      "related_frozen": "obs_dim 由 formal env 决定（horizon=8 时实测 200），非超参数",
+      "source_grades": {
+        "action_dim": "F",
+        "hidden_width": "U",
+        "hidden_layers": "U",
+        "activation": "U",
+        "log_std_init": "U"
+      },
+      "source_grade_note": "action_dim=21 属**正式约束**（IMPLEMENTATION_PLAN.md:203「动作严格为 20 组计算 + 1 有符号储能；传 23 维或其他长度立即报错」、AGENTS.md:13 红线 6、safe_rl_v2/buffer.py:30 ACTION_DIM=21）；其余架构选择才是 U。原标注整项为 U 属过粗。",
+      "action_dim_basis": "IMPLEMENTATION_PLAN.md:203；AGENTS.md:13 红线 6；safe_rl_v2/buffer.py:30"
     },
     {
       "id": "optimizer",
@@ -160,7 +168,7 @@
     },
     {
       "id": "business_budget",
-      "name": "business 约束预算",
+      "name": "business 约束（ConstraintSpec）预算",
       "code_location": "safe_rl_v2/lagrangian.py:149（ConstraintSpec.budget）",
       "current_value": 5.0,
       "unit": "violation_task_steps",
@@ -174,11 +182,14 @@
         "人工给定物理目标"
       ],
       "needs_human_decision": "预算数值与标定方法；是否按 episode 长度归一",
-      "related_frozen": "不得按 validation/test 重算（红线）"
+      "related_frozen": "不得按 validation/test 重算（红线）",
+      "caliber_source_grade": "F",
+      "caliber_location": "safe_rl_v2/lagrangian.py:40,200-204,245",
+      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。"
     },
     {
       "id": "carbon_budget",
-      "name": "carbon 约束预算",
+      "name": "carbon 约束（ConstraintSpec）预算",
       "code_location": "safe_rl_v2/lagrangian.py:149（ConstraintSpec.budget）",
       "current_value": 3.0,
       "unit": "kgCO2e",
@@ -192,7 +203,10 @@
         "人工给定"
       ],
       "needs_human_decision": "预算数值与标定方法",
-      "related_frozen": "carbon 物理量来自 realized carbon_factor_t；refs_v4.carbon_factor_ref=0.402（train_derived）"
+      "related_frozen": "carbon 物理量来自 realized carbon_factor_t；refs_v4.carbon_factor_ref=0.402（train_derived）",
+      "caliber_source_grade": "F",
+      "caliber_location": "safe_rl_v2/lagrangian.py:40,200-204,245",
+      "caliber_note": "AGGREGATION_PER_TRANSITION_MEAN=\"per_transition_mean\" 是**硬约束**（lagrangian.py:200-204 不符即抛错）：约束估计量是**每 transition 均值**，而更新式为 mult += lr*(estimate − budget)（lagrangian.py:245）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。这一点原审计未写出。"
     },
     {
       "id": "multiplier_learning_rate",
@@ -294,10 +308,14 @@
         "random_seed": 0,
         "parallel": false
       },
-      "source_grade": "F",
-      "candidates": [],
-      "needs_human_decision": null,
-      "related_frozen": "刻意设定；model.py:42-47 记录 HiGHS threads 选项经 scipy 会崩溃（实测）"
+      "source_grade": "U",
+      "candidates": [
+        "沿用 random_seed=0 / parallel=False",
+        "其他（需人工裁决）"
+      ],
+      "needs_human_decision": "求解器确定性选项是否冻结为现状",
+      "related_frozen": "刻意设定；model.py:42-47 记录 HiGHS threads 选项经 scipy 会崩溃（实测）",
+      "source_grade_note": "原标 F **过高**：DETERMINISTIC_RANDOM_SEED / DETERMINISTIC_PARALLEL 仅出现在 planning/model.py:50-51，全仓库无其他引用、无人工批准记录、无冻结资产或契约强制；属**代码内工程选择**，不满足 F 的定义（F = 由冻结资产 / verified 链 / 已批准契约强制）。"
     }
   ],
   "frozen_constraints": [
@@ -328,30 +346,48 @@
   ],
   "summary": {
     "total_items": 18,
-    "grade_counts_measured": {
-      "F": 2,
-      "S": 5,
-      "P": 5,
-      "U": 2,
+    "generated_by": "从 items 的实际分级字段脚本生成（口径见下），非手写",
+    "caliber_A_by_field_occurrence": {
+      "F": 6,
       "M": 1,
-      "S_or_P": 1,
-      "S_or_U": 1,
-      "U_or_M": 1
+      "P": 5,
+      "S": 5,
+      "S/P": 1,
+      "S/U": 1,
+      "U": 2,
+      "U/M": 1
     },
-    "grade_counts_note": "由脚本对本清单 items 的 source_grade / value_source_grade 实测统计得出，非估算。",
+    "caliber_B_by_item_primary_grade": {
+      "F": 1,
+      "M": 1,
+      "P": 5,
+      "S": 5,
+      "S/P": 1,
+      "S/U": 1,
+      "U": 2,
+      "U/M": 1,
+      "mixed(见 source_grades)": 1
+    },
+    "caliber_B_rule": "primary = source_grade ＞ value_source_grade ＞ source_grades(复合) ＞ '?'",
+    "items_with_any_F_field": [
+      "business_budget",
+      "carbon_budget",
+      "corrector_time_limit",
+      "policy_architecture",
+      "seeds"
+    ],
+    "items_fully_formal_primary_F": [
+      "corrector_time_limit"
+    ],
     "items_without_code_location": [
       "batch_arrangement",
       "cpu_backend"
     ],
-    "blocking_missing": [
-      "batch_arrangement",
-      "cpu_backend"
-    ],
     "ready_to_use_as_formal": [
-      "solver_determinism"
+      "corrector_time_limit"
     ],
-    "needs_human_decision_count": 15,
-    "needs_human_decision_note": "证据级为 ⚠️ 的 corrector_time_limit 数值已正式，但**启用与否**待裁决；故计入需裁决。",
-    "note": "❌ 标记项均需人工裁决；batch_arrangement 与 cpu_backend 无代码位置，需先补设计。"
+    "needs_human_decision_count": 17,
+    "needs_human_decision_note": "除主分级为 F 的条目外均需人工裁决（含复合分级项）。",
+    "counts_note": "**M1.3g-f-c-g-R1 重新生成**：初稿 total_items=19 与「❌ 14 项」均为估算，已废弃。"
   }
 }

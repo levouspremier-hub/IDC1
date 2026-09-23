@@ -17,8 +17,18 @@
 | **U** | **尚未决定**：代码里有值但无任何正式依据 | ❌ 必须人工裁决 |
 | **M** | **缺失**：无任何代码位置 | ❌ 必须补设计 |
 
-> **本审计的第一结论**：目前**没有任何**一项 PPO 超参数属于 **F**。
-> 现有值全部是 **S / P / U**；正式训练配置**整体尚未冻结**。
+> **本审计的第一结论**：正式训练配置**整体尚未冻结**。
+>
+> ⚠️ **R1 更正**：初稿写「没有任何一项属于 F」，**过强**。实测（§13）有 **5 个条目
+> 含 F 字段**：
+>
+> - `action_dim = 21`（动作维度，正式约束）；
+> - `business` / `carbon` 约束的**单位**与**聚合口径**（`per_transition_mean`）；
+> - `corrector` 生产时间预算 `0.25 s`（M5.4i 已审核）；
+> - 三套种子的**所有权**（必须显式给定、不得重播种全局 RNG）。
+>
+> 但**真正"整项可直接作为正式参数"的只有 1 项**（`corrector` 时间预算的数值）；
+> 其余全部 PPO **超参数取值**仍是 **S / P / U / M**。
 
 ---
 
@@ -28,7 +38,7 @@
 |---|---|
 | **代码位置** | `safe_rl_v2/policy.py:83` `SafePPOPolicy.__init__(obs_dim, action_dim=21, hidden=64)` |
 | **结构** | actor = `Linear(obs_dim,64)+Tanh+Linear(64,21)`；critic = `Linear(obs_dim,64)+Tanh+Linear(64,3)`；`log_std = zeros(21)`（`policy.py:86-90`） |
-| **现值来源** | **U**（`hidden=64`、单隐层、`Tanh`、`log_std` 初值 0 均为代码默认，无正式依据） |
+| **现值来源** | **U（仅架构）+ F（动作维度）**：`hidden=64`、单隐层、`Tanh`、`log_std` 初值 0 是代码默认，**无正式依据 ⇒ U**；但 **`action_dim = 21` 属正式约束 ⇒ F**（`docs/IMPLEMENTATION_PLAN.md:203`「动作严格为 20 组计算 + 1 有符号储能；**传 23 维或其他长度立即报错**」、`AGENTS.md:13` 红线 6、`safe_rl_v2/buffer.py:30` `ACTION_DIM = 21`）。<br>⚠️ **R1 更正**：初稿把整项标 U，**过粗**。 |
 | **候选** | ① 保持 64×1 层；② 加宽/加深；③ 改激活；④ 对 `log_std` 设非零初值 |
 | **待裁决** | 架构是否冻结为现状？容量是否与 `obs_dim=200`（formal horizon=8 的实测值）匹配？ |
 
@@ -108,12 +118,17 @@
 
 ---
 
-## 7. business / carbon 乘子预算与单位
+## 7. business / carbon **约束**预算与单位
+
+> ⚠️ **R1 口径更正**：初稿标题写「**乘子**预算」，属**口径混淆** ——
+> `budget` 属于**约束**（`ConstraintSpec`），**不属于乘子**；
+> 乘子（Lagrange multiplier）自身的参数是 `learning_rate` 与 `max_multiplier`（见 §8）。
 
 | 项 | 内容 |
 |---|---|
 | **代码位置** | `safe_rl_v2/lagrangian.py:37-46` `UNIT_VIOLATION_TASK_STEPS = "violation_task_steps"`、`UNIT_KG_CO2E = "kgCO2e"`；`REQUIRED_UNITS` 强制 `business→violation_task_steps`、`carbon→kgCO2e` |
 | **单位来源** | **F**（契约强制；`ConstraintSpec.__post_init__` 校验） |
+| **聚合口径来源** | **F**：`safe_rl_v2/lagrangian.py:40` `AGGREGATION_PER_TRANSITION_MEAN = "per_transition_mean"`，且 `lagrangian.py:200-204` **不符即抛错**。<br>⚠️ **R1 补充（初稿缺失）**：约束估计量是**每 transition 均值**，而更新式为 `mult += lr*(estimate − budget)`（`lagrangian.py:245`）⇒ **budget 必须与 estimate 同口径（per-transition）**才有量纲意义。 |
 | **预算现值来源** | **P**：`budget=5.0`（business，单位 violation·step）/ `budget=3.0`（carbon，单位 kgCO2e）—— 仅出现在测试示例（`test_m13gcd_two_batch.py:60-61` 等） |
 | **候选** | ① 沿用 5.0 / 3.0；② 由 **train split** 的违规/碳排分布标定；③ 由人工给定的物理目标 |
 | **待裁决** | 两个 budget 的**数值**与**标定方法**；是否按 episode 长度归一 |
@@ -173,7 +188,7 @@ validation/test 重算（红线）。
 | 项 | 内容 |
 |---|---|
 | **代码位置** | `planning/model.py:50-51` `DETERMINISTIC_RANDOM_SEED = 0`、`DETERMINISTIC_PARALLEL = False`；`planning/model.py:54-62` `deterministic_mip_options()`；`model.py:42-47` 注释记录「HiGHS 的 `threads` 选项经 scipy 会崩溃（实测 TypeError）」 |
-| **现值来源** | **F（求解器确定性选项）**：`random_seed=0`、`parallel=False` 是**刻意**的确定性设定；**训练设备（CPU-only）为 U/M** |
+| **现值来源** | **U**（求解器确定性选项）**+ U/M**（训练设备）。<br>⚠️ **R1 更正**：初稿把确定性选项标为 **F**，**过高** —— `DETERMINISTIC_RANDOM_SEED` / `DETERMINISTIC_PARALLEL` **仅**出现在 `planning/model.py:50-51`，全仓库**无其他引用、无人工批准记录、无冻结资产或契约强制**；它是**代码内工程选择**，不满足 F 的定义。 |
 | **候选** | ① CPU-only、单线程；② CPU 多线程（会破坏 bit 级可复现）；③ GPU（不可复现） |
 | **待裁决** | 训练是否**强制 CPU-only**；`torch.set_num_threads` 是否固定；是否要求 bit 级可复现 |
 
@@ -197,7 +212,8 @@ validation/test 重算（红线）。
 
 | # | 项 | 当前值 | 来源 | 是否可作正式参数 |
 |---|---|---|---|---|
-| 1 | policy 架构 | `hidden=64`，1 隐层，Tanh，`log_std=0` | **U** | ❌ |
+| 1 | policy **架构** | `hidden=64`，1 隐层，Tanh，`log_std=0` | **U** | ❌ |
+| 1 | policy **动作维度** | `action_dim = 21` | **F**（`IMPLEMENTATION_PLAN.md:203`、`AGENTS.md:13`、`buffer.py:30`） | ✅ |
 | 2 | optimizer | Adam | **S** | ❌ |
 | 2 | 学习率 | `1e-3` | **S** | ❌ |
 | 3 | clip ε | 无默认（调用方传） | **U**（测试用 0.2 = P） | ❌ |
@@ -205,29 +221,66 @@ validation/test 重算（红线）。
 | 5 | rollout 长度 / horizon | `steps=8` / `horizon=24` | **S**（probe 用 3 / 8 = P） | ❌ |
 | 5 | 批次安排（mini-batch / shuffle） | **缺失** | **M** | ❌ |
 | 6 | 更新次数 | probe 各 1 次（2/3 批） | **P** | ❌ |
-| 7 | business budget | `5.0` violation·step | **P**（**单位 F**） | ❌ |
-| 7 | carbon budget | `3.0` kgCO2e | **P**（**单位 F**） | ❌ |
+| 7 | business budget | `5.0` violation·step | **P**（**单位 F + 聚合口径 F**） | ❌ |
+| 7 | carbon budget | `3.0` kgCO2e | **P**（**单位 F + 聚合口径 F**） | ❌ |
 | 8 | 乘子 learning_rate | `0.01` | **P** | ❌ |
 | 8 | 乘子 max_multiplier | `100.0` | **P** | ❌ |
 | 9 | 种子 | 三套显式（所有权 **F**） | **S**（数值）+ **F**（所有权） | ❌（数值） |
 | 10 | corrector on/off | `off` | **S** | ❌ |
 | 10 | corrector 预算 | `0.25` s | **F**（M5.4i 已审核） | ⚠️ 数值可，**启用与否**待裁决 |
 | 11 | CPU 后端 | 未见显式约束 | **U/M** | ❌ |
-| 11 | 求解器确定性 | `random_seed=0`、`parallel=False` | **F** | ✅（必须遵守） |
+| 11 | 求解器确定性 | `random_seed=0`、`parallel=False` | **U**（**R1 更正**：初稿标 F 过高） | ❌ |
 
 **结论**：正式训练配置**整体尚未冻结**。
 
-**实测统计**（由脚本对本节表格条目计数，非估算）：
+### 13.1 计数（**R1 由脚本从 JSON 实际条目重新生成**，禁止手写）
+
+复现命令（口径声明见下）：
+
+```bash
+python3 - <<'EOF'
+import collections, json, pathlib
+GRADE_FIELDS = ("source_grade","value_source_grade","unit_source_grade",
+                "caliber_source_grade","ownership_source_grade")
+d = json.loads(pathlib.Path("docs/training_config_candidates.json").read_text(encoding="utf-8"))
+items = d["items"]
+by_field = collections.Counter(it[f] for it in items for f in GRADE_FIELDS if f in it)
+def primary(it):
+    if "source_grade" in it: return it["source_grade"]
+    if "value_source_grade" in it: return it["value_source_grade"]
+    return "mixed(见 source_grades)" if "source_grades" in it else "?"
+by_item = collections.Counter(primary(it) for it in items)
+has_f = sorted(it["id"] for it in items
+               if any(it.get(f)=="F" for f in GRADE_FIELDS)
+               or any("F" in v for v in it.get("source_grades",{}).values()))
+print("total_items =", len(items))
+print("口径A 逐字段 :", dict(sorted(by_field.items())))
+print("口径B 逐条目 :", dict(sorted(by_item.items())))
+print("含任一 F 字段:", has_f)
+EOF
+```
+
+**实测输出**：
 
 ```text
-条目总数 = 18
-  证据级 F（可作正式参数）      : 2   （求解器确定性选项、corrector 0.25 s 数值）
-  证据级 S / P / U / M（不可） : 16
-  其中 ✅ 可直接使用            : 1   （求解器确定性选项）
-       ⚠️ 数值正式但启用待裁决   : 1   （corrector 时间预算）
-       ❌ 需人工裁决            : 15
-       └ 其中无代码位置（缺失）  : 1   （批次安排）
+total_items = 18
+
+口径A（逐**字段**出现次数，一条目可有多个分级字段）：
+  F=6  M=1  P=5  S=5  S/P=1  S/U=1  U=2  U/M=1
+
+口径B（逐**条目**主分级；规则 primary = source_grade ＞ value_source_grade
+       ＞ source_grades(复合) ＞ '?'）：
+  F=1  M=1  P=5  S=5  S/P=1  S/U=1  U=2  U/M=1  mixed(见 source_grades)=1
+
+含任一 F 字段的条目（5）：business_budget, carbon_budget, corrector_time_limit,
+                        policy_architecture, seeds
+主分级为 F（**整项可直接作为正式参数**）（1）：corrector_time_limit
+无 code_location（缺失）（2）：batch_arrangement, cpu_backend
 ```
+
+> **R1 更正对照**：初稿写 `total_items: 19` 与「❌ 的 14 项」，**均为估算**。
+> 脚本实测为 **18** 与 **17**（= 18 − 1 个主分级 F）。
+> 且 `solver_determinism` 由 F 更正为 U 后，「主分级 F」由 2 降为 **1**。
 
 ---
 
