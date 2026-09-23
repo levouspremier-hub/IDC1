@@ -260,10 +260,22 @@ def build_snapshot(env) -> SystemSnapshot:
         extension_policy=EXTENSION_POLICY,
     )
 
+    # **M1.3g-f-c-h2 单位口径**：`C_server` 是 **work/hour rate**，而规划器的
+    # `exec_compute[g] = used / cap[g]`（`planning/model.py:1123`）必须落到
+    # 环境的 **action 语义**上。环境每步能力为
+    # `action × max_task_load_per_server × C_server × delta_t_hours`
+    # （`envs/idc_price_env.py:778-784`），故：
+    #   - `group_work_capacity` 必须是 **work/step**（raw action=1 对应的能力）；
+    #   - `group_power_coeff_kw_per_work` 的分母是 `C_server × delta_t_hours`
+    #     （**不**乘 `max_task_load_per_server`）。
+    # 自洽性：`coeff × cap = max_task_load_per_server × (P_max − P_idle)`
+    # = raw action=1 时的功率摆幅。
     c_server = np.asarray(env.model.C_server, dtype=np.float64)
     p_max_kw = np.asarray(env.model.P_max, dtype=np.float64) / 1000.0
     p_idle_kw = np.asarray(env.model.P_idle, dtype=np.float64) / 1000.0
-    coeff = (p_max_kw - p_idle_kw) / np.maximum(c_server, 1e-6)
+    group_capacity_per_step = c_server * float(env.delta_t_hours)
+    work_capacity = group_capacity_per_step * float(env.max_task_load_per_server)
+    coeff = (p_max_kw - p_idle_kw) / np.maximum(group_capacity_per_step, 1e-6)
 
     return SystemSnapshot(
         step=t,
@@ -283,7 +295,7 @@ def build_snapshot(env) -> SystemSnapshot:
         tasks=tasks,
         forecast=forecast,
         planning_forecast=planning_forecast,
-        group_work_capacity=[float(c) for c in c_server],
+        group_work_capacity=[float(c) for c in work_capacity],
         group_power_coeff_kw_per_work=[float(c) for c in coeff],
         group_power_upper_kw=[float(p) for p in p_max_kw],
         power_approximation_note=POWER_APPROXIMATION_NOTE,
