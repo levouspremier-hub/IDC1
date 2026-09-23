@@ -1399,3 +1399,45 @@ git revert 8c91765 27da85d   # == 11f0bf3^{tree}
 
 > ## ⛔ **f-c-g-R1 完成即停，等待复审。**
 > 通过后才将清单交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
+
+## 9.23 **审计来源与计数已修正（M1.3g-f-c-g-R2，2026-09-23）**
+
+f-c-g-R1 **复审不通过**；本卡**纯文档修正**。
+
+**四项来源 `P` → `S/P`**：`business_budget` / `carbon_budget` 的
+`value_source_grade`，`multiplier_learning_rate` / `multiplier_max` 的
+`source_grade`。依据**同时**记两处：synthetic smoke `train.py:623-631` **与**
+probe `test_m13gcd_two_batch.py:60-61`。**S/P 仍不等于正式训练参数。**
+
+**预算口径**：改为「在**固定 `per_transition_mean` 口径下**，决定预算数值及其
+train-only／物理标定依据」；聚合方式**固定**，不列为可选训练参数。
+
+**收回范围外重分类**：`solver_determinism` **U → F**（恢复 R1 前状态），
+本卡不重新裁决求解器选项；保留 `action_dim=21` 正式约束说明；
+**corrector 仅 `0.25 s` 数值有依据，是否启用仍待裁决**。
+
+**计数（JSON 实际字段脚本生成）**：
+
+~~~text
+total_items = 18
+各来源分级（逐字段）: F=7 M=1 P=1 S=5 S/P=5 S/U=1 U=1 U/M=1
+复合 source_grades 内 : F=1 U=4
+非空 needs_human_decision = 17
+code_location == null     = 2  ['batch_arrangement', 'cpu_backend']
+交叉检查：total 18 ✅  null_loc 2 ✅
+~~~
+
+**账本澄清**：未提交草稿的 19 / 14 **从未进入任何提交**；已提交基线 `11f0bf3`
+为 **18 条 + 汇总 15**；并更正基线「无代码位置: 1」→ **2**。
+
+**验收**：JSON 合法；两处 `git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0；禁区无改动。
+
+**回滚（实测两侧 tree 一致、零冲突）**：
+
+~~~bash
+git revert 4ddc08d 3d29aa6 43f0379   # == 9bd5c25^{tree}
+~~~
+
+> ## ⛔ **f-c-g-R2 完成即停，等待复审。**
+> 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。

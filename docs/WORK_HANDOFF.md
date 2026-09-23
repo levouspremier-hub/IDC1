@@ -3982,6 +3982,63 @@ git revert 8c91765 27da85d
 > ## ⛔ **f-c-g-R1 完成即停，等待复审。**
 > 通过后才将清单交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
 
+### 7BN. M1.3g-f-c-g-R2：审计来源与计数修正（**执行完成，等待复审**）
+
+`docs/task_cards/M1.3g.md` §db–§dd。f-c-g-R1 **复审不通过**
+（1 范围外 + 1 来源不完整 + 1 口径 + 1 计数/账本）。**纯文档修正卡。**
+
+**四项来源（卡面明确的四项）`P` → `S/P`**：
+
+```text
+business_budget.value_source_grade          P -> S/P
+carbon_budget.value_source_grade            P -> S/P
+multiplier_learning_rate.source_grade       P -> S/P
+multiplier_max.source_grade                 P -> S/P
+```
+
+依据**同时**记录两处：synthetic smoke `safe_rl_v2/train.py:623-631` **与**
+probe `tests/test_m13gcd_two_batch.py:60-61` ⇒ 故为 **S/P**（R1 只标 P，漏了 smoke）。
+**S/P 仍不等于正式训练参数**（两处均为示例）。
+
+**预算口径**：待裁决问题由「是否按 episode 长度归一」改为
+**「在固定 `per_transition_mean` 口径下，决定预算数值及其 train-only／物理标定依据」**；
+聚合方式由 `lagrangian.py:40,200-204` **固定**，**不列为可选训练参数**。
+
+**收回范围外重分类**：`solver_determinism` 由 **U 恢复为 F**（R1 前状态），
+`candidates=[]`、`needs_human_decision=null`、删除 R1 的 note；
+**本卡不重新裁决求解器选项**。**保留** `action_dim=21` 的正式约束说明。
+**corrector**：明确 **仅 `0.25 s` 这个数值**有依据（M5.4i）；
+**不得**称整个 corrector 配置「可直接使用」—— **是否启用待裁决**。
+
+**计数（从 JSON 实际字段脚本生成，禁止手写/派生口径）**：
+
+```text
+total_items = 18
+各来源分级（逐字段）: F=7  M=1  P=1  S=5  S/P=5  S/U=1  U=1  U/M=1
+复合 source_grades 内 : F=1  U=4
+非空 needs_human_decision = 17
+code_location == null     = 2  ['batch_arrangement', 'cpu_backend']
+交叉检查：total 18 ✅  null_loc 2 ✅
+```
+
+**历史账本澄清**：未提交草稿曾写 19 / 14，**从未进入任何提交**；
+已提交基线 `11f0bf3` 为 **18 条 + 汇总 15**。另更正基线一处自相矛盾：
+其正文写「无代码位置: 1」而 own JSON 为 **2**，**2 为正确值**。
+
+**验收**：JSON 解析合法；两处 `git diff --check` **exit 0**；
+`git status --short` **空**；`env release --verify` **exit 0**（`017575dc…`）；
+禁区（`safe_rl_v2/`、`tests/`、`configs/`、`envs/`、`scenario/`、`planning/`）**无改动**。
+
+**回滚（3 提交，先验证后登记）**：
+```bash
+git revert 4ddc08d 3d29aa6 43f0379
+# revert 侧 tree = 470ca3bdebb87005bb539ce1c67a16bc88d6918c
+# 起点侧 9bd5c25^{tree} = 470ca3bdebb87005bb539ce1c67a16bc88d6918c  → 两侧一致、零冲突
+```
+
+> ## ⛔ **f-c-g-R2 完成即停，等待复审。**
+> 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
