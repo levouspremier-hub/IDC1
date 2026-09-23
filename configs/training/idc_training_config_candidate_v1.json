@@ -5,7 +5,8 @@
   "corrector": {
     "mode": "on",
     "time_limit_s": 0.25,
-    "source": "production_default (M5.4i)",
+    "source": "production_default",
+    "source_note": "经 planning.corrector.resolve_corrector_budget 解析；非本地硬编码。",
     "note": "训练/评估同一修正语义；off 留作日后独立重训的机制对照。"
   },
   "backend": {
@@ -42,6 +43,9 @@
     "gamma_formula": "sqrt(0.99)（半小时一步，按每小时 0.99 定义）"
   },
   "sampling": {
+    "forecast_cutoff": 48,
+    "forecast_source": "B6 ScenarioBundle 的 causal forecast（可见窗口 [t, t+forecast_cutoff)）",
+    "forecast_cutoff_note": "当前 safe_rl_v2/train.py 预检仍为 4；后续训练接线**必须**改为同值 48。",
     "horizon": 48,
     "episodes_per_batch": 4,
     "transitions_per_batch": 192,
