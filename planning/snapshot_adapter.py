@@ -1,11 +1,25 @@
 """M4.1/M4.1a 从环境构建滚动规划输入 SystemSnapshot。
 
-> ⚠️ **M1.3e：本 adapter 是 `oracle_debug` / dev-only，不能标 formal。**
-> 它读取的「可见预测」**就是** `env` 的真值数组 `[t, t+forecast_cutoff)`，
-> 且 `load_forecast` 仍为全零占位。因此它产出的 `ScenarioBundle` 恒为
-> `mode="oracle_debug"`，并被 `contracts.validators.validate_forecast_purpose`
-> 在 `purpose=training` / `purpose=evaluation` 时**拒绝**。
-> 本卡（M1.3e）**不**在 adapter 中伪造正式预测：正式 causal forecast 接线属 **M1.3g**。
+**两条路径互不混用**（M1.3g-f-c-h2-R1）：
+
+- **legacy**（`env.formal is False`）：规划输入取 realized 真值
+  `price_t` / `T_amb` / `pv_t` / `wt_t` / `carbon_factor_t`；
+  `snapshot.forecast` 是 `mode="oracle_debug"` 的占位 bundle。
+- **正式链**（`env.formal is True`）：规划输入只取**已验签 B6 causal forecast**
+  通道 `env.*_forecast_t` / `env.task_arrival_forecast`；
+  `snapshot.forecast` 是经正式入口重建的 `mode="formal"` bundle。
+
+> ⚠️ **legacy 路径是 `oracle_debug` / dev-only，不能标 formal。** 它读取的「可见预测」
+> **就是** `env` 的真值数组 `[t, t+forecast_cutoff)`（legacy 下 `*_forecast_t` 只是
+> 真值的别名），因此它产出的 `ScenarioBundle` 恒为 `mode="oracle_debug"`，并被
+> `contracts.validators.validate_forecast_purpose` 在 `purpose=training` /
+> `purpose=evaluation` 时**拒绝**。该路径语义**逐字保持不变**。
+
+**formal 路径（本卡修复）**：formal 的规划输入**只能**取自 `env` 上由
+`build_verified_formal_env_injection` → `build_formal_scenario_b6` 注入的
+**causal forecast** 通道；`snapshot.forecast` 则由同一条正式入口**重建**为
+`mode="formal"` 的 bundle（真实 provenance、真实时间窗口，可通过 training purpose gate）。
+**不得**仅把 `oracle_debug` 改名成 formal。
 
 红线：
 - adapter 不访问 policy、value 或未来真值；
@@ -19,7 +33,9 @@ import hashlib
 import json
 import subprocess
 from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -58,6 +74,88 @@ EXTENSION_POLICY = (
     "arrival -> 0（未来具体任务不进入规划）；base_idc_power -> 按持久化温度重算。"
 )
 _DEFAULT_PLANNING_HORIZON = 24
+
+# --- 规划输入的两个来源通道（M1.3g-f-c-h2-R1） --------------------------------
+#
+# formal 环境上 `*_forecast_t` 由 `build_verified_formal_env_injection` 从
+# **已验证的 B6 ScenarioBundle** 注入，是**决策可见**的因果预测；而
+# `price_t` / `T_amb` / `pv_t` / `wt_t` / `carbon_factor_t` 是 **realized 真值**
+# （其 `[t+1, ...)` 部分对未来不可见）。两条通道**不得混用**。
+_FORMAL_SOURCE_ATTRS: dict[str, str] = {
+    "price": "price_forecast_t",
+    "pv": "pv_forecast_t",
+    "wind": "wind_forecast_t",
+    "temperature": "temperature_forecast_t",
+    "carbon": "carbon_forecast_t",
+    "arrival": "task_arrival_forecast",
+}
+# legacy：读 realized 真值窗口（**逐字保持原语义**，既有 leakage 回归依赖它）
+_LEGACY_SOURCE_ATTRS: dict[str, str] = {
+    "price": "price_t",
+    "pv": "pv_t",
+    "wind": "wt_t",
+    "temperature": "T_amb",
+    "carbon": "carbon_factor_t",
+    "arrival": "task_arrival_forecast",
+}
+
+
+def _is_formal(env) -> bool:
+    """是否走正式（B6 因果预测）链；缺失 `formal` 属性即 legacy。"""
+    return bool(getattr(env, "formal", False))
+
+
+def _source_attrs(env) -> dict[str, str]:
+    return _FORMAL_SOURCE_ATTRS if _is_formal(env) else _LEGACY_SOURCE_ATTRS
+
+
+@lru_cache(maxsize=64)
+def _verified_formal_bundle(split: str, local_origin: int, horizon: int) -> ScenarioBundle:
+    """按**同一条正式入口**重建该 episode 的 formal `ScenarioBundle`。
+
+    `build_verified_formal_env_injection` 构造环境时正是用
+    `(split, origin=local_origin, forecast_cutoff=horizon)` 调 `build_formal_scenario_b6`；
+    这里用同一组参数重建，因此产出的 bundle 携带**真实** provenance
+    （九个上游资产的 path+sha256、真实 `generated_at` / target 窗口、
+    当前实现的 40 位 revision），可通过 `validate_forecast_purpose(purpose="training")`。
+
+    未篡改的生产路径上它与注入到 env 的 causal forecast **逐位相同**
+    （`tests/test_m13gch2r1_formal_causal_snapshot.py`
+    `::test_formal_planning_window_slices_the_verified_bundle` 逐位断言）。
+    本函数**不**用相等性做门禁：规划输入按其**通道**取自 `env.*_forecast_t`，
+    以便回归测试能验证「改可见因果预测 ⇒ 快照字段变」。
+
+    缓存键只含已验证的不可变输入；同一 episode 内多次构快照不会重复重算。
+    """
+    from scenario.b6_split_manifests import default_inputs
+    from scenario.formal_scenario_b6 import build_formal_scenario_b6
+    from scenario.splits import SplitName
+
+    inputs = default_inputs()
+    return build_formal_scenario_b6(
+        cast("SplitName", split),
+        origin=int(local_origin),
+        forecast_cutoff=int(horizon),
+        canonical_parquet_path=inputs["canonical_parquet"],
+        canonical_manifest_path=inputs["canonical_manifest"],
+        split_manifest_path=inputs["split_manifest"],
+        policy_manifest_path=inputs["forecast_policy_manifest"],
+    )
+
+
+def _formal_bundle(env) -> ScenarioBundle:
+    """formal env 的 `snapshot.forecast`：本 episode 的**已验签**正式 bundle。"""
+    inj = getattr(env, "formal_injection", None)
+    if inj is None:
+        raise ValueError(
+            "env.formal 为真但没有 formal_injection：无法确定正式因果预测的来源与时间窗口"
+        )
+    if int(inj.horizon) != int(env.horizon):
+        raise ValueError(
+            "formal 注入的 horizon 必须与环境的 horizon 一致："
+            f"{inj.horizon} != {env.horizon}"
+        )
+    return _verified_formal_bundle(str(inj.split), int(inj.local_origin), int(inj.horizon))
 
 
 def _visible_window(series: np.ndarray, t: int, cutoff: int, horizon: int) -> list[float]:
@@ -165,26 +263,29 @@ def _planning_horizon(env, cap: int = PLANNING_HORIZON_CAP) -> int:
 def _planning_extension(
     env, t: int, cutoff: int, n_steps: int
 ) -> tuple[dict[str, list[float]], list[bool], list[bool]]:
-    """时域展开（M4.1c）：窗口内取可见真值，窗口外按 `EXTENSION_POLICY` 假设。
+    """时域展开（M4.1c）：窗口内取**该路径的可见来源**，窗口外按 `EXTENSION_POLICY` 假设。
 
-    返回 (各外生量向量, visible_mask, assumed_mask)。窗口外**不读取任何真值**。
+    formal 的可见来源是 `env.*_forecast_t`（已验签 B6 causal forecast），
+    legacy 的是 realized 真值窗口。返回 (各外生量向量, visible_mask, assumed_mask)。
+    窗口外**不读取任何来源**。
     """
     horizon = int(env.horizon)
     start, end = visible_window_slice(t, cutoff, horizon)
     n_visible = min(end - start, n_steps)  # 尾部按实际 planning_horizon_steps 截断
     visible_mask = [k < n_visible for k in range(n_steps)]
     assumed_mask = [not v for v in visible_mask]
+    attrs = _source_attrs(env)
 
-    def _series(values) -> list[float]:
-        arr = np.asarray(values, dtype=np.float64)
+    def _series(name: str) -> list[float]:
+        arr = np.asarray(getattr(env, attrs[name]), dtype=np.float64)
         return [float(arr[t + k]) for k in range(n_visible)]
 
-    price_v = _series(env.price_t)
-    pv_v = _series(env.pv_t)
-    wind_v = _series(env.wt_t)
-    temp_v = _series(env.T_amb)
-    carbon_v = _series(env.carbon_factor_t)
-    arrival_v = _series(env.task_arrival_forecast)
+    price_v = _series("price")
+    pv_v = _series("pv")
+    wind_v = _series("wind")
+    temp_v = _series("temperature")
+    carbon_v = _series("carbon")
+    arrival_v = _series("arrival")
 
     # 持久化基准 = 最后一个可见值；若窗口为空则由调用方在此之前拒绝（cutoff<=0）。
     last_price = price_v[-1] if price_v else 0.0
@@ -237,12 +338,18 @@ def build_snapshot(env) -> SystemSnapshot:
         if task.status != "not_arrived"
     ]
 
-    forecast = _oracle_debug_bundle(
-        env,
-        t=t,
-        horizon=horizon,
-        cutoff=cutoff,
-        delta_t_hours=float(env.delta_t_hours),
+    # formal：`snapshot.forecast` 是本 episode 的**已验签** B6 正式 bundle；
+    # legacy：逐字保持 `oracle_debug` 语义（真值窗口 + 全零 load 占位）。
+    forecast = (
+        _formal_bundle(env)
+        if _is_formal(env)
+        else _oracle_debug_bundle(
+            env,
+            t=t,
+            horizon=horizon,
+            cutoff=cutoff,
+            delta_t_hours=float(env.delta_t_hours),
+        )
     )
 
     vectors, visible_mask, assumed_mask = _planning_extension(env, t, cutoff, n_steps)

@@ -61,10 +61,13 @@ def run(origin: int, budget: float) -> dict[str, Any]:
     timeouts = 0
     fallbacks = 0
     steps = 0
+    # M1.3g-f-c-h2-R1（P2）：碳排必须**逐步累加**；旧写法 `sum([x])` 恒等于最后一步的值。
+    carbon_total = 0.0
     for _ in range(HORIZON):
         _o, _r, term, trunc, info = wrapped.step(action)
         completed += float(info["completed_work"])
         sla += int(info[BUSINESS_VIOLATION_INFO_KEY])
+        carbon_total += float(info[CARBON_EMISSION_INFO_KEY])
         if str(info.get("correction_reason")) == "timeout":
             timeouts += 1
         if str(info.get("correction_reason")) in (
@@ -74,8 +77,7 @@ def run(origin: int, budget: float) -> dict[str, Any]:
         if term or trunc:
             break
     return {"origin": origin, "steps": steps, "completed_work": completed,
-            "sla_total": sla, "carbon_total": float(sum(
-                s for s in [info[CARBON_EMISSION_INFO_KEY]])),
+            "sla_total": sla, "carbon_total": carbon_total,
             "timeouts": timeouts, "zero_action_fallbacks": fallbacks,
             "ledger_plus_backlog": sum(inj.ledger_micro) / 1e6 + float(env.initial_Q)}
 
