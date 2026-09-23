@@ -46,7 +46,19 @@ MULTIPLIER_LR_BASE = 0.01
 MULTIPLIER_CAP_BASE = 10.0
 MULTIPLIER_INIT = 0.0
 
-CORRECTOR_TIME_LIMIT_S = 0.25   # 唯一生产预算（M5.4i）
+# **不**在本地硬编码预算：从 `planning.corrector` 取生产常量，并用**既有解析器**
+# 记录其来源（`production_default`）。
+from planning.corrector import (  # noqa: E402 - 常量区，置于模块级
+    PRODUCTION_CORRECTOR_TIME_LIMIT_S,
+    resolve_corrector_budget,
+)
+
+CORRECTOR_TIME_LIMIT_S, CORRECTOR_TIME_LIMIT_SOURCE = resolve_corrector_budget(
+    None, enabled=True)
+if CORRECTOR_TIME_LIMIT_S != PRODUCTION_CORRECTOR_TIME_LIMIT_S:
+    raise RuntimeError(
+        f"解析器给出的预算 {CORRECTOR_TIME_LIMIT_S} 与生产常量 "
+        f"{PRODUCTION_CORRECTOR_TIME_LIMIT_S} 不一致")
 
 # 分类依据：`planning/corrector.py:1-11` 的**权威失败语义**：
 #   - `none` / `deadline_shortfall`：**MIP 最优、可执行**第 0 步候选
@@ -308,7 +320,9 @@ def training_config_candidate(
         "corrector": {
             "mode": "on",
             "time_limit_s": CORRECTOR_TIME_LIMIT_S,
-            "source": "production_default (M5.4i)",
+            "source": CORRECTOR_TIME_LIMIT_SOURCE,
+            "source_note": ("经 planning.corrector.resolve_corrector_budget "
+                            "解析；非本地硬编码。"),
             "note": "训练/评估同一修正语义；off 留作日后独立重训的机制对照。",
         },
         "backend": {"device": "cpu", "torch_num_threads": 1,
@@ -324,7 +338,12 @@ def training_config_candidate(
                 "gamma_per_hour": 0.99,
                 "gamma_per_step": float(np.sqrt(0.99)),
                 "gamma_formula": "sqrt(0.99)（半小时一步，按每小时 0.99 定义）"},
-        "sampling": {"horizon": HORIZON, "episodes_per_batch": 4,
+        "sampling": {"forecast_cutoff": FORECAST_CUTOFF,
+                     "forecast_source": ("B6 ScenarioBundle 的 causal forecast"
+                                         "（可见窗口 [t, t+forecast_cutoff)）"),
+                     "forecast_cutoff_note": ("当前 safe_rl_v2/train.py 预检仍为 4；"
+                                              "后续训练接线**必须**改为同值 48。"),
+                     "horizon": HORIZON, "episodes_per_batch": 4,
                      "transitions_per_batch": HORIZON * 4,
                      "epochs_per_batch": 4, "minibatch_size": 48,
                      "minibatches_per_epoch": (HORIZON * 4) // 48,
@@ -410,6 +429,11 @@ def main(argv: list[str] | None = None) -> int:
         "multipliers": multipliers,
         "asset_hashes": hashes,
         "obs_dim": obs_dim,
+        "forecast_cutoff": FORECAST_CUTOFF,
+        "forecast_source": "B6 ScenarioBundle causal forecast",
+        "forecast_cutoff_note": ("train.py 预检仍为 4；训练接线必须改为 48。"),
+        "corrector_time_limit_s": CORRECTOR_TIME_LIMIT_S,
+        "corrector_time_limit_source": CORRECTOR_TIME_LIMIT_SOURCE,
     }
 
     run_dir = write_run(
