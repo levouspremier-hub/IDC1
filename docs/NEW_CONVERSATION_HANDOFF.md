@@ -1636,3 +1636,73 @@ git revert e0aacd0 e7c1e94 d055ba6 0d958df 1082216 8efaf60 6910edf 2c77526
 
 > ## ⛔ **f-c-h2 完成即停，等待复审。**
 > **未**接训练循环、正式训练或 M6；**未冻结**预算。
+
+## 9.29 **正式 corrector 规划输入已改为 B6 因果预测（M1.3g-f-c-h2-R1，2026-09-23/24）**
+
+复审不通过的原因：`planning/snapshot_adapter.py` 对 **formal** env 也把
+`env.price_t` / `T_amb` / `pv_t` / `wt_t` / `carbon_factor_t`（**realized 真值**）
+当作「可见预测」，`snapshot.forecast` 也恒为 `oracle_debug`。
+
+~~~text
+强制起点 ebde208（tree 0ea3ef2995e80dd86bc5a6f67f92489dc706dd16）
+6bf2e95 开卡 / 8dad024 先红（16 failed, 7 passed）/ 2b31dd4 实现（23 passed）
+276d954 重标定候选 / <record> 验收记录
+~~~
+
+**修复**：formal 的规划输入只取**已验签 B6 causal forecast** 通道
+（`env.*_forecast_t` / `task_arrival_forecast`）；`snapshot.forecast` 由**同一条**
+正式入口 `build_formal_scenario_b6(split, origin, forecast_cutoff)` 重建为
+`mode="formal"`（真实 provenance、真实窗口、过 `purpose="training"` 门禁）。
+**legacy / oracle_debug 语义逐字不变**（detached worktree 逐字段实测：唯一差异是
+adapter **自身**的 `code_revision`）。
+
+**因果隔离实测（origin 48，`cutoff=48`，审核方逐字复现）**：
+
+~~~text
+改前 planning price[:4] = [0.12659, 0.11916, 0.10834, 0.10797]  ← = env.price_t（未来真值）
+改后 planning price[:4] = [0.10778, 0.10798, 0.10789, 0.10796]  ← = env causal price_forecast_t
+env.price_t[1] = 123 → 规划快照与 bundle 逐字节不变
+反向控制 price_forecast_t[1] += 5 → planning price[1] 0.10798 → 5.10798
+purpose gate PASS；bundle generated_at 2024-01-02T00:00:00+08:00
+→ target_end 2024-01-03T00:00:00+08:00；9 个来源 hash
+~~~
+
+**P2 修复**：`replay_corrector_service.py` 的 `carbon_total` 由 `sum([x])`
+（恒等于**最后一步**）改为**逐步累加**；三步 1.0/2.5/4.0 的用例由 4.0 → **7.5**。
+
+**三次 origin 重放（`runs/m13gch2r1_replay`，历史未覆盖）**：
+
+~~~text
+origin  48: completed=1551.000001 sla=75 carbon_total 0.193232 -> 32.285432
+origin 4848: completed=1554.000000 sla=79 carbon_total 3.131196 -> 39.759661
+origin 10176:completed=1544.000000 sla=63 carbon_total 3.207020 -> 57.967448
+timeouts=0, fallbacks=0
+~~~
+
+completed/sla 与 h2 相同：A/B 实测 exec 动作最大差 3.07e-03，但固定提案重放受
+**任务可用量**约束（h1 结论），故服务量差异仅 ≈−7e-08。**未据此调预算凑结果。**
+
+**重标定（`runs/m13gch2r1_calibration`，24-origin，历史未覆盖）**：
+
+~~~text
+compute=1.0 : business 1.3038194444(不变)   carbon 1.0279280450 -> 1.0278989607
+compute=0.5 : business 1.3090277778 -> 1.3038194444   carbon 1.0348856339 -> 1.0348850010
+compute=0.25: business 1.4019097222(不变)   carbon 1.0317367381 -> 1.0317406822
+business_budget 1.3038194444444444（不变）；carbon_budget 1.0279280449520944
+-> 1.0278989607183693；达标提案 [1.0] -> [1.0, 0.5]
+乘子 carbon: lr 0.009463996474822895 -> 0.009464532046878296
+             cap 9.728307393798211   -> 9.7285826546719
+候选 status 仍为 candidate_not_frozen
+~~~
+
+> ⚠️ **h2 的 `runs/m13gch2_calibration_recap/` 使用了含未来真值的规划输入**，
+> 属**诊断结果，不作为正式配置依据**；原始产物保留、未删未改。
+
+**验收**：新档 **23 passed**；focused 110 passed；`make check` **2962 passed**
+（h2 为 2939）；`make smoke` exit 0；`env release --verify` exit 0
+（`017575dc…`，`formal_training_ready=False`）；`probe_corrector_repro`
+off/on 均 reproducible（`insufficient_evidence` 为探针既有功效判据）；
+`git status --short` 空。**未**运行 `make train`、**未**启动 M6、**M5.4 保持 blocked**。
+
+> ## ⛔ **f-c-h2-R1 完成即停，等待复审。**
+> **未冻结**预算；**未**接训练循环、正式训练或 M6。回滚见任务卡 §dt。
