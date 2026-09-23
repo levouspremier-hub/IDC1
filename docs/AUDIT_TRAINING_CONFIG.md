@@ -146,7 +146,7 @@ validation/test 重算（红线）。
 | 项 | 内容 |
 |---|---|
 | **代码位置** | `safe_rl_v2/lagrangian.py:149-156` `ConstraintSpec(name, budget, unit, learning_rate, max_multiplier)`；更新式 `lagrangian.py:245-249` `mult += lr*(estimate − budget)`，钳于 `[0, max_multiplier]` |
-| **现值来源** | **P**（`learning_rate=0.01`、`max_multiplier=100.0`，仅测试示例） |
+| **现值来源** | **S/P**（`learning_rate=0.01`、`max_multiplier=100.0`）。示例值**同时**出现在两处：**synthetic smoke** `safe_rl_v2/train.py:623-631` **与** **probe** `tests/test_m13gcd_two_batch.py:60-61`。**S/P 不等于正式训练参数** —— 两处均为示例。<br>⚠️ **R3 更正**：初稿写「**P**、仅测试示例」，**漏了 smoke 出处**且分级偏低。 |
 | **候选** | ① 沿用 0.01 / 100；② 按时间尺度标定 lr；③ 其他上限 |
 | **待裁决** | 两个约束的 `learning_rate` 与 `max_multiplier`；是否双时间尺度 |
 
