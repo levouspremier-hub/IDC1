@@ -1470,3 +1470,47 @@ git revert 0335614 d5d32f6 5fad927 4030cb8 88993f4   # == 0f38997^{tree}
 
 > ## ⛔ **f-c-g-R3 完成即停，等待复审。**
 > 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
+
+## 9.25 **训练配置候选与 train-only 预算标定（M1.3g-f-c-h，2026-09-23）**
+
+新增 `scripts/calibrate_training_config.py`、`tests/test_m13gch_training_config_calibration.py`
+（**17 passed**）、`configs/training/idc_training_config_candidate_v1.json`
+（`candidate_not_frozen`）、`docs/AUDIT_TRAINING_CONFIG_CALIBRATION.md`；运行产物
+`runs/m13gch_calibration/`。
+
+**24 个 train origin**：`index_k = floor(k*211/23)`，`origin = 48 + 48*index_k`；
+日对齐池 212；实测 `[48, 480, …, 10176]`，最小间隔 9 天，末项恰在 `end_exclusive`；
+**未读 validation/test**。
+
+~~~text
+三提案（20 计算维全 1.0/0.5/0.25，储能 0，各 1152 transitions）：
+  compute=1.00  business_mean=1.9704861111111112  carbon_mean=1.02089273465195
+  compute=0.50  business_mean=1.9704861111111112  carbon_mean=1.0285893052437065
+  compute=0.25  business_mean=1.9704861111111112  carbon_mean=1.0242255650312615
+  fallbacks=0  timeouts=0  deadline_shortfall=1043
+
+标定：
+  business_budget = 1.9704861111111112 violation_task_steps/transition（并列 ⇒ 取 1.0）
+  carbon_budget   = 1.02089273465195   kgCO2e/transition（达标最低 ⇒ 1.0）
+  乘子 business: scale=1.9704861111111112 lr=0.00257545071707194  cap=5.074889867841409
+  乘子 carbon  : scale=1.02089273465195   lr=0.009594884999059906 cap=9.79534838536124
+~~~
+
+**⚠️ 标定有效性（如实登记）**：`business_mean` 三提案**逐位相同**；实测
+`exec_action` 确实不同（0.25 首步 `[0.25, 0.00140557, 0.25]`）但 `completed_work` 相同
+⇒ 违约数**饱和**（90.5% 步为 `deadline_shortfall`）。`business_budget` 是**已饱和的
+参考水平**，不代表「多做就能更低」。
+
+**验收**：17 passed；`git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0。禁区零改动；历史审计分级未改写。
+**未**接训练循环、未改 readiness、未运行 `make train`。
+长训前须先完成 **M9.1 工时预算**。
+
+**回滚（实测两侧 tree 一致、零冲突）**：
+
+~~~bash
+git revert b56adcd f9d3294 6b661bd   # == 8141a04^{tree}
+~~~
+
+> ## ⛔ **f-c-h 完成即停，等待复审。**
+> **未接**训练循环、正式训练或 M6。

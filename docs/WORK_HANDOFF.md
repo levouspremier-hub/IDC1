@@ -4075,6 +4075,78 @@ git revert 0335614 d5d32f6 5fad927 4030cb8 88993f4
 > ## ⛔ **f-c-g-R3 完成即停，等待复审。**
 > 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
 
+### 7BP. M1.3g-f-c-h：训练配置决策与 train-only 预算标定（**执行完成，等待复审**）
+
+`docs/task_cards/M1.3g.md` §dh–§di。**配置决策 + 标定卡**；不接训练循环、
+不改 readiness、不运行 `make train`。
+
+**新增**：`scripts/calibrate_training_config.py`、
+`tests/test_m13gch_training_config_calibration.py`（**17 passed**）、
+`configs/training/idc_training_config_candidate_v1.json`
+（`status = candidate_not_frozen`）、
+`docs/AUDIT_TRAINING_CONFIG_CALIBRATION.md`；运行产物
+`runs/m13gch_calibration/{config.yaml,metrics.parquet,report.json,figures/proposal_means.png,manifest.json}`
+（`manifest.status = success`）。
+
+**改前预期失败**：`python -m scripts.calibrate_training_config --help`
+→ `No module named 'scripts.calibrate_training_config'`。
+
+**24 个 train origin（预先写定规则）**：`index_k = floor(k*211/23)`，
+`origin = 48 + 48*index_k`；日对齐池 212 个；实测
+`[48, 480, …, 9696, 10176]`，最小间隔 **9 天**，
+末项 `10176+48 = 10224 = end_exclusive`；全部来自 verified train；**未读 validation/test**。
+
+**三提案实测（20 计算维全 1.0 / 0.5 / 0.25，储能 0；各 1152 transitions）**：
+
+```text
+compute=1.00: business_mean=1.9704861111111112  carbon_mean=1.02089273465195
+compute=0.50: business_mean=1.9704861111111112  carbon_mean=1.0285893052437065
+compute=0.25: business_mean=1.9704861111111112  carbon_mean=1.0242255650312615
+三提案 zero_action_fallbacks=0  timeouts=0  deadline_shortfall=1043
+```
+
+**标定结果**：
+
+```text
+business_budget = 1.9704861111111112  violation_task_steps/transition（三提案并列 ⇒ 取 1.0）
+carbon_budget   = 1.02089273465195    kgCO2e/transition（达标提案最低 ⇒ 1.0）
+乘子 business: scale=1.9704861111111112  lr=0.00257545071707194   cap=5.074889867841409
+乘子 carbon  : scale=1.02089273465195    lr=0.009594884999059906  cap=9.79534838536124
+（均按 scale=max(1,参考均值)、lr=0.01/scale²、cap=10/scale 计算；初值 0）
+```
+
+**⚠️ 如实登记（标定有效性）**：`business_mean` 在三提案上**逐位相同** ——
+实测 `exec_action` **确实随提案不同**（1.0 首步全 0；0.25 首步 `[0.25, 0.00140557, 0.25]`），
+但 `completed_work` **完全相同** ⇒ 违约数**饱和**（90.5% 步为 `deadline_shortfall`）。
+故 `business_budget` 是**该参考策略族下已饱和的违约水平**，**不代表**「多做就能更低」；
+`carbon_budget` 确实随提案变化。
+
+**⚠️ 本卡修正的两处自身缺陷（如实登记）**：
+① `zip(origins, origins[1:], strict=True)` —— `origins[1:]` 本就短一个，
+首次运行即 `ValueError`；改为 `strict=False`。
+② `correction_reason` 初版把 `deadline_shortfall` 误计为「失败」，
+**漏了 `base_shortage`** 且误加不存在的 `infeasible`；
+按 `planning/corrector.py:1-11` 权威语义改为
+`BENIGN={none, deadline_shortfall}` / `ZERO_ACTION_FALLBACK={timeout, base_shortage,
+solver_failure, proposal_invalid}`（由测试断言与 `FailureClass` **完备覆盖**）。
+
+**数值可重算**：报告与候选 JSON 的全部数值已做**严格 token 级**核对（非子串匹配），
+数值与 6 项资产 hash **全部精确一致**。
+
+**验收**：测试 **17 passed**；`git diff --check` **exit 0**；`git status --short` **空**；
+`env release --verify` **exit 0**（`017575dc…`，env=true / training=false）。
+**禁区零改动**；历史审计 `docs/training_config_candidates.json` 的 **S/P 分级未改写**。
+
+**回滚（3 提交，先验证后登记）**：
+```bash
+git revert b56adcd f9d3294 6b661bd
+# revert 侧 tree = 0d4a2c6b3a5c4408441ebc1c98cf74d3a3811346
+# 起点侧 8141a04^{tree} = 0d4a2c6b3a5c4408441ebc1c98cf74d3a3811346  → 一致、零冲突
+```
+
+> ## ⛔ **f-c-h 完成即停，等待复审。**
+> **未接**训练循环、正式训练或 M6；长训前须先完成 M9.1 工时预算。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
