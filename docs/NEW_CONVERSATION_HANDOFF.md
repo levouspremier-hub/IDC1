@@ -1441,3 +1441,32 @@ git revert 4ddc08d 3d29aa6 43f0379   # == 9bd5c25^{tree}
 
 > ## ⛔ **f-c-g-R2 完成即停，等待复审。**
 > 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
+
+## 9.24 **审计正文一致性已修正（M1.3g-f-c-g-R3，2026-09-23）**
+
+f-c-g-R2 **复审不通过**：JSON 已改 **S/P** 但**正文未同步**（§7/§8 仍写
+「P、仅测试示例」），且 §0 仍称「求解器选项是否冻结待裁决」（与 JSON 的
+`solver_determinism=F`、`needs_human_decision=null` 及 §11 矛盾）。
+**文档一致性卡；JSON 未改。**
+
+~~~text
+F1 §7 预算现值来源 : P -> S/P，列明 smoke train.py:623-631 与 probe :60-61
+F2 §8 现值来源     : 乘子 lr=0.01 / max_multiplier=100.0  P -> S/P，列明上述两处
+F3 §0 前言         : 删除「求解器选项是否冻结待裁决」，与 JSON/§11 一致
+~~~
+
+**一致性核对**：§0 不再提求解器裁决 ✅；§7/§8 含两处出处且分级 S/P ✅；
+§11 solver=F 且称不在裁决范围 ✅；**§13 表格 vs JSON 逐字段 6/6 一致** ✅。
+
+**验收**：两处 `git diff --check` exit 0；`git status --short` 空；
+`env release --verify` exit 0；training readiness 仍为 false；JSON 未改；
+禁区无改动。
+
+**回滚（实测两侧 tree 一致、零冲突）**：
+
+~~~bash
+git revert 0335614 d5d32f6 5fad927 4030cb8 88993f4   # == 0f38997^{tree}
+~~~
+
+> ## ⛔ **f-c-g-R3 完成即停，等待复审。**
+> 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。

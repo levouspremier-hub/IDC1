@@ -4039,6 +4039,42 @@ git revert 4ddc08d 3d29aa6 43f0379
 > ## ⛔ **f-c-g-R2 完成即停，等待复审。**
 > 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
 
+### 7BO. M1.3g-f-c-g-R3：审计正文一致性修正（**执行完成，等待复审**）
+
+`docs/task_cards/M1.3g.md` §de–§dg。f-c-g-R2 **复审不通过**
+（1 × P1 正文与 JSON 不一致 + 1 × P2 §0 与 JSON/§11 矛盾）。
+**文档一致性卡**；**JSON 已正确，本卡未改 JSON**。
+
+**三处正文修正（逐字对照见卡片 §dg.2；F1/F2/F3 各一提交）**：
+
+```text
+F1 §7 预算现值来源 : P、仅测试示例 -> S/P，并列明 smoke train.py:623-631 与
+                     probe test_m13gcd_two_batch.py:60-61 两处
+F2 §8 现值来源     : 乘子 learning_rate=0.01 / max_multiplier=100.0
+                     P、仅测试示例 -> S/P，并列明上述两处
+F3 §0 前言         : 删除「求解器选项是否冻结待裁决」；与 JSON 的
+                     solver_determinism=F、needs_human_decision=null 及 §11 保持一致
+```
+
+**一致性核对结果**：§0 不再提求解器裁决 ✅；§7/§8 均含 smoke 与 probe 两处且分级
+**S/P** ✅；§11 `solver_determinism` = **F**、称「不在本卡裁决范围」✅；
+**§13 表格 vs JSON 逐字段 6/6 全部一致** ✅。
+
+**验收**：`git diff --check` 与 `git diff --check 0f38997..HEAD` 均 **exit 0**；
+`git status --short` **空**；`env release --verify` **exit 0**（`017575dc…`）；
+training readiness **仍为 false**；**JSON 未被修改**；
+禁区（`safe_rl_v2/`、`tests/`、`configs/`、`envs/`、`scenario/`、`planning/`）**无改动**。
+
+**回滚（5 提交，先验证后登记）**：
+```bash
+git revert 0335614 d5d32f6 5fad927 4030cb8 88993f4
+# revert 侧 tree = f7aaa177df77673124c39edd849a0ec18042149f
+# 起点侧 0f38997^{tree} = f7aaa177df77673124c39edd849a0ec18042149f  → 两侧一致、零冲突
+```
+
+> ## ⛔ **f-c-g-R3 完成即停，等待复审。**
+> 通过后才交人工逐项裁决。**未接**冻结卡、正式训练或 M6。
+
 > ## ⛔ **f-c-f 完成即停，等待人工复审。**
 > **未接**正式训练入口或 M6。
 **在人工裁决 A/B/C 之前，不得开始 mapper（g-e-b）、env 接线（g-e-c）、
