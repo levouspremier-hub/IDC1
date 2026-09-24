@@ -29,3 +29,11 @@
 ## 回滚点
 
 本卡与协议正文分开提交；在独立 worktree 从最终 HEAD 以 newest-first `git revert` 验证回到本卡起点的 tree。完成时工作树必须干净。
+
+## 验收记录（协议准备稿）
+
+- 提交：`a79dc7d`（开卡）、`33eff26`（协议/实施顺序/交接入口）。本节为证据收口提交。
+- `uv run pytest tests/test_m62_eval.py -q`：3 passed，确认旧骨架仍可运行；该测试不证明新协议已实现。
+- 审计发现：`evaluation/adapter.py` 的服务资格默认 true、可再生占比分母与 `EvaluationRecord` 字段不足，均已写入 M6-P1 实施边界。
+- **未冻结** 95%／1% 提案；待方向确认。未改评估器、环境、checkpoint、训练配置或 readiness；未运行正式训练、validation、test。
+- 完整范围回滚从最终 HEAD 依次 revert 本节提交、`33eff26`、`a79dc7d`；起点 `4f97cf9^{tree}` 为比较基准。实际验证结果由最终提交后的独立 worktree 命令核对。
