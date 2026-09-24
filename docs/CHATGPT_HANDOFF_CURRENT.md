@@ -10,6 +10,11 @@
 > 完整历史见 `docs/WORK_HANDOFF.md` 和 Git。旧的
 > `docs/NEW_CONVERSATION_HANDOFF.md` 已成为累计历史，不应再用其顶部快照判断现状。
 
+> **2026-09-24 计划补充**：本文顶部 SHA 是 2026-09-23 的历史入口快照，
+> 当前 HEAD 以 `git rev-parse HEAD` 为准。M6-P0 评估协议可现在准备，
+> 见 `docs/M6_EVALUATION_PROTOCOL.md`；checkpoint 契约稳定后再补评估器并用
+> 受控短跑 checkpoint 验证。正式 validation/test 仍须等待训练产物审核通过。
+
 ## 1. 先读什么
 
 新对话先按以下顺序读取：
@@ -44,7 +49,7 @@ demo，而是让每一层都具备可复现、可验签、无未来泄漏、单�
 - `safe_rl_v2/train.py` 还没有正式训练循环；
 - `formal_training_ready` 仍为 `false`；
 - 没有正式 checkpoint、成功训练 run、性能结论或收敛结论；
-- M6 正式评估尚未开始，也不得提前开始。
+- M6 正式评估尚未开始；当前只允许 M6-P0 协议准备，不能提前运行 validation/test。
 
 因此现在的核心结论是：**formal env 已发布，但 formal training 尚未发布。**
 
@@ -205,8 +210,9 @@ docs(review): approve M1.3g-f-c-e-R2 boundary snapshot repair
    synthetic/oracle/旧 manifest fallback。先红测试必须早于实现。
 5. **受控正式训练**：先证明 run/checkpoint/resume 和 claims 正确，再讨论性能；单次短跑
    不足以宣称有效或收敛。
-6. **训练后评估与 M6**：只在正式训练产物经人工审核后开始；validation 用于选择，test
-   仅作最终一次冻结评估。
+6. **M6 准备提前**：现在确定评估协议；checkpoint 契约稳定后补齐评估器，
+   用受控短跑 checkpoint 与 train-only 场景验证。正式训练产物经审核后才运行
+   validation，并在选择锁定后对预定矩阵运行一次最终 test。
 
 后续卡号可在审计后确定，不要为了延续编号而把多个风险层塞进同一张卡。
 

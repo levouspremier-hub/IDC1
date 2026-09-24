@@ -133,6 +133,7 @@
 # M1.3g-f-c-g：正式训练配置审计（docs/ 为逐文件白名单）
 !docs/AUDIT_TRAINING_CONFIG.md
 !docs/training_config_candidates.json
+!docs/M6_EVALUATION_PROTOCOL.md
 !docs/GRID_IEEE14_AUDIT.md
 !docs/task_cards/
 !docs/task_cards/*.md

@@ -7,7 +7,7 @@
 
 ## 边界
 
-- 新增 `docs/M6_EVALUATION_PROTOCOL.md`；更新 `docs/IMPLEMENTATION_PLAN.md` 的 M6 与放行顺序；本卡记录在此文件。
+- 新增 `docs/M6_EVALUATION_PROTOCOL.md`；更新 `docs/IMPLEMENTATION_PLAN.md` 的 M6 与放行顺序，并在 `docs/CHATGPT_HANDOFF_CURRENT.md` 指明新顺序；`.gitignore` 只加该协议文件的最窄放行规则；本卡记录在此文件。
 - 将既有 `evaluation/adapter.py` 与 `contracts.models.EvaluationRecord` 的口径差距登记为后续 M6-P1 的实施输入，不在本卡改代码。
 
 ## 禁止项
