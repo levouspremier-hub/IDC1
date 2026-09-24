@@ -181,7 +181,7 @@
     },
     "forecast_policy_manifest": {
       "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
-      "sha256": "926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb"
+      "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
     },
     "split_manifest": {
       "path": "data/manifest/singapore_2024_splits.json",

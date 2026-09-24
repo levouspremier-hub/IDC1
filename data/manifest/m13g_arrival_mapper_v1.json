@@ -81,23 +81,23 @@
     },
     "forecast_policy_v3": {
       "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
-      "sha256": "926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb"
+      "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
     },
     "formal_split_v5_test": {
       "path": "data/manifest/formal_splits_v5/test.json",
-      "sha256": "aaacd459ed4e1154ea538ba4c3164e67b04094a044f2d96c52a1312553f09835"
+      "sha256": "76c6bb79446fbbc5dd1566c4e617d6b0d746f2ae87caa2eb26a6a18b853a827f"
     },
     "formal_split_v5_train": {
       "path": "data/manifest/formal_splits_v5/train.json",
-      "sha256": "8608372fba5c560ba458c8903cc10746a4e21254b2c3e29a2c2cd3001d6233c7"
+      "sha256": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865"
     },
     "formal_split_v5_validation": {
       "path": "data/manifest/formal_splits_v5/validation.json",
-      "sha256": "3f16ad3af4d8b5ab86982550bda86e03af8bab4d9a8ff94b67ec2a0799a4851b"
+      "sha256": "ac1c50db28a8d6376513c6a2e6023cd7e45eaa6f4b8ad34f2b474a55a55d9933"
     },
     "frozen_refs_v4": {
       "path": "configs/frozen_refs/refs_v4.json",
-      "sha256": "b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7"
+      "sha256": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8"
     }
   },
   "units": {

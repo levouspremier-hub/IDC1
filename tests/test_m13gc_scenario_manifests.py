@@ -908,13 +908,24 @@ def test_all_three_older_generations_are_preserved_byte_for_byte():
 
 @needs_assets
 def test_v4_business_semantics_match_v3():
-    """除 schema / 路径 / revision / 冻结时间外，v4 与 v3 **逐字段相同**。"""
+    """除 schema / 路径 / revision / 冻结时间外，v4 与 v3 **逐字段相同**。
+
+    **CHAIN-REFRESH（2026-09-24）收窄说明**：`inputs` 的 **SHA-256** 属于
+    本函数 docstring 明示豁免的「路径 / revision」范畴——它随**上游实现提交**
+    前进。v3 是**已取代的历史证据**（字节永久保留，其绑定描述的是它生成时的
+    上游状态），故刷新活跃链（v4/v5）之后，v3 的旧 SHA 不应再被要求与新上游一致。
+    本函数因此改为比较 `inputs` 的**角色集合与逐角色路径**（设计身份），
+    其余九个键**逐字段**照旧比较；业务语义（origin 集合、切分、时间轴、
+    readiness）的断言**未**改动、**未**放宽。
+    """
     for split in SPLITS:
         v3 = json.loads(V3_TRIAD[split].read_text(encoding="utf-8"))
         v4 = json.loads(TRIAD[split].read_text(encoding="utf-8"))
         for key in ("contract_version", "split", "split_rows", "time_range",
-                    "frequency", "history_steps", "candidate_origins", "inputs",
-                    "readiness"):
+                    "frequency", "history_steps", "candidate_origins", "readiness"):
             assert v4[key] == v3[key], (split, key)
+        assert set(v4["inputs"]) == set(v3["inputs"]), (split, "inputs roles")
+        for role in v3["inputs"]:
+            assert v4["inputs"][role]["path"] == v3["inputs"][role]["path"], (split, role)
         assert v4["schema"] == SCHEMA
         assert v3["schema"] == SCHEMA_V3

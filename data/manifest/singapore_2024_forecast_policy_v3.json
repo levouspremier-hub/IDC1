@@ -27,7 +27,7 @@
   "frequency": "30min",
   "frozen_at_utc": "2026-09-19T15:15:16+00:00",
   "information_policy": "closed_open_[origin-48, origin)",
-  "materializer_revision": "cda31ab1b24f4a7da0cff456df8dae80dfd89b13",
+  "materializer_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
   "period_steps": 48,
   "readiness": {
     "available_driver_forecasts_ready": true,
@@ -37,7 +37,7 @@
   },
   "schema": "m1.3feb2a-singapore-2024-forecast-policy-v3",
   "seasonal_rule_source_policy_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
-  "seasonal_rule_source_policy_sha256": "ef4dd58a88dcb34fd75690324f957a5f87d2fd7d1b7bf6afbcb528ae9b719e08",
+  "seasonal_rule_source_policy_sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e",
   "seed_policy": null,
   "split_manifest_path": "data/manifest/singapore_2024_splits.json",
   "split_manifest_sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27",
@@ -45,7 +45,7 @@
     "note": "policy-v3 **只登记** policy-v2 并复用其五类 seasonal driver 规则；**不覆盖**、**不迁移**；现有 formal 入口在本卡后**仍**使用 policy-v2",
     "policy_manifest_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
     "policy_manifest_schema": "m1.3g0-singapore-2024-forecast-policy-v2",
-    "policy_manifest_sha256": "ef4dd58a88dcb34fd75690324f957a5f87d2fd7d1b7bf6afbcb528ae9b719e08",
+    "policy_manifest_sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e",
     "status": "registered_not_replaced"
   },
   "target_policy": "half_open_[origin, origin+C)"

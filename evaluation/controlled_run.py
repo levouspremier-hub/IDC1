@@ -186,7 +186,15 @@ def main(argv: list[str] | None = None) -> int:
         # 评估：**重新读取** checkpoint（并校验来源对当前资产的绑定）后再跑 episode
         loaded = load_evaluation_checkpoint(checkpoint_path)
         verify_evaluation_input_sources(loaded)
-        eval_env = build_train_env(args.origin)
+        # 评估与被评估的配置必须一致：受控短跑是「固定策略 + 单步修正器」，
+        # 故评估 episode 同样经 `CorrectorWrapper`（生产默认预算），
+        # 否则 `EvaluationRecord.correction` 会是不适用（None），与受控输入不符。
+        from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S
+        from safe_rl.corrector_wrapper import CorrectorWrapper
+
+        eval_env = CorrectorWrapper(
+            build_train_env(args.origin),
+            corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
         record = evaluate(
             eval_env,
             CONTROLLED_METHOD,
@@ -236,6 +244,7 @@ def main(argv: list[str] | None = None) -> int:
             "env_seed_offsets": dict(ENV_SEED_OFFSETS),
             "action_mode": loaded.action_mode,
             "corrector_time_limit_s": rollout["corrector_time_limit_s"],
+            "corrector_time_limit_source": "production_default",
             "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": checkpoint_info["sha256"],
             "sources": [digest.model_dump() for digest in digests],

@@ -48,7 +48,14 @@ m13g_arrival_mapper_v1 ──(被 env_release 绑定)─────────
 idc_formal_env_release_v1 ───────────────────────────────► 失效（闭包顶点）
 ```
 
-**完整闭包 = 8 个文件**（**不是** 5 个）：
+> ⚠️ **§1.2 第一版审计漏了 v4 triad —— 如实登记**。首轮手工列举只走了 10 个资产，
+> 漏掉 `data/manifest/formal_splits_v4/{train,validation,test}.json`（它同样以
+> `inputs.forecast_policy_manifest` 绑定 policy-v2）。**由 `make check` 抓出**
+> （`tests/test_m13gc_scenario_manifests.py` 13 项失败），随后改用
+> **穷举扫描**（遍历 `data/manifest/**` 与 `configs/**` 的**全部** SHA 指针并与磁盘实测比对）
+> 复核，得到下方的完整闭包。**教训：闭包必须穷举扫描，不得手工列举。**
+
+**完整闭包 = 11 个文件**（**不是** 5 个）：
 
 1. `data/manifest/singapore_2024_forecast_policy_v2.json`
 2. `data/manifest/singapore_2024_forecast_policy_v3.json`
@@ -58,6 +65,9 @@ idc_formal_env_release_v1 ──────────────────
 6. `data/manifest/formal_splits_v5/test.json`
 7. `data/manifest/m13g_arrival_mapper_v1.json`
 8. `configs/release/idc_formal_env_release_v1.json`
+9. `data/manifest/formal_splits_v4/train.json`
+10. `data/manifest/formal_splits_v4/validation.json`
+11. `data/manifest/formal_splits_v4/test.json`
 
 **不在闭包内**（已实测其 revision 与 SHA 指针均未变）：`singapore_2024_splits.json`、
 `singapore_2024_half_hour.json`、`singapore_2024_exogenous_v3.json` +
@@ -80,9 +90,22 @@ m13gch2* / m13ge* 系列测试      -> 63 failed（全部 formal env 构造）
 ## 2. 边界（允许修改的文件）
 
 ```text
-上列 §1.2 的 8 个资产文件（**只**允许 revision 与相互引用的 SHA 指针变化）
-docs/task_cards/CHAIN_REFRESH.md、docs/WORK_HANDOFF.md、docs/NEW_CONVERSATION_HANDOFF.md
+上列 §1.2 的 11 个资产文件（**只**允许 revision 与相互引用的 SHA 指针变化）
+docs/task_cards/CHAIN_REFRESH.md、docs/task_cards/M6_P1.md
+docs/WORK_HANDOFF.md、docs/NEW_CONVERSATION_HANDOFF.md
+evaluation/controlled_run.py（M6-P1 的评估 episode 改用与受控短跑一致的修正器配置）
+tests/test_m13feb2b_formal_cutover.py、tests/test_m13geb_arrival_mapper.py、
+tests/test_m13gc_scenario_manifests.py（**登记**的枚举外迁移：三处钉住旧冻结值/
+旧跨代不变式的断言，见 §8.4）
 ```
+
+### 2.1 登记：枚举外的测试迁移（三处，逐条说明是否放宽）
+
+| 文件 | 变化 | 是否放宽 |
+|---|---|---|
+| `test_m13feb2b_formal_cutover.py` | `PROTECTED`/`V4_TRIAD` 的 SHA 换成刷新后的新冻结值 | **否**（仍是逐字节相等） |
+| `test_m13geb_arrival_mapper.py` | `PROTECTED` 的 policy-v2/v3/refs_v4 SHA 换成新值 | **否**（仍是逐字节相等） |
+| `test_m13gc_scenario_manifests.py` | `test_v4_business_semantics_match_v3` 的 `inputs` 比较由「整张 SHA 表」收窄为「角色集合 + 逐角色路径」 | **是（已披露）**：`inputs` 的 SHA 属于该测试 docstring 明示豁免的「路径 / revision」范畴；v3 是**已取代的历史证据**，其绑定描述生成时的上游状态。九个业务语义键（origin 集合、切分、时间轴、frequency、readiness…）的比较**逐字段未变**。 |
 
 ## 3. 禁止项
 

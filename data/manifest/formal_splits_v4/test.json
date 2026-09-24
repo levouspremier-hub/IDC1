@@ -30,7 +30,7 @@
     },
     "forecast_policy_manifest": {
       "path": "data/manifest/singapore_2024_forecast_policy_v2.json",
-      "sha256": "ef4dd58a88dcb34fd75690324f957a5f87d2fd7d1b7bf6afbcb528ae9b719e08"
+      "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
     },
     "frozen_refs": {
       "path": "configs/frozen_refs/refs_v3.json",
