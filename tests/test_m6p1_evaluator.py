@@ -1,0 +1,406 @@
+"""M6-P1：评估器契约（服务资格 / 指标口径 / 未判定与不可计算）。
+
+**先红**：现有 `evaluation/adapter.py` 的 `evaluate(..., service_qualified: bool = True)`
+**默认达标**，`renewable_utilization` 的分母是 IDC 用能（实为**占比**），
+且 `EvaluationRecord` 没有成本/碳/购电量分列、风光可用/使用/弃电、物理违规、
+raw→exec 修正、求解耗时、超时与回退等字段。
+
+对应 `docs/M6_EVALUATION_PROTOCOL.md` §3 的指标表。
+"""
+
+import importlib
+import inspect
+
+import numpy as np
+import pytest
+import torch
+
+from contracts.models import EvaluationRecord
+from envs.idc_price_env import IDCPriceEnv20D
+
+HORIZON = 8
+
+# **明确标记的临时标准**：只用于测试评估器的计算路径，**不是**项目冻结阈值。
+TEMPORARY_TEST_STANDARD = dict(
+    standard_id="temporary-test-standard-not-a-project-freeze",
+    frozen=True,
+    on_time_task_rate_min=0.95,
+    on_time_work_rate_min=0.95,
+    end_leftover_work_fraction_max=0.01,
+    non_interruptible_interruption_max=0,
+)
+
+
+def _standard(**overrides):
+    mod = importlib.import_module("evaluation.service_standard")
+    kwargs = dict(TEMPORARY_TEST_STANDARD)
+    kwargs.update(overrides)
+    return mod.ServiceStandard(**kwargs)
+
+
+def _adapter():
+    return importlib.import_module("evaluation.adapter")
+
+
+def _env(**kwargs):
+    env = IDCPriceEnv20D(horizon=HORIZON, task_seed=0, server_seed=0,
+                         forecast_seed=300000, **kwargs)
+    return env
+
+
+def _neutral(obs):
+    action = np.full(21, 0.5, dtype=np.float32)
+    action[20] = 0.0
+    return action
+
+
+def _run(env, *, method="rule", action_fn=_neutral, standard=None, **kwargs):
+    return _adapter().evaluate(
+        env, method, action_fn, run_id="m6p1-test", service_standard=standard, **kwargs)
+
+
+# =============================================================================
+# 1. 服务资格：不再默认 true
+# =============================================================================
+
+def test_service_standard_has_no_default_value():
+    """`service_standard` 必须**显式传入**；不得存在默认达标的路径。"""
+    params = inspect.signature(_adapter().evaluate).parameters
+    assert "service_standard" in params
+    assert params["service_standard"].default is inspect.Parameter.empty, \
+        "service_standard 不得有默认值（默认达标=违反 M6-P1 红线）"
+    assert "service_qualified" not in params, \
+        "调用方不得再直接传入 service_qualified（必须由标准计算）"
+
+
+def test_omitting_the_standard_is_a_type_error():
+    with pytest.raises(TypeError):
+        _adapter().evaluate(_env(), "rule", _neutral, run_id="r0")
+
+
+def test_undetermined_when_no_standard_is_declared():
+    rec = _run(_env(), standard=None)
+    assert rec.service_qualified is None, "标准未冻结 ⇒ 未判定，绝不默认达标"
+    assert rec.service_standard_id is None
+    assert rec.service_standard_frozen is False
+    assert "未判定" in rec.service_qualification_note
+
+
+def test_undetermined_when_the_standard_is_not_frozen():
+    rec = _run(_env(), standard=_standard(frozen=False))
+    assert rec.service_qualified is None
+    assert rec.service_standard_id == TEMPORARY_TEST_STANDARD["standard_id"]
+    assert rec.service_standard_frozen is False
+    assert "未判定" in rec.service_qualification_note
+
+
+def test_undetermined_is_not_counted_as_qualified():
+    """未判定**不得**被当作达标（消费方必须能区分 None 与 True）。"""
+    rec = _run(_env(), standard=None)
+    assert rec.service_qualified is not True
+
+
+def test_qualification_is_computed_from_an_explicit_standard():
+    rec = _run(_env(), standard=_standard())
+    assert isinstance(rec.service_qualified, bool)
+    assert rec.service_standard_id == TEMPORARY_TEST_STANDARD["standard_id"]
+    assert rec.service_standard_frozen is True
+
+
+def test_impossible_standard_fails_and_a_trivial_one_passes():
+    strict = _run(_env(), standard=_standard(on_time_task_rate_min=1.0,
+                                             on_time_work_rate_min=1.0,
+                                             end_leftover_work_fraction_max=0.0))
+    trivial = _run(_env(), standard=_standard(on_time_task_rate_min=0.0,
+                                              on_time_work_rate_min=0.0,
+                                              end_leftover_work_fraction_max=1.0,
+                                              non_interruptible_interruption_max=10 ** 6))
+    assert strict.service_qualified is False
+    assert trivial.service_qualified is True
+
+
+def test_undetermined_when_a_mandatory_component_has_a_zero_denominator():
+    env = _env()
+    env.reset(seed=0)
+    for task in env.tasks:
+        # 截止时点全部推到 episode 之外 ⇒ 到期任务数为 0
+        task.deadline = env.horizon + 1000
+    assert all(t.latest_finish_time >= env.horizon for t in env.tasks)
+    rec = _run(env, standard=_standard())
+    assert rec.service.due_in_episode_tasks == 0
+    assert rec.service.on_time_task_rate is None
+    assert rec.service_qualified is None, "零分母 ⇒ 未判定，不自动合格"
+
+
+def test_the_project_standard_is_not_frozen_by_this_card():
+    mod = importlib.import_module("evaluation.service_standard")
+    assert mod.FROZEN_PROJECT_SERVICE_STANDARD is None, \
+        "95%/1% 提案尚未人工冻结；本卡不得自行冻结项目阈值"
+
+
+# =============================================================================
+# 2. 成本 / 碳 / 购电量分列
+# =============================================================================
+
+def test_cost_components_are_split_and_the_mixed_objective_is_not_sgd():
+    env = _env()
+    rec = _run(env, standard=None)
+
+    assert rec.purchase_cost_sgd == pytest.approx(float(env.total_cost))
+    assert rec.bess_degradation_cost_sgd == pytest.approx(
+        float(env.total_bess_degradation_cost))
+    assert rec.mixed_objective_cost == pytest.approx(float(env.total_objective_cost))
+    assert rec.grid_energy_kwh == pytest.approx(float(env.total_grid_energy_kWh))
+    assert rec.carbon_kg_co2e == pytest.approx(float(env.total_carbon_emission))
+
+    units = EvaluationRecord.UNITS
+    assert units["purchase_cost_sgd"] == "SGD"
+    assert units["bess_degradation_cost_sgd"] == "SGD"
+    assert units["carbon_kg_co2e"] == "kgCO2e"
+    assert units["grid_energy_kwh"] == "kWh"
+    assert "SGD" not in units["mixed_objective_cost"], \
+        "混合目标（含期末罚项）不得标作 SGD"
+    assert "not SGD" in units["mixed_objective_cost"] or \
+        "mixed" in units["mixed_objective_cost"].lower()
+
+
+def test_degradation_cost_is_not_folded_into_purchase_cost():
+    env = _env()
+    env.reset(seed=0)
+    _run(env, standard=None)
+    assert env.total_bess_degradation_cost >= 0.0
+    assert env.total_objective_cost == pytest.approx(
+        env.total_cost + env.total_bess_degradation_cost + env.terminal_settlement_penalty)
+
+
+def test_carbon_per_completed_work_is_undetermined_without_completed_work():
+    env = _env()
+    rec = _run(env, standard=None)
+    env.total_completed_work = 0.0
+    rec_zero = _run(env, standard=None)
+    assert rec_zero.carbon_per_completed_work is None
+    assert "carbon_per_completed_work" in rec_zero.not_computable
+    # 非空洞性：正常 episode 必须有已完成工作量
+    if rec.completed_work > 0.0:
+        assert rec.carbon_per_completed_work is not None
+
+
+# =============================================================================
+# 3. 风光：分列可用 / 使用 / 弃电 + 利用率；占比另名
+# =============================================================================
+
+def test_renewables_are_reported_per_source_with_utilization():
+    env = _env()
+    rec = _run(env, standard=None)
+
+    assert rec.pv.available_kwh == pytest.approx(float(env.total_pv_available_kWh))
+    assert rec.pv.used_kwh == pytest.approx(float(env.total_pv_used_kWh))
+    assert rec.pv.curtail_kwh == pytest.approx(float(env.total_pv_curtail_kWh))
+    assert rec.wind.available_kwh == pytest.approx(float(env.total_wind_available_kWh))
+    assert rec.wind.used_kwh == pytest.approx(float(env.total_wind_used_kWh))
+    assert rec.wind.curtail_kwh == pytest.approx(float(env.total_wind_curtail_kWh))
+
+    units = EvaluationRecord.UNITS
+    for field in ("pv", "wind"):
+        assert units[f"{field}.available_kwh"] == "kWh"
+        assert units[f"{field}.used_kwh"] == "kWh"
+        assert units[f"{field}.curtail_kwh"] == "kWh"
+        assert "fraction" in units[f"{field}.utilization"]
+
+
+def test_pv_utilization_is_used_over_available_not_a_share_of_demand():
+    env = _env()
+    env.reset(seed=0)
+    env.total_pv_available_kWh = 10.0
+    env.total_pv_used_kWh = 4.0
+    env.total_pv_curtail_kWh = 6.0
+    rec = _run(env, standard=None)
+    assert rec.pv.utilization == pytest.approx(0.4), "利用率 = used / available"
+
+
+def test_utilization_is_undetermined_when_nothing_is_available():
+    env = _env()
+    env.reset(seed=0)
+    env.total_pv_available_kWh = 0.0
+    env.total_pv_used_kWh = 0.0
+    env.total_pv_curtail_kWh = 0.0
+    rec = _run(env, standard=None)
+    assert rec.pv.utilization is None, "可用量为 0 ⇒ 不可判定，不填 0"
+    assert "pv.utilization" in rec.not_computable
+
+
+def test_renewable_share_is_named_separately_from_utilization():
+    env = _env()
+    rec = _run(env, standard=None)
+    assert hasattr(rec, "renewable_share")
+    assert not hasattr(rec, "renewable_utilization"), \
+        "占比不得再命名为 utilization"
+    assert "fraction" in EvaluationRecord.UNITS["renewable_share"]
+    if env.total_idc_energy_kWh > 0.0:
+        assert rec.renewable_share == pytest.approx(
+            (env.total_pv_used_kWh + env.total_wind_used_kWh) / env.total_idc_energy_kWh)
+
+
+# =============================================================================
+# 4. 业务服务计数：按时 / 逾期 / 期末剩余 / 不可中断
+# =============================================================================
+
+def test_service_counts_cover_the_episode():
+    env = _env()
+    rec = _run(env, standard=None)
+    s = rec.service
+
+    for name in ("due_in_episode_tasks", "due_in_episode_work",
+                 "on_time_completed_tasks", "on_time_completed_work",
+                 "overdue_completed_tasks", "overdue_completed_work",
+                 "failed_tasks", "failed_work",
+                 "overdue_backlog_tasks", "overdue_backlog_work",
+                 "not_due_backlog_tasks", "not_due_backlog_work",
+                 "end_leftover_work"):
+        assert hasattr(s, name), f"缺少业务服务字段 {name}"
+
+    assert s.non_interruptible_interruption_count == \
+        int(env.total_non_interruptible_interruption_count)
+    # 分类互斥完备：五个分类的**任务数**之和 == 已到达任务数
+    arrived = sum(1 for task in env.tasks if task.status != "not_arrived")
+    assert (s.on_time_completed_tasks + s.overdue_completed_tasks + s.failed_tasks
+            + s.overdue_backlog_tasks + s.not_due_backlog_tasks) == arrived
+    # 到期分母只覆盖截止时点在 episode 内的任务
+    assert s.due_in_episode_tasks == sum(
+        1 for task in env.tasks
+        if task.status != "not_arrived" and task.latest_finish_time < HORIZON)
+
+
+def test_failed_tasks_stay_in_the_denominator():
+    """已到达但失败的任务不得因 status=failed 而从分母消失。"""
+    env = _env()
+    env.reset(seed=0)
+    arrived_before = sum(1 for task in env.tasks if task.status != "not_arrived")
+    for task in env.tasks[:2]:
+        task.status = "failed"
+    rec = _run(env, standard=None)
+    assert rec.service.failed_tasks >= 1, "失败任务必须单列且留在分母里"
+    assert (rec.service.on_time_completed_tasks + rec.service.overdue_completed_tasks
+            + rec.service.failed_tasks + rec.service.overdue_backlog_tasks
+            + rec.service.not_due_backlog_tasks) == arrived_before
+
+
+def test_service_rates_are_fractions_or_undetermined():
+    rec = _run(_env(), standard=None)
+    for name in ("on_time_task_rate", "on_time_work_rate", "end_leftover_work_fraction"):
+        value = getattr(rec.service, name)
+        assert value is None or 0.0 <= value <= 1.0 + 1e-9, name
+
+
+# =============================================================================
+# 5. 修正器：无修正器 ⇒ 不适用（不是 0 次修正）
+# =============================================================================
+
+def test_correction_metrics_are_not_applicable_without_a_corrector():
+    rec = _run(_env(), standard=None)
+    assert rec.correction is None, "无修正器时必须标不适用，不得填 0 次修正冒充测量"
+
+
+def test_correction_metrics_capture_raw_to_exec_and_solve_time():
+    from safe_rl.corrector_wrapper import CorrectorWrapper
+
+    env = _env()
+    wrapped = CorrectorWrapper(env, corrector_time_limit_s=0.25)
+    rec = _run(wrapped, standard=None)
+    c = rec.correction
+    assert c is not None
+    assert c.compute_abs_delta_mean >= 0.0
+    assert c.storage_abs_delta_mean >= 0.0
+    assert c.solve_time_median_s >= 0.0
+    assert c.solve_time_p95_s >= c.solve_time_median_s
+    assert c.timeout_count >= 0 and c.zero_action_fallback_count >= 0
+    assert "s" in EvaluationRecord.UNITS["correction.solve_time_median_s"]
+
+
+# =============================================================================
+# 6. 物理违规
+# =============================================================================
+
+def test_physical_violations_are_reported_with_the_physics_tolerance():
+    env = _env()
+    rec = _run(env, standard=None)
+    p = rec.physical
+    assert p.energy_conservation_violations == 0, \
+        "能量守恒按 tests/test_m33_group_power.py 的同一容差复核"
+    assert p.charge_discharge_exclusion_violations == 0
+    assert p.access_limit_violation_steps == 0
+    assert p.soc_violation_steps == 0
+    assert p.energy_conservation_max_gap_kw == pytest.approx(0.0, abs=1e-6)
+    assert "kW" in EvaluationRecord.UNITS["physical.energy_conservation_max_gap_kw"]
+
+
+def test_energy_conservation_check_actually_detects_a_violation():
+    """非空洞性：注入一步非法功率必须被计为违规。"""
+    env = _env()
+    rec = _run(env, standard=None)
+    metrics = importlib.import_module("evaluation.metrics")
+    bad = dict(
+        grid_power_kw=0.0, pv_available_kw=0.0, wind_available_kw=0.0,
+        discharge_kw=0.0, idc_kw=1.0, charge_kw=0.0,
+        pv_curtail_kw=0.0, wind_curtail_kw=0.0,
+    )
+    found = metrics.check_physical_step(bad, access_limit_kw=1e9,
+                                        soc_kwh=0.0, soc_min_kwh=0.0, soc_max_kwh=1.0)
+    assert found["energy_conservation_gap_kw"] == pytest.approx(1.0)
+    assert rec.physical.energy_conservation_violations == 0
+
+
+# =============================================================================
+# 7. 失败 run 与「未评估」的方法矩阵
+# =============================================================================
+
+def test_failed_run_is_retained_with_a_classification():
+    def _boom(obs):
+        raise RuntimeError("action_fn exploded")
+
+    rec = _run(_env(), action_fn=_boom, standard=None)
+    assert rec.failure_classification == "RuntimeError", "失败 run 必须保留并标注原因"
+    assert rec.service_qualified is None, "失败 run 绝不达标"
+    assert rec.steps >= 0
+
+
+def test_missing_methods_are_reported_as_not_evaluated():
+    """五类方法矩阵：缺方法 ⇒ 「未评估」，不得伪造比较结果。"""
+    adapter = _adapter()
+    rec = _run(_env(), method="rule_based", standard=None)
+    rows = adapter.planned_method_rows([rec])
+    assert [row["method"] for row in rows] == list(adapter.PLANNED_METHODS)
+    evaluated = [row for row in rows if row["status"] == "evaluated"]
+    missing = [row for row in rows if row["status"] == "not_evaluated"]
+    assert [row["method"] for row in evaluated] == ["rule_based"]
+    assert len(missing) == len(adapter.PLANNED_METHODS) - 1
+    for row in missing:
+        assert row["service_qualified"] is None
+        assert row["purchase_cost_sgd"] is None
+
+
+def test_records_share_one_schema_and_declare_mode_and_seed():
+    rec1 = _run(_env(), method="rule_based", standard=None, action_mode="deterministic_mean", seed=3)
+    rec2 = _run(_env(), method="penalty_ppo", standard=None, action_mode="seeded_sample", seed=4)
+    assert rec1.model_dump().keys() == rec2.model_dump().keys()
+    assert rec1.action_mode == "deterministic_mean" and rec1.seed == 3
+    assert rec2.action_mode == "seeded_sample" and rec2.seed == 4
+    assert isinstance(rec1, EvaluationRecord)
+    assert rec1.schema_version == "contract-v9"
+
+
+def test_record_rejects_unknown_fields_and_requires_units():
+    with pytest.raises(Exception):
+        EvaluationRecord(
+            method="rule", run_id="r", action_mode="deterministic_mean", seed=0, steps=1,
+            checkpoint_id=None, checkpoint_role=None, service=None,
+            service_qualified=None, service_standard_id=None, service_standard_frozen=False,
+            service_qualification_note="", purchase_cost_sgd=0.0,
+            bess_degradation_cost_sgd=0.0, mixed_objective_cost=0.0, grid_energy_kwh=0.0,
+            carbon_kg_co2e=0.0, carbon_per_completed_work=None, completed_work=0.0,
+            pv=None, wind=None, renewable_share=None, grid_peak_kw=0.0, physical=None,
+            correction=None, not_computable=(), surprise=1,
+        )
+    for name in ("purchase_cost_sgd", "carbon_kg_co2e", "grid_energy_kwh",
+                 "mixed_objective_cost", "renewable_share", "grid_peak_kw"):
+        assert name in EvaluationRecord.UNITS, f"{name} 未声明单位"

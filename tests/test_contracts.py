@@ -113,7 +113,10 @@ def test_units_declared_for_physical_fields():
     assert DispatchResult.UNITS["carbon_kg"] == "kgCO2"
     assert DispatchResult.UNITS["soc_next_kwh"] == "kWh"
     assert SystemSnapshot.UNITS["access_limit_kw"] == "kW"
-    assert EvaluationRecord.UNITS["total_cost_sgd"] == "SGD"
+    # M6-P1：成本分列为「购电费」与「电池退化费」；混合目标量**不**是 SGD
+    assert EvaluationRecord.UNITS["purchase_cost_sgd"] == "SGD"
+    assert EvaluationRecord.UNITS["bess_degradation_cost_sgd"] == "SGD"
+    assert "SGD" not in EvaluationRecord.UNITS["mixed_objective_cost"]
 
 
 def test_nested_roundtrip():
