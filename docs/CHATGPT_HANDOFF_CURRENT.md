@@ -15,6 +15,13 @@
 > 见 `docs/M6_EVALUATION_PROTOCOL.md`；checkpoint 契约稳定后再补评估器并用
 > 受控短跑 checkpoint 验证。正式 validation/test 仍须等待训练产物审核通过。
 
+
+> **2026-09-24（M6-P1 + CHAIN-REFRESH）**：B6 正式资产链做了一次**前向刷新**
+> （改 `contracts/**` 会推进 `b6_formal_code_revision()`，从而失效整条链）。
+> 上表 SHA 已更新为刷新后的值；旧值见 `docs/task_cards/CHAIN_REFRESH.md` §8.2 的账本。
+> 已取代的历史证据（policy v1、formal_splits v1/v2/v3、refs v1/v2/v3、exogenous v2）
+> **字节保留、未刷新**，仍保持其原始 SHA。
+
 ## 1. 先读什么
 
 新对话先按以下顺序读取：
@@ -58,7 +65,7 @@ demo，而是让每一层都具备可复现、可验签、无未来泄漏、单�
 在写本文前核验：
 
 ```text
-HEAD   = 8cd2772e9b2c8d1c8d8bdc3f0215a201f79a59f8
+HEAD   = f3a1fd2cf8a2d901770302a90129c3988c9766d4
 branch = p4-safeppo-m51a-rollout-contract-m12-integration
 工作树 = clean（创建本文之前）
 ```
@@ -94,13 +101,13 @@ fail-closed 的证据，不得包装成训练结果。
 | --- | --- | --- |
 | `data/manifest/m13f_arrival_intensity_policy_v1.json` | `7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251` | B6 intensity policy |
 | `data/processed/singapore_2024/exogenous_drivers_v3.parquet` | `07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612` | B6 realized exogenous |
-| `data/manifest/singapore_2024_forecast_policy_v3.json` | `926703337139143dc1ea5223739ca5408be5ed384124a1acf88c70a39c542ecb` | causal forecast policy |
-| `configs/frozen_refs/refs_v4.json` | `b5b64ef28224b53734ef186aff67687ff0db2dbee3d7e83dbed251af864e3ea7` | 唯一正式 refs |
-| `data/manifest/formal_splits_v5/train.json` | `8608372fba5c560ba458c8903cc10746a4e21254b2c3e29a2c2cd3001d6233c7` | 唯一正式 train split |
-| `data/manifest/formal_splits_v5/validation.json` | `3f16ad3af4d8b5ab86982550bda86e03af8bab4d9a8ff94b67ec2a0799a4851b` | 唯一正式 validation split |
-| `data/manifest/formal_splits_v5/test.json` | `aaacd459ed4e1154ea538ba4c3164e67b04094a044f2d96c52a1312553f09835` | 唯一正式 test split |
-| `data/manifest/m13g_arrival_mapper_v1.json` | `efea87f2b854190a9d4433541d7cf4db07bb11ff022a0bd828cdd1d1fe6b040b` | approved mapper parameters |
-| `configs/release/idc_formal_env_release_v1.json` | `017575dc827043a5926d9b3b1057d91ffdead7b406dd115e97218f51f8c6adae` | env 发布产物 |
+| `data/manifest/singapore_2024_forecast_policy_v3.json` | `23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754` | causal forecast policy |
+| `configs/frozen_refs/refs_v4.json` | `0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8` | 唯一正式 refs |
+| `data/manifest/formal_splits_v5/train.json` | `077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865` | 唯一正式 train split |
+| `data/manifest/formal_splits_v5/validation.json` | `ac1c50db28a8d6376513c6a2e6023cd7e45eaa6f4b8ad34f2b474a55a55d9933` | 唯一正式 validation split |
+| `data/manifest/formal_splits_v5/test.json` | `76c6bb79446fbbc5dd1566c4e617d6b0d746f2ae87caa2eb26a6a18b853a827f` | 唯一正式 test split |
+| `data/manifest/m13g_arrival_mapper_v1.json` | `ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371` | approved mapper parameters |
+| `configs/release/idc_formal_env_release_v1.json` | `be16e08e78ee9b445ceb5ca386f1de0ab4ee700ec25d690e7412ebca07cb92ce` | env 发布产物 |
 
 任何 SHA 都应以 `shasum -a 256` 的实时结果为准，不要根据历史报告前缀手抄或拼接。
 
@@ -115,7 +122,7 @@ uv run python -m scripts.materialize_env_release --verify
 ```text
 formal_env_ready      = true
 formal_training_ready = false
-sha256                = 017575dc827043a5926d9b3b1057d91ffdead7b406dd115e97218f51f8c6adae
+sha256                = be16e08e78ee9b445ceb5ca386f1de0ab4ee700ec25d690e7412ebca07cb92ce
 ```
 
 `formal_splits_v5` 三份文件内的 readiness 仍严格保持 both-false，这是冻结资产的
