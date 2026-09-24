@@ -1706,3 +1706,57 @@ off/on 均 reproducible（`insufficient_evidence` 为探针既有功效判据）
 
 > ## ⛔ **f-c-h2-R1 完成即停，等待复审。**
 > **未冻结**预算；**未**接训练循环、正式训练或 M6。回滚见任务卡 §dt。
+
+
+## 9.30 **评估输入契约与受控短跑评估器已交付，并触发一次资产链前向刷新（M6-P1 + CHAIN-REFRESH，2026-09-24）**
+
+**M6-P1**（起点 `1e3a045`，提交 `a2dda64` 开卡 → `bc1444c` 先红 → `626f97f` 实现 →
+`980a149` 证据）：新增 `checkpointing/eval_input.py`（评估输入契约：版本 / 21 维动作 /
+obs 维度 / policy 权重 / 策略结构 / **train-only** origin / 三环境种子 /
+**12 个配置与资产来源的 role+规范路径+SHA-256**）、`evaluation/{service_standard,
+metrics,sources,controlled_run}.py`，重写 `contracts.EvaluationRecord`
+（成本分列购电费/退化费、混合目标量**不标 SGD**、风光分列可用/使用/弃电 +
+used/available **利用率**、可再生**占比**另名、物理违规、raw→exec 修正、
+`not_computable` 显式标记）。
+
+**红线落实**：`service_qualified` **不再默认 true**，必须显式传入服务标准；
+标准未冻结 / 零分母 / 失败 run ⇒ `None`（**未判定**，≠ 达标）；
+`FROZEN_PROJECT_SERVICE_STANDARD is None`（95%/1% **未**冻结）；
+五类正式方法一个都没评估 ⇒ 全部 `not_evaluated`（**未评估**）；
+two-batch 恢复格式被**拒绝**冒充评估输入。
+
+**受控短跑链路（`runs/m6p1_controlled_short_run`，train-only，无参数更新）**：
+checkpoint sha256 `1fb4fd4fd58e7fdf…`；购电费 11.534050 SGD / 退化费 0.842105 SGD /
+碳排 42.134131 kgCO₂e / 购电 104.811270 kWh；PV 利用率 0.1207、风电 0.2732、
+可再生占比 **0.8456**（与利用率**不同名不同量**）；物理违规 0；修正 48 步、
+耗时中位 0.079 s / P95 0.112 s、超时 0、回退 0；`service_qualified=None`。
+
+**⚠️ 本卡触发并已完成一次冻结资产链的「前向刷新」**：M6-P1 按边界改了
+`contracts/models.py`，而该路径属于 `FORECAST_SOURCE_PATHS`，而
+`b6_formal_code_revision()` 的语义是**「最后触碰该路径集的提交」**——
+于是实现提交把 policy-v2/v3 的 revision 锚点推进，**本分支全部 formal env 链路
+（63 项回归）同时变红**。经用户裁决「前向修复、保留历史」，另开
+`docs/task_cards/CHAIN_REFRESH.md`：穷举扫描得到 **11 个文件**的依赖闭包
+（policy-v2 → policy-v3 → refs_v4 → formal_splits_v5×3 + formal_splits_v4×3 →
+arrival mapper → env release），**逐层刷新**且每层只用 `materializer_revision` 与
+指向被刷新文件的 `sha256` 变化（数值、日期、origin 集合、切分、readiness 全部实测未变）。
+**已取代的历史证据（policy v1、formal_splits v1/v2/v3、refs v1/v2/v3、exogenous v2）
+字节保留、未刷新。** 旧/新 SHA 账本见卡片 §8.2。
+
+**教训（重要）**：闭包必须**穷举扫描**，不得手工列举——首轮手工列举漏了 v4 triad，
+由 `make check` 抓出。另：任何改动 `contracts/**` 的卡都会推进该 revision 锚点，
+**必须同时规划资产链刷新**。
+
+**门禁**：`make check` exit 0 → **3025 passed**（ruff/mypy 全通过）；`make smoke` exit 0；
+5 个资产链物化器 `--verify` 全 exit 0；`git status --short` 空。
+**未**运行 `make train`、**未**读 validation/test、**未**改 readiness
+（`formal_training_ready=False`）。
+
+**回滚（实测，newest-first，独立 worktree）**：
+```bash
+git revert 980a149 1e0e5d7 4d16f04 da288ee 626f97f bc1444c a2dda64
+# == 1e3a045^{tree} = 81e360671835f98a8f6f593a9af5955c9a27e42d
+```
+
+> ## ⛔ **M6-P1 + CHAIN-REFRESH 完成即停，等待复审。**
+> **未**接正式训练、validation 或最终 test；**未冻结**服务阈值。

@@ -4390,6 +4390,17 @@ qualified_proposals [1.0] → [1.0, 0.5]
 
 **回滚**：见 `docs/task_cards/M1.3g.md` §dt（实测两侧 tree，无占位符）。
 
+### 7BU. M6-P1 评估输入契约与受控短跑评估器 + CHAIN-REFRESH 资产链前向刷新（**执行完成，等待复审**）
+
+见 `docs/task_cards/M6_P1.md` 与 `docs/task_cards/CHAIN_REFRESH.md`。
+起点 `1e3a045`；提交 `a2dda64`（开卡）→ `bc1444c`（先红 58 failed / 16 passed）→
+`626f97f`（实现）→ `da288ee`（CHAIN-REFRESH 审计）→ `4d16f04`（11 个资产刷新 +
+3 个测试迁移）→ `1e0e5d7` → `980a149`（证据）。**关键教训**：改 `contracts/**`
+会推进 `b6_formal_code_revision()`（语义 = 最后触碰该路径集的提交），使冻结的
+B6 资产链失效；闭包必须穷举扫描（首轮手工列举漏了 v4 triad，由 `make check` 抓出）。
+门禁 `make check` exit 0 → 3025 passed、`make smoke` exit 0；
+回滚 newest-first 全部 7 个提交 == `1e3a045^{tree}` = `81e36067…`，零冲突。
+
 > ## ⛔ **f-c-h2-R1 完成即停，等待复审。**
 > **未**接训练循环、正式训练或 M6；**未冻结**预算。
 
