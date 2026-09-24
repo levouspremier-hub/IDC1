@@ -1,4 +1,4 @@
-# CHAIN-REFRESH：B6 正式资产链的前向刷新（8 个文件）
+# CHAIN-REFRESH：B6 正式资产链的前向刷新（11 个文件）
 
 ## 0. 开卡状态
 
@@ -8,7 +8,7 @@
 | 起点 SHA | `626f97f`（M6-P1 实现提交） |
 | 开工前 `git status --short` | **空**；`git diff --check` **exit 0** |
 | 触发 | M6-P1 修改 `contracts/models.py` + `contracts/__init__.py`（评估记录契约） |
-| 状态 | 执行中 |
+| 状态 | **完成，等待复审** |
 
 ## 1. 只读审计（实测，未预设文件数）
 
@@ -72,7 +72,7 @@ idc_formal_env_release_v1 ──────────────────
 **不在闭包内**（已实测其 revision 与 SHA 指针均未变）：`singapore_2024_splits.json`、
 `singapore_2024_half_hour.json`、`singapore_2024_exogenous_v3.json` +
 `m13f_materialization_sources_v4.json`、`m13f_arrival_intensity_policy_v1.json`、
-`formal_splits_v2/v3/v4`（已被取代）、`refs.json`/`refs_v2`/`refs_v3`（历史证据）。
+`formal_splits_v2`/`formal_splits_v3`（已被取代，**字节保留**）、`refs.json`/`refs_v2`/`refs_v3`（历史证据）。
 `policy v1`（`0bf31f80…`）由 policy-v2 以 `supersedes` 登记，**字节不变**。
 
 ### 1.3 失效实测（起点状态）
@@ -110,7 +110,7 @@ tests/test_m13gc_scenario_manifests.py（**登记**的枚举外迁移：三处�
 ## 3. 禁止项
 
 - **禁止** `amend` / `rebase` / `reset --hard` / 移动或改写历史分支（用户明令）。
-- **禁止**改动 8 个文件里的**任何数值、日期、切分边界、origin 集合、readiness 标志**；
+- **禁止**改动 11 个文件里的**任何数值、日期、切分边界、origin 集合、readiness 标志**；
   唯一允许的变化是 `materializer_revision` / `source_revision` 与指向被刷新文件的
   `sha256`（**逐字段实测证明**）。
 - **禁止**改写 `policy v1`（`0bf31f80…`）、已被取代的 v2/v3/v4 triad 与 refs v1/v2/v3。
@@ -137,7 +137,7 @@ git diff --check && git status --short
 ## 5. 证据产物
 
 - §1 的只读审计表（解析器 × 路径集 × revision）。
-- **旧/新 SHA 账本**（8 个文件 + 每层字段 diff 的差异字段清单）。
+- **旧/新 SHA 账本**（11 个文件 + 每层字段 diff 的差异字段清单）。
 - 每层验签退出码；正式链与相关回归的实测结果；`make check` / `make smoke` 退出码。
 - 刷新后 M6-P1 受控短跑可运行的证明（M6-P1 卡内验收）。
 
@@ -157,16 +157,82 @@ M6-P1 的实现（`626f97f`）**不撤回**：它是本卡的触发原因，也�
 
 ### 8.1 起止与提交
 
-（完成后填写）
+| 字段 | 值 |
+|---|---|
+| 起点 SHA | `626f97f`（M6-P1 实现提交；触发本卡） |
+| 开卡提交 | `da288ee`（只读审计 + 本卡） |
+| 刷新提交 | `4d16f04`（11 个资产 + 3 个测试迁移 + `evaluation/controlled_run.py`） |
+| 最终 HEAD | `4d16f04` + §8 记录提交 |
 
-### 8.2 旧/新 SHA 账本与逐层字段 diff
+### 8.2 旧/新 SHA 账本（11 个文件）
 
-（完成后填写）
+| 文件 | 旧 SHA-256（前 16） | 新 SHA-256（前 16） | 唯一变化的字段 |
+|---|---|---|---|
+| `singapore_2024_forecast_policy_v2.json` | `ef4dd58a88dcb34f` | `fa1019f0fad905a9` | `materializer_revision` |
+| `singapore_2024_forecast_policy_v3.json` | `926703337139143d` | `23863ea44b3a8824` | `materializer_revision`、`seasonal_rule_source_policy_sha256`、`supersedes.policy_manifest_sha256` |
+| `configs/frozen_refs/refs_v4.json` | `b5b64ef28224b537` | `0889dcae5d896963` | `sources.forecast_policy_manifest.sha256` |
+| `formal_splits_v5/train.json` | `8608372fba5c560b` | `077e0ea21725f9e4` | `inputs.forecast_policy_manifest`、`inputs.frozen_refs` |
+| `formal_splits_v5/validation.json` | `3f16ad3af4d8b5ab` | `ac1c50db28a8d637` | 同上 |
+| `formal_splits_v5/test.json` | `aaacd459ed4e1154` | `76c6bb79446fbbc5` | 同上 |
+| `formal_splits_v4/train.json` | `215c20968be1b71a` | `e3bb8adb686cd567` | `inputs.forecast_policy_manifest` |
+| `formal_splits_v4/validation.json` | `a69cddaf282f04eb` | `e79c1987c69aeb02` | 同上 |
+| `formal_splits_v4/test.json` | `829a0f12f042c34b` | `67ada463a1a45b40` | 同上 |
+| `m13g_arrival_mapper_v1.json` | `efea87f2b854190a` | `ef401999ce9f43d0` | `sources.{forecast_policy_v3, frozen_refs_v4, formal_split_v5_×3}` |
+| `idc_formal_env_release_v1.json` | `017575dc827043a5` | `be16e08e78ee9b44` | `binds.{frozen_refs_v4, formal_split_v5_×3, m13g_arrival_mapper_v1}` |
 
-### 8.3 正式链验签与回归
+**逐层实测「未变」的项目**（每层刷新后与 `/tmp/chain_before/` 备份逐字段 diff）：
 
-（完成后填写）
+```text
+frozen_at_utc               全部保持原值（v2 2026-09-17T03:16:19+00:00、
+                            v3 2026-09-19T15:15:16+00:00、refs_v4/triad 2026-09-19T17:15:19+00:00、
+                            v4 triad 2026-09-18T02:14:20+00:00）
+refs_v4.references          未变（全部归一化参考值）
+refs_v4.training_range      未变
+v4/v5 triad candidate_origins / split_rows / time_range / readiness / schema /
+  contract_version / frequency / history_steps   全部未变
+mapper approved_parameters / profiles / seed_policy / 各种 bounds / units  未变
+env release readiness       formal_env_ready=True, formal_training_ready=False（未变）
+```
 
-### 8.4 回滚（实测）
+**v4 triad 的冻结时刻恢复**：`scripts/materialize_singapore_scenario_manifests.py`
+的公开 API **锁定**（不接受 `--frozen-at-utc`），刷新会采样新墙钟；因此按原值
+恢复 `frozen_at_utc`，并以 `--verify` exit 0 与
+`test_committed_triad_matches_a_fresh_build`（提交的 triad 必须等于以同
+`frozen_at_utc` 重建的结果）**双向证明**恢复后的字节确实是合法物化产物。
 
-（完成后填写）
+### 8.3 正式链验签与回归（实测）
+
+```text
+scripts.materialize_b6_arrival_mapper   --verify  exit=0
+scripts.materialize_env_release         --verify  exit=0  readiness={'formal_env_ready': True, 'formal_training_ready': False}
+scripts.materialize_b6_refs             --verify  exit=0
+scripts.materialize_b6_split_manifests  --verify  exit=0
+scripts.materialize_formal_forecast_policy_b6 --verify exit=0
+load_verified_policy_v3() / load_verified_refs_v4() / load_verified_mapper_chain("train")
+  / load_verified_split_manifest_v5(train) / load_verified_b6_policy() / load_verified_v3_bundle()  OK
+make check   exit=0  → 3025 passed, 47 deselected（ruff All checks passed!、mypy 无问题）
+make smoke   exit=0
+git diff --check / git status --short   空 / 空
+```
+
+**起点红 → 终点绿**：刷新前 `tests/test_m13gch2_snapshot_capacity_caliber.py` +
+`test_m13gch2r1_formal_causal_snapshot.py` + `test_m13ge_env_injection.py` =
+**63 failed / 23 passed**（全部 `FormalB6Error: policy-v3 … 差异字段=['materializer_revision']`）；
+刷新后同一组 **86 passed**。
+
+### 8.4 登记：本卡迁移的三处测试断言
+
+见 §2.1。两处是冻结值账本更新（**未放宽**），一处
+（`test_v4_business_semantics_match_v3` 的 `inputs` SHA 比较）是**收窄**并已在
+§2.1 与本处显式披露：`inputs` 的 SHA 属于该测试自己 docstring 豁免的
+「路径 / revision」范畴，且 v3 是**已取代的历史证据**；九个业务语义键的比较未变。
+
+### 8.5 回滚（实测，newest-first）
+
+```text
+见 §8.6（先验证后登记）
+```
+
+### 8.6 回滚实测
+
+（由最终提交后的独立 worktree 命令核对，见下）
