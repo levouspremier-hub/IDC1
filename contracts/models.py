@@ -1024,25 +1024,198 @@ class DispatchResult(ContractBase):
     }
 
 
+class RenewableEnergyMetrics(ContractBase):
+    """**单一**可再生能源来源（PV 或风电）的可用 / 使用 / 弃电与利用率（M6-P1）。
+
+    `utilization = used / available`；**可用量为 0 时**为 `None`（不可判定），
+    绝不填 0 冒充测量。可再生**占比**是另一个量（见 `EvaluationRecord.renewable_share`）。
+    """
+
+    available_kwh: float
+    used_kwh: float
+    curtail_kwh: float
+    utilization: float | None
+
+    UNITS: ClassVar[dict[str, str]] = {
+        "available_kwh": "kWh",
+        "used_kwh": "kWh",
+        "curtail_kwh": "kWh",
+        "utilization": "fraction [0,1]（used/available；available=0 时为 null=不可判定）",
+    }
+
+
+class ServiceMetrics(ContractBase):
+    """业务服务的**分类计数**与按类工作量（M6-P1）。
+
+    五个分类互斥完备，其**任务数**之和等于本 episode 已到达任务数；
+    `failed_*` 必须保留在分母里（已到期但失败的任务不得消失）。
+    `due_in_episode_*` 只覆盖**截止时点落在本 episode 内**的已到达任务，
+    截止时点在 episode 外的任务单列 `not_due_backlog_*`，不计作逾期。
+    比率为 `None` 表示**不可判定**（零分母），**不自动合格**。
+    """
+
+    due_in_episode_tasks: int
+    due_in_episode_work: float
+    on_time_completed_tasks: int
+    on_time_completed_work: float
+    overdue_completed_tasks: int
+    overdue_completed_work: float
+    overdue_backlog_tasks: int
+    overdue_backlog_work: float
+    not_due_backlog_tasks: int
+    not_due_backlog_work: float
+    failed_tasks: int
+    failed_work: float
+    end_leftover_work: float
+    end_leftover_work_fraction: float | None
+    non_interruptible_interruption_count: int
+    on_time_task_rate: float | None
+    on_time_work_rate: float | None
+
+    UNITS: ClassVar[dict[str, str]] = {
+        "due_in_episode_work": "work-units",
+        "on_time_completed_work": "work-units",
+        "overdue_completed_work": "work-units",
+        "overdue_backlog_work": "work-units",
+        "not_due_backlog_work": "work-units",
+        "failed_work": "work-units",
+        "end_leftover_work": "work-units",
+        "end_leftover_work_fraction": "fraction [0,1]（零分母时为 null=不可判定）",
+        "non_interruptible_interruption_count": "count",
+        "on_time_task_rate": "fraction [0,1]（零分母时为 null=不可判定）",
+        "on_time_work_rate": "fraction [0,1]（零分母时为 null=不可判定）",
+    }
+
+
+class PhysicalViolationMetrics(ContractBase):
+    """物理约束的**违规**计数与最大幅度（M6-P1）。
+
+    逐 step 用与 `tests/test_m33_group_power.py` **相同**的守恒口径与容差复核；
+    不另设更宽松的阈值。「违规」指**环境实际给出的量**越界，不是策略造成的服务缺口。
+    """
+
+    access_limit_violation_steps: int
+    access_limit_max_excess_kw: float
+    soc_violation_steps: int
+    soc_max_deviation_kwh: float
+    charge_discharge_exclusion_violations: int
+    energy_conservation_violations: int
+    energy_conservation_max_gap_kw: float
+    base_load_unserved_steps: int
+
+    UNITS: ClassVar[dict[str, str]] = {
+        "access_limit_violation_steps": "count(step)",
+        "access_limit_max_excess_kw": "kW",
+        "soc_violation_steps": "count(step)",
+        "soc_max_deviation_kwh": "kWh",
+        "charge_discharge_exclusion_violations": "count(step)",
+        "energy_conservation_violations": "count(step)",
+        "energy_conservation_max_gap_kw": "kW",
+        "base_load_unserved_steps": "count(step)",
+    }
+
+
+class CorrectionMetrics(ContractBase):
+    """raw→exec 修正的幅度、求解耗时与回退（M6-P1）。
+
+    **无修正器的方法不得填本对象**（记录为 `None` = 不适用），
+    不得用「0 次修正」冒充测量。
+    """
+
+    steps_with_correction: int
+    compute_abs_delta_mean: float
+    compute_abs_delta_max: float
+    storage_abs_delta_mean: float
+    storage_abs_delta_max: float
+    business_gap_total: float
+    deadline_shortfall_work_total: float
+    solve_time_median_s: float
+    solve_time_p95_s: float
+    timeout_count: int
+    zero_action_fallback_count: int
+
+    UNITS: ClassVar[dict[str, str]] = {
+        "steps_with_correction": "count(step)",
+        "compute_abs_delta_mean": "action-units（raw 与 exec 的绝对差）",
+        "compute_abs_delta_max": "action-units",
+        "storage_abs_delta_mean": "action-units",
+        "storage_abs_delta_max": "action-units",
+        "business_gap_total": "work-units",
+        "deadline_shortfall_work_total": "work-units",
+        "solve_time_median_s": "s",
+        "solve_time_p95_s": "s",
+        "timeout_count": "count(step)",
+        "zero_action_fallback_count": "count(step)",
+    }
+
+
 class EvaluationRecord(ContractBase):
-    """统一评估记录（M6 五方法同 schema）。"""
+    """统一评估记录（M6-P1；五方法同 schema）。
+
+    口径要点（`docs/M6_EVALUATION_PROTOCOL.md` §3）：
+
+    - **成本分列**：`purchase_cost_sgd` 与 `bess_degradation_cost_sgd` 各自成列；
+      `mixed_objective_cost` 含非货币期末罚项，**只作混合目标诊断，不是 SGD**；
+    - **碳与购电**：`carbon_kg_co2e` / `grid_energy_kwh`；
+      零完成量时 `carbon_per_completed_work` 为 `None`（不可判定），不填 0；
+    - **服务资格**：`service_qualified is None` 表示**未判定**
+      （未传标准 / 标准未冻结 / 零分母）；**未判定 ≠ 达标**；
+    - **不可计算**：`not_computable` 逐项列出原因键，缺失的原始量**不以零代替**。
+    """
 
     method: str
     run_id: str
-    service_qualified: bool
-    total_cost_sgd: float
-    total_carbon_kg: float
-    renewable_utilization: float
-    peak_kw: float
-    reliability: float
-    solve_time_avg_s: float
+    action_mode: str
+    seed: int
+    steps: int
+    checkpoint_id: str | None
+    checkpoint_role: str | None
+    service: ServiceMetrics
+    service_qualified: bool | None
+    service_standard_id: str | None
+    service_standard_frozen: bool
+    service_qualification_note: str
+    purchase_cost_sgd: float
+    bess_degradation_cost_sgd: float
+    mixed_objective_cost: float
+    grid_energy_kwh: float
+    carbon_kg_co2e: float
+    carbon_per_completed_work: float | None
+    completed_work: float
+    pv: RenewableEnergyMetrics
+    wind: RenewableEnergyMetrics
+    renewable_share: float | None
+    grid_peak_kw: float
+    physical: PhysicalViolationMetrics
+    correction: CorrectionMetrics | None
+    not_computable: tuple[str, ...]
     failure_classification: str | None = None
 
     UNITS: ClassVar[dict[str, str]] = {
-        "total_cost_sgd": "SGD",
-        "total_carbon_kg": "kgCO2",
-        "renewable_utilization": "fraction [0,1]",
-        "peak_kw": "kW",
-        "reliability": "fraction [0,1]",
-        "solve_time_avg_s": "s",
+        "service_qualified": "bool｜null（null = 未判定，≠ 达标）",
+        "purchase_cost_sgd": "SGD",
+        "bess_degradation_cost_sgd": "SGD",
+        # 刻意**不含** "SGD" 子串：消费方若按 `"SGD" in unit` 判断货币性，
+        # 一个含该子串的单位串会被误读成金额。
+        "mixed_objective_cost": "mixed-objective (unitless; not a currency amount)",
+        "service_standard_id": "standard identifier（null = 未声明标准）",
+        "grid_energy_kwh": "kWh",
+        "carbon_kg_co2e": "kgCO2e",
+        "carbon_per_completed_work": "kgCO2e/work-unit（零完成量时为 null=不可判定）",
+        "completed_work": "work-units",
+        "renewable_share": "fraction [0,1]（可再生供能 / IDC 用能；**不是**利用率）",
+        "grid_peak_kw": "kW",
+        "pv.utilization": "fraction [0,1]（used/available）",
+        "pv.available_kwh": "kWh",
+        "pv.used_kwh": "kWh",
+        "pv.curtail_kwh": "kWh",
+        "wind.utilization": "fraction [0,1]（used/available）",
+        "wind.available_kwh": "kWh",
+        "wind.used_kwh": "kWh",
+        "wind.curtail_kwh": "kWh",
+        "correction.solve_time_median_s": "s",
+        "correction.solve_time_p95_s": "s",
+        "physical.energy_conservation_max_gap_kw": "kW",
+        "physical.access_limit_max_excess_kw": "kW",
+        "physical.soc_max_deviation_kwh": "kWh",
     }

@@ -13,7 +13,6 @@ import inspect
 
 import numpy as np
 import pytest
-import torch
 
 from contracts.models import EvaluationRecord
 from envs.idc_price_env import IDCPriceEnv20D
@@ -120,12 +119,10 @@ def test_impossible_standard_fails_and_a_trivial_one_passes():
 
 
 def test_undetermined_when_a_mandatory_component_has_a_zero_denominator():
-    env = _env()
+    """没有任何任务到期（截止时点全在 episode 外）⇒ 按时率零分母 ⇒ 未判定。"""
+    env = _env(num_tasks=0)          # 只剩初始积压任务，其截止时点 24 > horizon=8
     env.reset(seed=0)
-    for task in env.tasks:
-        # 截止时点全部推到 episode 之外 ⇒ 到期任务数为 0
-        task.deadline = env.horizon + 1000
-    assert all(t.latest_finish_time >= env.horizon for t in env.tasks)
+    assert all(t.latest_finish_time >= HORIZON for t in env.tasks)
     rec = _run(env, standard=_standard())
     assert rec.service.due_in_episode_tasks == 0
     assert rec.service.on_time_task_rate is None
@@ -174,15 +171,15 @@ def test_degradation_cost_is_not_folded_into_purchase_cost():
 
 
 def test_carbon_per_completed_work_is_undetermined_without_completed_work():
-    env = _env()
-    rec = _run(env, standard=None)
-    env.total_completed_work = 0.0
-    rec_zero = _run(env, standard=None)
-    assert rec_zero.carbon_per_completed_work is None
-    assert "carbon_per_completed_work" in rec_zero.not_computable
-    # 非空洞性：正常 episode 必须有已完成工作量
-    if rec.completed_work > 0.0:
-        assert rec.carbon_per_completed_work is not None
+    zero = _run(_env(), action_fn=lambda obs: np.zeros(21, dtype=np.float32), standard=None)
+    assert zero.completed_work == 0.0, "零计算动作不得完成任何工作"
+    assert zero.carbon_per_completed_work is None, "零完成量 ⇒ 不可判定，不填 0"
+    assert "carbon_per_completed_work" in zero.not_computable
+
+    # 非空洞性：正常的固定动作 episode 必须有已完成工作量与单位碳排
+    normal = _run(_env(), standard=None)
+    assert normal.completed_work > 0.0
+    assert normal.carbon_per_completed_work is not None
 
 
 # =============================================================================
@@ -209,22 +206,27 @@ def test_renewables_are_reported_per_source_with_utilization():
 
 
 def test_pv_utilization_is_used_over_available_not_a_share_of_demand():
-    env = _env()
-    env.reset(seed=0)
-    env.total_pv_available_kWh = 10.0
-    env.total_pv_used_kWh = 4.0
-    env.total_pv_curtail_kWh = 6.0
+    metrics = importlib.import_module("evaluation.metrics")
+    pv, missing = metrics.renewable_metrics(
+        key="pv", available_kwh=10.0, used_kwh=4.0, curtail_kwh=6.0)
+    assert pv.utilization == pytest.approx(0.4), "利用率 = used / available"
+    assert missing == ()
+
+    # 端到端：与 env 的累计量一致，且与「可再生占比」是两个不同的量
+    env = _env(pv_t=np.full(HORIZON, 1.0))
     rec = _run(env, standard=None)
-    assert rec.pv.utilization == pytest.approx(0.4), "利用率 = used / available"
+    assert rec.pv.available_kwh > 0.0
+    assert rec.pv.utilization == pytest.approx(
+        env.total_pv_used_kWh / env.total_pv_available_kWh)
+    if rec.renewable_share is not None:
+        assert rec.renewable_share == pytest.approx(
+            (env.total_pv_used_kWh + env.total_wind_used_kWh) / env.total_idc_energy_kWh)
 
 
 def test_utilization_is_undetermined_when_nothing_is_available():
-    env = _env()
-    env.reset(seed=0)
-    env.total_pv_available_kWh = 0.0
-    env.total_pv_used_kWh = 0.0
-    env.total_pv_curtail_kWh = 0.0
-    rec = _run(env, standard=None)
+    # 无光照 ⇒ 可用量为 0 ⇒ 不可判定（不填 0）
+    rec = _run(_env(pv_t=np.zeros(HORIZON)), standard=None)
+    assert rec.pv.available_kwh == 0.0
     assert rec.pv.utilization is None, "可用量为 0 ⇒ 不可判定，不填 0"
     assert "pv.utilization" in rec.not_computable
 
@@ -271,18 +273,48 @@ def test_service_counts_cover_the_episode():
         if task.status != "not_arrived" and task.latest_finish_time < HORIZON)
 
 
+class _StubTask:
+    """`classify_tasks` 只需要这几个字段（纯函数级验证，不跑 episode）。"""
+
+    def __init__(self, *, status, workload, remaining, deadline, finish=None):
+        self.status = status
+        self.workload = workload
+        self.remaining_work = remaining
+        self.deadline = deadline
+        self.arrival_time = 0
+        self.finish_time = finish
+
+    @property
+    def latest_finish_time(self) -> int:
+        return int(self.arrival_time + self.deadline)
+
+
 def test_failed_tasks_stay_in_the_denominator():
-    """已到达但失败的任务不得因 status=failed 而从分母消失。"""
-    env = _env()
-    env.reset(seed=0)
-    arrived_before = sum(1 for task in env.tasks if task.status != "not_arrived")
-    for task in env.tasks[:2]:
-        task.status = "failed"
-    rec = _run(env, standard=None)
-    assert rec.service.failed_tasks >= 1, "失败任务必须单列且留在分母里"
-    assert (rec.service.on_time_completed_tasks + rec.service.overdue_completed_tasks
-            + rec.service.failed_tasks + rec.service.overdue_backlog_tasks
-            + rec.service.not_due_backlog_tasks) == arrived_before
+    """已到达但失败的任务单列且**留在分母**里（`classify_tasks` 纯函数级）。"""
+    metrics = importlib.import_module("evaluation.metrics")
+    tasks = [
+        _StubTask(status="finished", workload=10.0, remaining=0.0, deadline=3, finish=2),
+        _StubTask(status="failed", workload=20.0, remaining=20.0, deadline=5),
+        _StubTask(status="waiting", workload=30.0, remaining=30.0, deadline=6),
+        _StubTask(status="waiting", workload=40.0, remaining=40.0, deadline=99),
+        _StubTask(status="not_arrived", workload=50.0, remaining=50.0, deadline=2),
+    ]
+    service, _ = metrics.classify_tasks(
+        tasks, horizon=8, non_interruptible_interruptions=2)
+
+    assert service.failed_tasks == 1 and service.failed_work == pytest.approx(20.0)
+    assert service.on_time_completed_tasks == 1
+    assert service.overdue_backlog_tasks == 1        # deadline=6 已过、未完成
+    assert service.not_due_backlog_tasks == 1        # deadline=99 在 episode 外
+    # 互斥完备：五类计数之和 == 已到达任务数（失败任务**没有**消失）
+    assert (service.on_time_completed_tasks + service.overdue_completed_tasks
+            + service.failed_tasks + service.overdue_backlog_tasks
+            + service.not_due_backlog_tasks) == 4
+    # 分母覆盖已到期任务：按时 + 逾期积压 + 失败
+    assert service.due_in_episode_tasks == 3
+    assert service.on_time_task_rate == pytest.approx(1 / 3)
+    assert service.end_leftover_work == pytest.approx(90.0)
+    assert service.non_interruptible_interruption_count == 2
 
 
 def test_service_rates_are_fractions_or_undetermined():
@@ -367,12 +399,12 @@ def test_failed_run_is_retained_with_a_classification():
 def test_missing_methods_are_reported_as_not_evaluated():
     """五类方法矩阵：缺方法 ⇒ 「未评估」，不得伪造比较结果。"""
     adapter = _adapter()
-    rec = _run(_env(), method="rule_based", standard=None)
+    rec = _run(_env(), method="rule_baseline", standard=None)
     rows = adapter.planned_method_rows([rec])
     assert [row["method"] for row in rows] == list(adapter.PLANNED_METHODS)
     evaluated = [row for row in rows if row["status"] == "evaluated"]
     missing = [row for row in rows if row["status"] == "not_evaluated"]
-    assert [row["method"] for row in evaluated] == ["rule_based"]
+    assert [row["method"] for row in evaluated] == ["rule_baseline"]
     assert len(missing) == len(adapter.PLANNED_METHODS) - 1
     for row in missing:
         assert row["service_qualified"] is None
@@ -380,8 +412,10 @@ def test_missing_methods_are_reported_as_not_evaluated():
 
 
 def test_records_share_one_schema_and_declare_mode_and_seed():
-    rec1 = _run(_env(), method="rule_based", standard=None, action_mode="deterministic_mean", seed=3)
-    rec2 = _run(_env(), method="penalty_ppo", standard=None, action_mode="seeded_sample", seed=4)
+    rec1 = _run(_env(), method="rule_baseline", standard=None,
+                action_mode="deterministic_mean", seed=3)
+    rec2 = _run(_env(), method="penalty_ppo", standard=None,
+                action_mode="seeded_sample", seed=4)
     assert rec1.model_dump().keys() == rec2.model_dump().keys()
     assert rec1.action_mode == "deterministic_mean" and rec1.seed == 3
     assert rec2.action_mode == "seeded_sample" and rec2.seed == 4
@@ -390,7 +424,9 @@ def test_records_share_one_schema_and_declare_mode_and_seed():
 
 
 def test_record_rejects_unknown_fields_and_requires_units():
-    with pytest.raises(Exception):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
         EvaluationRecord(
             method="rule", run_id="r", action_mode="deterministic_mean", seed=0, steps=1,
             checkpoint_id=None, checkpoint_role=None, service=None,

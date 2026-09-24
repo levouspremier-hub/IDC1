@@ -62,8 +62,13 @@ def _sources(role_count: int = len(SOURCE_ROLES)):
     ]
 
 
-def _save_kwargs(policy=None, **overrides):
-    policy = policy if policy is not None else _policy()
+_UNSET = object()
+
+
+def _save_kwargs(policy=_UNSET, **overrides):
+    # 哨兵而非 `None`：`policy=None` 必须**原样**传给保存路径（用于拒绝用例），
+    # 不能被 helper 悄悄替换成一份默认权重。
+    policy = _policy() if policy is _UNSET else policy
     kwargs = {
         "policy": policy,
         "obs_dim": OBS_DIM,
@@ -152,15 +157,32 @@ def test_declares_itself_as_a_controlled_short_run_input(tmp_path):
 # =============================================================================
 
 def test_rejects_old_23_dim_action_space(tmp_path):
-    path = _save(tmp_path, policy=_policy(action_dim=23),
-                 policy_config={"hidden": 64, "hidden_layers": 1, "activation": "Tanh",
-                                "obs_dim": OBS_DIM, "action_dim": 23})
+    """旧 23 维动作空间一律拒绝：写入侧不得落盘，读取侧不得放行。"""
+    with pytest.raises((CheckpointVersionError, ValueError), match="action_dim"):
+        _save(tmp_path, "old23.pt", policy=_policy(action_dim=23),
+              policy_config={"hidden": 64, "hidden_layers": 1, "activation": "Tanh",
+                             "obs_dim": OBS_DIM, "action_dim": 23})
+    assert not (tmp_path / "old23.pt").exists()
+
+    path = _save(tmp_path, "tampered23.pt")
+    payload = torch.load(str(path), weights_only=False)
+    payload["metadata"]["action_dim"] = 23
+    torch.save(payload, str(path))
     with pytest.raises((CheckpointVersionError, ValueError), match="action_dim"):
         _load(path)
 
 
 def test_rejects_wrong_obs_dim(tmp_path):
-    path = _save(tmp_path, obs_dim=OBS_DIM + 1)
+    """写入侧与读取侧都必须拒绝 obs 维度不符（不得写出读不回来的件）。"""
+    with pytest.raises((CheckpointVersionError, ValueError), match="obs_dim"):
+        _save(tmp_path, "obs.pt", obs_dim=OBS_DIM + 1)
+    assert not (tmp_path / "obs.pt").exists()
+
+    # 读取侧：把一个**合法**件的 obs_dim 改坏，必须拒绝
+    path = _save(tmp_path, "tampered.pt")
+    payload = torch.load(str(path), weights_only=False)
+    payload["metadata"]["obs_dim"] = OBS_DIM + 1
+    torch.save(payload, str(path))
     with pytest.raises((CheckpointVersionError, ValueError), match="obs_dim"):
         _load(path)
 
@@ -171,8 +193,6 @@ def test_rejects_wrong_contract_version(tmp_path):
         contract_version_id=CURRENT_CONTRACT_VERSION, action_dim=ACTION_DIM, obs_dim=OBS_DIM,
         schema_hash=SCHEMA, code_revision="0" * 40, state={"policy": {}},
     ).save(path)
-    (path,)
-    from checkpointing import versioned as _v  # noqa: F401
 
     payload = torch.load(str(path), weights_only=False)
     payload["metadata"]["contract_version_id"] = "contract-v8"
