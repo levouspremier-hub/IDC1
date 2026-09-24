@@ -230,7 +230,7 @@ git diff --check / git status --short   空 / 空
 ### 8.5 回滚（实测，newest-first）
 
 ```bash
-git revert 980a149 1e0e5d7 4d16f04 da288ee 626f97f bc1444c a2dda64     # 本会话全部 7 个提交（CHAIN-REFRESH 四个 + M6-P1 三个）
+git revert 37a1e39 f3a1fd2 980a149 1e0e5d7 4d16f04 da288ee 626f97f bc1444c a2dda64     # 本会话全部 7 个提交（CHAIN-REFRESH 四个 + M6-P1 三个）
 # revert 侧 tree（独立 detached worktree） = 81e360671835f98a8f6f593a9af5955c9a27e42d
 # 起点侧 1e3a045^{tree}                 = 81e360671835f98a8f6f593a9af5955c9a27e42d
 → 两侧一致、**零冲突** ✅
