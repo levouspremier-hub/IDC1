@@ -440,3 +440,146 @@ def test_record_rejects_unknown_fields_and_requires_units():
     for name in ("purchase_cost_sgd", "carbon_kg_co2e", "grid_energy_kwh",
                  "mixed_objective_cost", "renewable_share", "grid_peak_kw"):
         assert name in EvaluationRecord.UNITS, f"{name} 未声明单位"
+
+
+# =============================================================================
+# 8. M6-P1-R1：资格口径（分子与到期分母同口径）与物理违规门禁
+# =============================================================================
+
+class _Task:
+    """`classify_tasks` 需要的最小任务替身（纯函数级构造反例）。"""
+
+    def __init__(self, *, deadline, status="finished", workload=1.0,
+                 remaining=0.0, finish=None):
+        self.deadline = deadline
+        self.arrival_time = 0
+        self.status = status
+        self.workload = workload
+        self.remaining_work = remaining
+        self.finish_time = finish if finish is not None else (deadline - 1 if status == "finished" else None)
+
+    @property
+    def latest_finish_time(self) -> int:
+        return int(self.arrival_time + self.deadline)
+
+
+def test_on_time_rate_uses_a_same_caliber_numerator():
+    """**反例**：1 个本 episode 到期任务 + 1 个提前完成但下个 episode 才到期的任务。
+
+    分子（按时完成）**必须**只数「截止时点落在本 episode 内」的任务，
+    与分母 `due_in_episode_*` 同口径 —— 否则比率会 **> 1**。
+    """
+    metrics = importlib.import_module("evaluation.metrics")
+    tasks = [
+        # 截止时点在 episode 内（deadline=3 < horizon=8），按时完成
+        _Task(deadline=3, workload=10.0, finish=2),
+        # **提前完成，但截止时点在下一个 episode**（deadline=12 ≥ horizon=8）
+        _Task(deadline=12, workload=20.0, finish=1),
+    ]
+    service, _ = metrics.classify_tasks(
+        tasks, horizon=8, non_interruptible_interruptions=0)
+
+    assert service.due_in_episode_tasks == 1
+    assert service.on_time_task_rate is not None and 0.0 <= service.on_time_task_rate <= 1.0, \
+        f"按时任务率必须在 [0,1]，实际 {service.on_time_task_rate}"
+    assert service.on_time_work_rate is not None and 0.0 <= service.on_time_work_rate <= 1.0, \
+        f"按时工作量率必须在 [0,1]，实际 {service.on_time_work_rate}"
+    # 分子与到期分母同口径：率 == 到期且按时的量 / 到期的量
+    assert service.on_time_task_rate == pytest.approx(1.0)
+    assert service.on_time_work_rate == pytest.approx(1.0)
+    # 分类计数保留**全部**已到达任务（互斥完备）
+    assert (service.on_time_completed_tasks + service.overdue_completed_tasks
+            + service.failed_tasks + service.overdue_backlog_tasks
+            + service.not_due_backlog_tasks) == 2
+    assert service.on_time_completed_tasks == 2, "两个任务都按时完成（分类计数保留）"
+
+
+def test_on_time_rate_is_bounded_for_episode_less_work():
+    """到期分母为 0 ⇒ 不可判定（`None`），绝不返回 > 1 或自动合格。"""
+    metrics = importlib.import_module("evaluation.metrics")
+    tasks = [_Task(deadline=99, workload=5.0, finish=1)]
+    service, missing = metrics.classify_tasks(
+        tasks, horizon=8, non_interruptible_interruptions=0)
+    assert service.due_in_episode_tasks == 0
+    assert service.on_time_task_rate is None
+    assert "service.on_time_task_rate" in missing
+
+
+def _violating_step(**overrides):
+    step = {
+        "grid_power_kw": 1.0, "pv_available_kw": 0.0, "wind_available_kw": 0.0,
+        "discharge_kw": 0.0, "idc_kw": 1.0, "charge_kw": 0.0,
+        "pv_curtail_kw": 0.0, "wind_curtail_kw": 0.0,
+    }
+    step.update(overrides)
+    return step
+
+
+def test_no_physical_violation_allows_qualification():
+    """对照：无物理违规时可产生 `True`。"""
+    metrics = importlib.import_module("evaluation.metrics")
+    rows = [metrics.check_physical_step(
+        _violating_step(), access_limit_kw=1e9, soc_kwh=0.0,
+        soc_min_kwh=0.0, soc_max_kwh=1.0)]
+    physical = metrics.aggregate_physical(rows, base_load_unserved_steps=0)
+    assert physical.energy_conservation_violations == 0
+    assert physical.access_limit_violation_steps == 0
+    assert _adapter().violations_in(physical) == ()
+
+
+def test_each_single_physical_violation_blocks_comparison_eligibility():
+    """**单项违规**各自必须阻止「同等服务成本/碳比较」的 `True`。"""
+    metrics = importlib.import_module("evaluation.metrics")
+    cases = {
+        "access": dict(step=_violating_step(grid_power_kw=5.0), access_limit_kw=1.0),
+        "soc": dict(step=_violating_step(), access_limit_kw=1e9, soc_kwh=2.0),
+        "exclusion": dict(step=_violating_step(charge_kw=1.0), access_limit_kw=1e9),
+        "conservation": dict(
+            step=_violating_step(idc_kw=1.0, grid_power_kw=0.0), access_limit_kw=1e9),
+    }
+    for name, kwargs in cases.items():
+        rows = [metrics.check_physical_step(
+            kwargs.pop("step"), access_limit_kw=kwargs.pop("access_limit_kw"),
+            soc_kwh=kwargs.pop("soc_kwh", 0.0), soc_min_kwh=0.0, soc_max_kwh=1.0)]
+        physical = metrics.aggregate_physical(rows, base_load_unserved_steps=0)
+        found = _adapter().violations_in(physical)
+        assert found, f"{name} 违规未被识别"
+
+        # 违规存在时，即使服务指标满足标准，也**不得**给出 True
+        standard = _standard(on_time_task_rate_min=0.0, on_time_work_rate_min=0.0,
+                             end_leftover_work_fraction_max=1.0,
+                             non_interruptible_interruption_max=10 ** 6)
+        qualified, note = _adapter().qualify_service(
+            _passing_service(), standard, physical)
+        assert qualified is not True, f"{name} 违规不得产生 True"
+        assert qualified is False
+        assert any(v in note for v in found) or "违规" in note
+
+
+def _passing_service():
+    from contracts.models import ServiceMetrics
+
+    return ServiceMetrics(
+        due_in_episode_tasks=1, due_in_episode_work=1.0,
+        on_time_completed_tasks=1, on_time_completed_work=1.0,
+        overdue_completed_tasks=0, overdue_completed_work=0.0,
+        overdue_backlog_tasks=0, overdue_backlog_work=0.0,
+        not_due_backlog_tasks=0, not_due_backlog_work=0.0,
+        failed_tasks=0, failed_work=0.0,
+        end_leftover_work=0.0, end_leftover_work_fraction=0.0,
+        non_interruptible_interruption_count=0,
+        on_time_task_rate=1.0, on_time_work_rate=1.0,
+    )
+
+
+def test_evaluate_marks_violating_episode_as_not_qualified():
+    """端到端：物理违规的 episode 即使服务达标也不得 `service_qualified is True`。"""
+    env = _env()
+    rec = _run(env, standard=_standard(on_time_task_rate_min=0.0,
+                                       on_time_work_rate_min=0.0,
+                                       end_leftover_work_fraction_max=1.0,
+                                       non_interruptible_interruption_max=10 ** 6))
+    if _adapter().violations_in(rec.physical):
+        assert rec.service_qualified is not True
+    else:
+        assert rec.service_qualified is True, "对照组：无违规且服务达标应为 True"

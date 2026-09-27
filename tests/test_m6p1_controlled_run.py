@@ -214,3 +214,43 @@ def test_source_role_set_must_match_exactly():
     stub.sources = tuple(digests[:-1])
     with pytest.raises(ValueError, match="来源角色集合不符"):
         sources.verify_evaluation_input_sources(stub)
+
+
+# =============================================================================
+# 4. M6-P1-R1：manifest 来源账本（实测、可重算）
+# =============================================================================
+
+def test_manifest_writes_recomputable_source_hashes(controlled_run_dir):
+    """manifest 的三个来源 hash 必须**实测且可独立重算**（不得为 null）。"""
+    import hashlib
+
+    _run_id, run_dir = controlled_run_dir
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    for key in ("dependency_lock_hash", "data_hash", "scenario_hash"):
+        value = manifest.get(key)
+        assert isinstance(value, str) and len(value) == 64, \
+            f"{key} 必须写入实测 hash，实际 {value!r}"
+        int(value, 16)  # 必须是 16 进制
+
+    controlled = _controlled_run()
+    sources = importlib.import_module("evaluation.sources")
+    lock = pathlib.Path(__file__).resolve().parent.parent / "uv.lock"
+    assert manifest["dependency_lock_hash"] == hashlib.sha256(lock.read_bytes()).hexdigest(), \
+        "dependency_lock_hash 必须等于 uv.lock 的 sha256（可重算）"
+
+    expected_data = hashlib.sha256(json.dumps(
+        [[d.role, d.logical_path, d.sha256] for d in sources.canonical_source_digests()],
+        sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert manifest["data_hash"] == expected_data, "data_hash 必须可由已验签来源重算"
+
+    env = controlled.build_train_env()
+    assert manifest["scenario_hash"] == str(env.formal_injection.provenance_hash)
+
+    assert manifest["scenario_hash"] != manifest["data_hash"] != manifest["dependency_lock_hash"]
+
+
+def test_manifest_hashes_are_recorded_in_config_and_report(controlled_run_dir):
+    _run_id, run_dir = controlled_run_dir
+    report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
+    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    assert report["source_ledger_hashes"]["data_hash"] == manifest["data_hash"]
