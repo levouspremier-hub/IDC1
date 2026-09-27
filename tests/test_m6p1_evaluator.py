@@ -456,7 +456,10 @@ class _Task:
         self.status = status
         self.workload = workload
         self.remaining_work = remaining
-        self.finish_time = finish if finish is not None else (deadline - 1 if status == "finished" else None)
+        self.finish_time = (
+            finish if finish is not None
+            else (deadline - 1 if status == "finished" else None)
+        )
 
     @property
     def latest_finish_time(self) -> int:
