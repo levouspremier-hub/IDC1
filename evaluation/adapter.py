@@ -23,7 +23,12 @@ from typing import Any
 
 import numpy as np
 
-from contracts.models import CorrectionMetrics, EvaluationRecord
+from contracts.models import (
+    CorrectionMetrics,
+    EvaluationRecord,
+    PhysicalViolationMetrics,
+    ServiceMetrics,
+)
 from evaluation.metrics import (
     aggregate_physical,
     check_physical_step,
@@ -183,11 +188,13 @@ def evaluate(
     if correction_rows:
         correction = correction_metrics(correction_rows)
 
+    physical = aggregate_physical(
+        physical_rows, base_load_unserved_steps=base_unserved_steps)
     if failure is not None:
         qualified: bool | None = None
         note = f"未判定：episode 失败（{failure}），失败 run 不得判定达标"
     else:
-        qualified, note = qualify(service, standard)
+        qualified, note = qualify_service(service, standard, physical)
 
     return EvaluationRecord(
         method=str(method),
@@ -213,12 +220,58 @@ def evaluate(
         wind=wind,
         renewable_share=renewable_share,
         grid_peak_kw=float(unwrapped.episode_grid_peak_power_kW),
-        physical=aggregate_physical(
-            physical_rows, base_load_unserved_steps=base_unserved_steps),
+        physical=physical,
         correction=correction,
         not_computable=tuple(sorted(set(not_computable))),
         failure_classification=failure,
     )
+
+
+#: 协议 §3 的**物理约束**门禁：任一违规即不得进入「同等服务成本/碳比较」。
+VIOLATION_LABELS: dict[str, str] = {
+    "access_limit": "接入上限违规（grid 购电超过 access_limit）",
+    "soc": "SOC 越界",
+    "charge_discharge_exclusion": "充放电互斥违规（同步充放）",
+    "energy_conservation": "能量守恒违规",
+}
+
+
+def violations_in(physical: PhysicalViolationMetrics) -> tuple[str, ...]:
+    """列出该 episode 命中的**物理约束违规**（协议 §3；无违规则为空元组）。
+
+    `base_load_unserved_steps` 是**服务缺口**而非约束违规，故不计入本门禁，
+    仅随 `PhysicalViolationMetrics` 报告。
+    """
+    found: list[str] = []
+    if physical.access_limit_violation_steps > 0:
+        found.append("access_limit")
+    if physical.soc_violation_steps > 0:
+        found.append("soc")
+    if physical.charge_discharge_exclusion_violations > 0:
+        found.append("charge_discharge_exclusion")
+    if physical.energy_conservation_violations > 0:
+        found.append("energy_conservation")
+    return tuple(found)
+
+
+def qualify_service(
+    service: ServiceMetrics,
+    standard: ServiceStandard | None,
+    physical: PhysicalViolationMetrics,
+) -> tuple[bool | None, str]:
+    """服务资格 + **物理约束门禁**的唯一入口。
+
+    物理违规（接入 / SOC / 充放互斥 / 守恒任一）⇒ **`False`**（可判定为不合格），
+    即使服务指标满足标准也**不得**给出 `True` —— 该 run 不能进入
+    「同等服务成本/碳比较」。无违规时才由 `service_standard.qualify` 判定。
+    """
+    violations = violations_in(physical)
+    if violations:
+        labels = "、".join(VIOLATION_LABELS[name] for name in violations)
+        return False, (
+            f"不合格：存在物理约束违规（{labels}）——不得进入同等服务成本/碳比较"
+        )
+    return qualify(service, standard)
 
 
 def planned_method_rows(records: Sequence[EvaluationRecord]) -> list[dict[str, Any]]:
@@ -275,7 +328,10 @@ __all__ = [
     "PLANNED_METHODS",
     "STATUS_EVALUATED",
     "STATUS_NOT_EVALUATED",
+    "VIOLATION_LABELS",
     "evaluate",
     "neutral_rule",
+    "qualify_service",
+    "violations_in",
     "planned_method_rows",
 ]

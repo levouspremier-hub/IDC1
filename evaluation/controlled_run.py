@@ -65,6 +65,44 @@ NOT_EVALUATED_STATEMENT = (
 )
 
 
+def _sha256_bytes(payload: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(payload).hexdigest()
+
+
+def source_ledger_hashes(env) -> dict[str, str]:
+    """受控 run 的**实测、可重算**来源账本（写入 runs manifest）。
+
+    - `dependency_lock_hash`：`uv.lock` 的 SHA-256（重算：对该文件做 sha256）。
+    - `data_hash`：12 个已验签来源 `(role, 规范逻辑路径, sha256)` 的规范化 JSON
+      之 SHA-256（重算：`evaluation.sources.canonical_source_digests()` 同样序列化后 sha256）。
+    - `scenario_hash`：本 episode 正式注入载荷的 `provenance_hash`
+      （`scenario.env_injection.build_verified_formal_env_injection` 的内容 hash，
+      覆盖 split/origin/horizon/整数账本/realized/因果预测/refs/任务规格）。
+    """
+    import json
+
+    lock = REPO_ROOT / "uv.lock"
+    if not lock.exists():
+        raise FileNotFoundError(f"依赖锁不存在：{lock}")
+    digests = canonical_source_digests()
+    data_hash = _sha256_bytes(json.dumps(
+        [[d.role, d.logical_path, d.sha256] for d in digests],
+        sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    injection = getattr(env, "formal_injection", None)
+    if injection is None:
+        raise ValueError("受控 run 必须使用正式注入环境（缺少 provenance_hash）")
+    scenario_hash = str(injection.provenance_hash)
+    if len(scenario_hash) != 64 or any(c not in "0123456789abcdef" for c in scenario_hash):
+        raise ValueError(f"scenario provenance_hash 非法：{scenario_hash!r}")
+    return {
+        "dependency_lock_hash": _sha256_bytes(lock.read_bytes()),
+        "data_hash": data_hash,
+        "scenario_hash": scenario_hash,
+    }
+
+
 def build_train_env(origin: int = DEFAULT_ORIGIN):
     """走既有已验证注入链构造 **train** 环境（不读 validation/test）。"""
     import importlib
@@ -165,6 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         rollout = run_short_rollout(env, policy, steps=int(args.steps),
                                     corrector_time_limit_s=None)
         digests = canonical_source_digests()
+        ledger_hashes = source_ledger_hashes(env)
         checkpoint_info = save_evaluation_checkpoint(
             checkpoint_path,
             policy=policy,
@@ -222,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             "action_mode": loaded.action_mode,
             "short_rollout": rollout,
             "checkpoint": checkpoint_info,
+            "source_ledger_hashes": dict(ledger_hashes),
             "evaluation": record.model_dump(mode="json"),
             "planned_methods": list(PLANNED_METHODS),
             "planned_method_matrix": planned_method_rows([]),
@@ -248,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
             "checkpoint_path": str(checkpoint_path),
             "checkpoint_sha256": checkpoint_info["sha256"],
             "sources": [digest.model_dump() for digest in digests],
+            "source_ledger_hashes": dict(ledger_hashes),
             "claims": dict(CLAIMS),
             "code_revision": git_revision(),
         }
@@ -308,6 +349,9 @@ def main(argv: list[str] | None = None) -> int:
     run_path = write_run(
         args.run_id, config=config, metrics=metrics, report=report,
         base_dir=str(base), seed=POLICY_SEED, command=command, status="success",
+        dependency_lock_hash=ledger_hashes["dependency_lock_hash"],
+        data_hash=ledger_hashes["data_hash"],
+        scenario_hash=ledger_hashes["scenario_hash"],
         manifest_metadata={"checkpoint_sha256": checkpoint_info["sha256"],
                            "checkpoint_role": loaded.artifact_role})
     print(f"run 产物：{run_path}")
@@ -318,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
           f"{record.carbon_kg_co2e:.6f} kgCO2e / 购电 "
           f"{record.grid_energy_kwh:.6f} kWh")
     print(f"  not_computable = {list(record.not_computable)}")
+    print(f"  dependency_lock_hash={ledger_hashes['dependency_lock_hash']}")
+    print(f"  data_hash={ledger_hashes['data_hash']}")
+    print(f"  scenario_hash={ledger_hashes['scenario_hash']}")
     return 0
 
 

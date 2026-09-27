@@ -137,6 +137,15 @@ def classify_tasks(
     - **未到达**（`status == "not_arrived"`）的任务不属于本 episode；
     - **已到期但失败**的任务单列 `failed_*`，**留在分母**里；
     - 截止时点在 episode **之外**的未完成任务单列 `not_due_backlog_*`，不计作逾期。
+
+    **M6-P1-R1 口径修正**：`on_time_*_rate` 的**分子与分母同口径**——分子只数
+    「**截止时点落在本 episode 内**(`latest_finish_time < horizon`) 且按时完成」的
+    任务，分母 `due_in_episode_*` 同样只数截止时点在 episode 内的任务。
+    改前分子含「提前完成但截止时点在下一个 episode」的任务，比率可 **> 1**。
+
+    五个**分类计数**仍是全部已到达任务的互斥完备账本（含提前完成但未到期的任务，
+    它们按语义归 `on_time_completed_*`），因此
+    `sum(五类计数) == 已到达任务数` 恒成立。
     """
     buckets = {
         "on_time_completed": [0, 0.0],
@@ -147,6 +156,8 @@ def classify_tasks(
     }
     due_tasks = 0
     due_work = 0.0
+    due_on_time_tasks = 0
+    due_on_time_work = 0.0
     arrived_work = 0.0
     leftover = 0.0
 
@@ -172,6 +183,10 @@ def classify_tasks(
             bucket = "not_due_backlog"
         if bucket != "on_time_completed" and bucket != "overdue_completed":
             leftover += remaining
+        if bucket == "on_time_completed" and deadline < int(horizon):
+            # 与分母同口径的分子
+            due_on_time_tasks += 1
+            due_on_time_work += workload
         buckets[bucket][0] += 1
         buckets[bucket][1] += workload
 
@@ -179,11 +194,11 @@ def classify_tasks(
     on_time_task_rate: float | None = None
     on_time_work_rate: float | None = None
     if due_tasks > 0:
-        on_time_task_rate = buckets["on_time_completed"][0] / due_tasks
+        on_time_task_rate = due_on_time_tasks / due_tasks
     else:
         not_computable.append("service.on_time_task_rate")
     if due_work > 0.0:
-        on_time_work_rate = buckets["on_time_completed"][1] / due_work
+        on_time_work_rate = due_on_time_work / due_work
     else:
         not_computable.append("service.on_time_work_rate")
 
