@@ -134,6 +134,8 @@
 !docs/AUDIT_TRAINING_CONFIG.md
 !docs/training_config_candidates.json
 !docs/M6_EVALUATION_PROTOCOL.md
+!docs/audits/
+!docs/audits/M6_SERVICE_FEASIBILITY.md
 !docs/GRID_IEEE14_AUDIT.md
 !docs/task_cards/
 !docs/task_cards/*.md
