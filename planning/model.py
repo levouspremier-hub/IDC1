@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, linprog
@@ -811,6 +811,10 @@ class RawProjectionResult:
     max_constraint_residual: float
     power_approximation_used: bool
 
+    # M6-P1-F3-R1：**只读**审计导出——阶段 A 自身的第 0 步逐组 exec 动作。
+    # 用于判定稀疏分配究竟产生于阶段 A 还是阶段 B；**不参与**任何求解语义。
+    stage_a_exec_compute_actions: list[float] = field(default_factory=list)
+
 
 def _projection_empty(
     snapshot: SystemSnapshot, status: str, failure: str, audit: dict | None = None
@@ -1073,6 +1077,16 @@ def solve_time_indexed_mip_raw_projection(
 
     offset_a = float(c_off @ res_a.x)
 
+    # 只读审计：阶段 A 自身解的逐组 u（与最终 exec 公式逐字相同）
+    def _exec_compute_from(vec) -> list[float]:
+        out: list[float] = []
+        for g in range(n_group):
+            used = sum(max(float(vec[a(i, g, 0)]), 0.0) for i in range(n_task))
+            out.append(float(used / cap[g]) if cap[g] > 0.0 else 0.0)
+        return out
+
+    stage_a_exec_compute = _exec_compute_from(res_a.x)
+
     # 阶段 A 后预算已耗尽 → 不启动阶段 B，直接 timeout
     rem_b = _remaining()
     if rem_b is not None and rem_b <= 0.0:
@@ -1164,4 +1178,5 @@ def solve_time_indexed_mip_raw_projection(
         soc_kwh=[float(x[off_soc + k]) for k in range(H + 1)],
         residuals_by_constraint=residuals, max_constraint_residual=max_residual,
         power_approximation_used=True,
+        stage_a_exec_compute_actions=stage_a_exec_compute,
     )
