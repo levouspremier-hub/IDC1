@@ -814,6 +814,9 @@ class RawProjectionResult:
     # M6-P1-F3-R1：**只读**审计导出——阶段 A 自身的第 0 步逐组 exec 动作。
     # 用于判定稀疏分配究竟产生于阶段 A 还是阶段 B；**不参与**任何求解语义。
     stage_a_exec_compute_actions: list[float] = field(default_factory=list)
+    # 只读：阶段 A 自身解在**第 0 步**给每个任务的分配量（work-units）与其 deadline slack
+    stage_a_task_step0_work: list[float] = field(default_factory=list)
+    stage_a_deadline_slack: list[float] = field(default_factory=list)
 
 
 def _projection_empty(
@@ -1086,6 +1089,11 @@ def solve_time_indexed_mip_raw_projection(
         return out
 
     stage_a_exec_compute = _exec_compute_from(res_a.x)
+    stage_a_task_step0_work = [
+        float(sum(max(float(res_a.x[a(i, g, 0)]), 0.0) for g in range(n_group)))
+        for i in range(n_task)
+    ]
+    stage_a_deadline_slack = [float(res_a.x[off_dls + i]) for i in range(n_task)]
 
     # 阶段 A 后预算已耗尽 → 不启动阶段 B，直接 timeout
     rem_b = _remaining()
@@ -1179,4 +1187,6 @@ def solve_time_indexed_mip_raw_projection(
         residuals_by_constraint=residuals, max_constraint_residual=max_residual,
         power_approximation_used=True,
         stage_a_exec_compute_actions=stage_a_exec_compute,
+        stage_a_task_step0_work=stage_a_task_step0_work,
+        stage_a_deadline_slack=stage_a_deadline_slack,
     )
