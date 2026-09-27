@@ -1760,3 +1760,30 @@ git revert 980a149 1e0e5d7 4d16f04 da288ee 626f97f bc1444c a2dda64
 
 > ## ⛔ **M6-P1 + CHAIN-REFRESH 完成即停，等待复审。**
 > **未**接正式训练、validation 或最终 test；**未冻结**服务阈值。
+
+## 9.31 **M6-P1 返修：资格口径与来源账本（M6-P1-R1，2026-09-27）**
+
+起点 `a6e9667`（CHAIN-REFRESH 通过；M6-P1 因三项不通过）。提交
+`9b201b7`（开卡）→ `9ba1aff`/`990cb6c`（先红）→ `1b51452`（实现）→ 记录提交。
+
+```text
+1) 按时率分子改与到期分母同口径（只数 latest_finish_time < horizon 且按时完成）
+   先红实测：按时任务率必须在 [0,1]，实际 2.0 / 工作量率 3.0
+   （反例 = 1 个本 episode 到期 + 1 个提前完成但下 episode 才到期）
+2) 新增 adapter.violations_in() / qualify_service()：接入 / SOC / 充放互斥 / 守恒
+   任一违规 ⇒ False，即使服务指标达标也不得 True（不得进入同等服务成本/碳比较）
+3) 受控 run 的 manifest 写入实测、可重算的三个 hash（新 run-id
+   runs/m6p1r1_controlled_short_run，未覆盖旧的）：
+   dependency_lock_hash=8e6bd4a67311b32b…（uv.lock）
+   data_hash=90c4f7952c9c69f5…（12 个已验签来源的规范化 JSON）
+   scenario_hash=bca4e8cd8aea1429…（注入 provenance_hash）
+```
+
+**未**触碰 `contracts/` 与 11 个已刷新资产（`git diff a6e9667 -- contracts/ data/manifest/ configs/` 为空），
+故 B6 revision 锚点未前进、资产链仍有效。
+
+**门禁**：`make check` exit 0 → **3032 passed**；`make smoke` exit 0；
+`env release --verify` exit 0。**回滚**（newest-first，独立 worktree，本会话全部提交）
+== `1e3a045^{tree}` = `81e360671835f98a8f6f593a9af5955c9a27e42d`，零冲突。
+
+> ## ⛔ **M6-P1-R1 完成即停，等待复审。**
