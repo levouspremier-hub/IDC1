@@ -37,10 +37,13 @@ from safe_rl_v2.formal_train_loop import (
     build_seeded_policy,
     config_provenance_summary,
     controlled_origins,
+    live_asset_hash_check,
     load_frozen_training_config,
     load_resume_checkpoint,
     run_training_batch,
     save_resume_checkpoint,
+    train_env_seeds,
+    training_source_ledger,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -126,8 +129,16 @@ def run(
     lagrangian = build_lagrangian(config)
     sampling_generator, shuffle_generator = _generators(seed)
 
+    # 冻结配置记录的六项资产 hash 必须与 **live** 文件一致（实测比对，不抄字符串）
+    asset_check = live_asset_hash_check(config)
+    asset_mismatch = sorted(r for r, v in asset_check.items() if not v["match"])
+    if asset_mismatch:
+        raise ValueError(
+            f"冻结配置记录的资产 hash 与 live 文件不一致：{asset_mismatch}")
+
     resume_info: dict[str, Any] | None = None
     next_batch_index = 0
+    origin_provenance: dict[int, str] = {}
     if resume_from is not None:
         resume_info = load_resume_checkpoint(
             resume_from, policy=policy, optimizer=optimizer, lagrangian=lagrangian,
@@ -135,6 +146,7 @@ def run(
             config=config, expected_obs_dim=obs_dim)
         next_batch_index = int(resume_info["next_batch_index"])
         origins = list(resume_info["origins"])
+        origin_provenance = dict(resume_info["origin_provenance"])
 
     command = (
         "python -m safe_rl_v2.controlled_formal_train"
@@ -159,7 +171,9 @@ def run(
             batch = run_training_batch(
                 policy, optimizer, lagrangian, sampling_generator, shuffle_generator,
                 config=config, origins=batch_origins, batch_index=index, env_seed=seed,
-                corrector_time_limit_s=corrector_time_limit_s)
+                corrector_time_limit_s=corrector_time_limit_s, master_seed=seed)
+            origin_provenance.update(
+                {int(o): str(p) for o, p in batch["origin_provenance"].items()})
             checkpoint_info = None
             if checkpoint_out is not None:
                 Path(checkpoint_out).parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +182,7 @@ def run(
                     lagrangian=lagrangian, sampling_generator=sampling_generator,
                     shuffle_generator=shuffle_generator, config=config,
                     origins=origins, next_batch_index=index + 1, obs_dim=obs_dim,
+                    origin_provenance=origin_provenance, master_seed=seed,
                     code_revision=git_revision())
             batch_records.append(_batch_record(
                 batch, elapsed_s=time.perf_counter() - batch_started,
@@ -196,6 +211,7 @@ def run(
         return 1
 
     elapsed = time.perf_counter() - started
+    ledger = training_source_ledger(origin_provenance)
     report = {
         "entry": "python -m safe_rl_v2.controlled_formal_train",
         "statement": STATEMENT,
@@ -215,6 +231,11 @@ def run(
             "source": training["corrector"].get("source"),
         },
         "seed": int(seed),
+        "env_seeds": train_env_seeds(config, master_seed=seed),
+        "master_seed": int(seed),
+        "source_ledger": dict(ledger),
+        "asset_hash_check": asset_check,
+        "origin_provenance": {str(o): p for o, p in sorted(origin_provenance.items())},
         "policy_init_seed": int(seed),
         "policy_init_note": ("策略初始权重在 fork_rng 区间内以 policy_init_seed 播种，"
                              "构造后还原全局 RNG；不重播种全局 RNG"),
@@ -252,16 +273,22 @@ def run(
             "origins": [int(o) for o in origins],
             "batches_run": len(batch_records),
             "seed": int(seed),
+            "env_seeds": train_env_seeds(config, master_seed=seed),
+            "source_ledger": dict(ledger),
         },
         metrics=metrics, base_dir=str(REPO_ROOT / base_dir), seed=int(seed),
         command=command, report=report, status="success",
-        dependency_lock_hash=summary["asset_hashes"].get("dependency_lock_hash"),
-        data_hash=None, scenario_hash=None,
+        dependency_lock_hash=ledger["dependency_lock_hash"],
+        data_hash=ledger["data_hash"], scenario_hash=ledger["scenario_hash"],
         manifest_metadata={"training_scope": TRAINING_SCOPE})
     print(f"run 产物：{run_path}")
     print(f"  scope={TRAINING_SCOPE}  batches={len(batch_records)}  seed={seed}")
     print(f"  adam_steps_total={report['adam_steps_total']}  "
           f"lagrangian_updates_total={report['lagrangian_updates_total']}")
+    print(f"  env_seeds={report['env_seeds']}")
+    print(f"  dependency_lock_hash={ledger['dependency_lock_hash'][:16]}…")
+    print(f"  data_hash={ledger['data_hash'][:16]}…")
+    print(f"  scenario_hash={ledger['scenario_hash'][:16]}…")
     print(f"  final_policy_state_digest={report['final_policy_state_digest'][:16]}…")
     print(f"  elapsed_s={elapsed:.2f}")
     return 0

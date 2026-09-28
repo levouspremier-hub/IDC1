@@ -61,12 +61,16 @@ __all__ = [
     "build_policy",
     "build_seeded_policy",
     "config_provenance_summary",
+    "build_train_env",
     "controlled_origins",
+    "live_asset_hash_check",
     "load_frozen_training_config",
     "load_resume_checkpoint",
     "optimizer_state_digest",
     "run_training_batch",
     "save_resume_checkpoint",
+    "train_env_seeds",
+    "training_source_ledger",
 ]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -92,6 +96,8 @@ BATCH_KEYS = (
     "policy", "optimizer", "lagrangian", "sampling_generator", "shuffle_generator",
     "next_batch_index", "origins", "episodes_per_batch", "steps_per_episode",
     "frozen_config", "config_summary", "training_scope", "artifact_role",
+    # M1.3g-f-c-j-R1：来源账本与 code revision 必须随 checkpoint 一起可核对
+    "source_ledger", "origin_provenance", "code_revision",
 )
 
 
@@ -173,6 +179,108 @@ def build_seeded_policy(config: dict, *, obs_dim: int, seed: int) -> SafePPOPoli
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(int(seed))
         return build_policy(config, obs_dim=obs_dim)
+
+
+def train_env_seeds(config: dict, *, master_seed: int) -> dict[str, int]:
+    """由**本次 master seed** 加冻结配置的 `seed_offsets` 派生三种环境种子。"""
+    offsets = config["training"]["scale"]["seed_offsets"]
+    return {
+        "task_seed": int(master_seed) + int(offsets["task"]),
+        "server_seed": int(master_seed) + int(offsets["server"]),
+        "forecast_seed": int(master_seed) + int(offsets["forecast"]),
+    }
+
+
+def build_train_env(origin: int, *, master_seed: int, config: dict):
+    """按**本次 master seed** + 冻结配置构造 train formal env（M1.3g-f-c-j-R1）。
+
+    此前训练环境经 `scripts.calibrate_training_config.build_env_for_origin` 构造，其
+    `MASTER_SEED` 固定为 0 ⇒ 换 seed **不会**改变环境构造种子。本函数改为由调用方的
+    master seed 派生（seed 0 与原语义**逐值相同**：0/1/300000）。
+
+    复用既有 verified 链（mapper chain + `build_verified_formal_env_injection` + 环境类），
+    不另造资产验签体系。
+    """
+    import importlib
+
+    from scenario.arrival_mapper import load_verified_mapper_chain
+    from scripts.calibrate_training_config import DELTA_T_HOURS, start_for_origin
+
+    injection_module = importlib.import_module("scenario.env_injection")
+    env_cls = importlib.import_module("envs.idc_price_env").IDCPriceEnv20D
+
+    sampling = config["training"]["sampling"]
+    horizon = int(sampling["horizon"])
+    forecast_cutoff = int(sampling["forecast_cutoff"])
+    seeds = train_env_seeds(config, master_seed=master_seed)
+
+    load_verified_mapper_chain("train")
+    injection = injection_module.build_verified_formal_env_injection(
+        "train", start=start_for_origin(int(origin)), horizon=horizon,
+        forecast_cutoff=forecast_cutoff)
+    env = env_cls(horizon=horizon, forecast_cutoff=forecast_cutoff,
+                  delta_t_hours=float(DELTA_T_HOURS), formal_injection=injection,
+                  **seeds)
+    return env, injection
+
+
+def training_source_ledger(origin_provenance: dict[int, str]) -> dict[str, str]:
+    """本次短跑**可重算**的来源账本（M1.3g-f-c-j-R1）。
+
+    - `dependency_lock_hash`：`uv.lock` 的 sha256（重算：对该文件做 sha256）；
+    - `data_hash`：复用 `evaluation.sources.canonical_source_digests()` 的现有口径
+      （12 个已验签来源的 `(role, logical_path, sha256)` 规范化 JSON 之 sha256）；
+    - `scenario_hash`：本次**实际使用**的 train origin 与其 formal injection
+      `provenance_hash` 的规范化 JSON 之 sha256。
+    """
+    from evaluation.sources import canonical_source_digests
+
+    lock = REPO_ROOT / "uv.lock"
+    if not lock.is_file():
+        raise FormalTrainLoopError(f"依赖锁不存在：{lock}")
+    digests = canonical_source_digests()
+    data_hash = hashlib.sha256(json.dumps(
+        [[d.role, d.logical_path, d.sha256] for d in digests],
+        sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    if not origin_provenance:
+        raise FormalTrainLoopError("场景 hash 需要本次实际使用的 origin provenance")
+    rows: list[list[Any]] = []
+    for origin in sorted(origin_provenance):
+        prov = str(origin_provenance[origin])
+        if len(prov) != 64 or any(c not in "0123456789abcdef" for c in prov):
+            raise FormalTrainLoopError(f"injection provenance_hash 非法：{prov!r}")
+        rows.append([int(origin), prov])
+    scenario_hash = hashlib.sha256(json.dumps(
+        rows, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+    return {
+        "dependency_lock_hash": hashlib.sha256(lock.read_bytes()).hexdigest(),
+        "data_hash": data_hash,
+        "scenario_hash": scenario_hash,
+    }
+
+
+def live_asset_hash_check(config: dict) -> dict[str, dict[str, Any]]:
+    """把冻结配置记录的六项资产 hash 与 **live 文件**逐项实测比对。"""
+    recorded = dict(config.get("calibration", {}).get("asset_hashes") or {})
+    if not recorded:
+        raise FormalTrainLoopError("冻结配置缺少 calibration.asset_hashes")
+    paths = {
+        "refs_v4": "configs/frozen_refs/refs_v4.json",
+        "formal_split_v5_train": "data/manifest/formal_splits_v5/train.json",
+        "m13g_arrival_mapper_v1": "data/manifest/m13g_arrival_mapper_v1.json",
+        "env_release_v1": "configs/release/idc_formal_env_release_v1.json",
+        "canonical_parquet": "data/processed/singapore_2024/half_hour.parquet",
+        "exogenous_v3_parquet":
+            "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+    }
+    out: dict[str, dict[str, Any]] = {}
+    for role, logical in paths.items():
+        if role not in recorded:
+            raise FormalTrainLoopError(f"冻结配置缺少资产 {role!r}")
+        live = hashlib.sha256((REPO_ROOT / logical).read_bytes()).hexdigest()
+        out[role] = {"logical_path": logical, "recorded": str(recorded[role]),
+                     "live": live, "match": bool(live == recorded[role])}
+    return out
 
 
 def build_optimizer(config: dict, policy: SafePPOPolicy) -> torch.optim.Adam:
@@ -260,6 +368,7 @@ def run_training_batch(
     batch_index: int,
     env_seed: int,
     corrector_time_limit_s: float,
+    master_seed: int,
 ) -> dict[str, Any]:
     """跑**一批**真实训练：采集 → 固定 advantage/target → 16 次 Adam step → 1 次乘子更新。"""
     training = config["training"]
@@ -274,9 +383,10 @@ def run_training_batch(
     ppo = training["ppo"]
 
     # --- 1. 采集（corrector on，预算取自冻结配置）--------------------------------
-    buffer = _collect_with_config(
+    buffer, origin_provenance = _collect_with_config(
         policy, sampling_generator, origins=origins, horizon=horizon,
-        env_seed=env_seed, corrector_time_limit_s=corrector_time_limit_s)
+        env_seed=env_seed, corrector_time_limit_s=corrector_time_limit_s,
+        master_seed=master_seed, config=config)
     n = len(buffer)
     expected = episodes_per_batch * horizon
     if n != expected:
@@ -373,6 +483,12 @@ def run_training_batch(
         "shuffle_generator_state_digest": _generator_state_digest(shuffle_generator),
         # 该批**关键 transition**的摘要：观测 / raw 动作 / old_raw_log_prob 的逐元素字节
         # （用于「连续第 3 批」与「恢复后第 3 批」的精确对照）
+        "env_seeds": train_env_seeds(config, master_seed=master_seed),
+        "origin_provenance": {str(o): p for o, p in sorted(origin_provenance.items())},
+        # 该批**关键 transition**摘要的覆盖范围（如实说明，不夸大为「全部字段」）：
+        # 仅 observation / raw_action / old_raw_log_prob 三个数组的逐元素字节
+        "batch_transition_digest_scope":
+            "observation + raw_action + old_raw_log_prob（不含 exec/成本/correction_info）",
         "batch_transition_digest": _digest_arrays(
             [_stack(buffer, "observation").numpy(),
              _stack(buffer, "raw_action").numpy(),
@@ -407,15 +523,21 @@ def _digest_arrays(arrays: list[np.ndarray]) -> str:
 
 
 def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_seed,
-                         corrector_time_limit_s):
-    from scripts.calibrate_training_config import build_env_for_origin
+                         corrector_time_limit_s, master_seed, config):
+    """采集一批；环境由**本次 master seed** + 冻结配置 `seed_offsets` 构造。
 
+    返回 `(buffer, origin_provenance)`：后者是 origin → injection `provenance_hash`，
+    供 `training_source_ledger` 计算场景 hash。
+    """
     buffer = RolloutBuffer()
+    provenance: dict[int, str] = {}
     for origin in origins:
-        env, _injection = build_env_for_origin(int(origin))
+        env, injection = build_train_env(int(origin), master_seed=master_seed,
+                                         config=config)
         if int(env.horizon) != int(horizon):
             raise FormalTrainLoopError(
                 f"环境 horizon={env.horizon} 与冻结配置 {horizon} 不一致")
+        provenance[int(origin)] = str(injection.provenance_hash)
         stats = collect_rollout(
             env, policy, buffer, steps=int(horizon), seed=int(env_seed),
             corrector_on=True, corrector_time_limit_s=float(corrector_time_limit_s),
@@ -424,7 +546,7 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
             raise FormalTrainLoopError(
                 f"origin {origin} 只采到 {stats['transitions']} 条 transition，"
                 f"期望 {horizon}")
-    return buffer
+    return buffer, provenance
 
 
 def _stack(buffer: RolloutBuffer, field: str) -> torch.Tensor:
@@ -445,9 +567,15 @@ def save_resume_checkpoint(
     origins: list[int],
     next_batch_index: int,
     obs_dim: int,
+    origin_provenance: dict[int, str],
+    master_seed: int,
     code_revision: str = "",
 ) -> dict[str, Any]:
-    """**批次边界**训练恢复 checkpoint：下一批游标 + 两个 RNG + 全部训练状态。"""
+    """**批次边界**训练恢复 checkpoint：下一批游标 + 两个 RNG + 全部训练状态。
+
+    M1.3g-f-c-j-R1：同时写入**可核对**的来源账本（三个 hash）、截至本边界的
+    origin→injection provenance，以及构造实际运行代码的 `code_revision`。
+    """
     from checkpointing import CURRENT_CONTRACT_VERSION, VersionedCheckpoint
 
     training = config["training"]
@@ -465,6 +593,14 @@ def save_resume_checkpoint(
         "config_summary": config_provenance_summary(config),
         "training_scope": TRAINING_SCOPE,
         "artifact_role": RESUME_ARTIFACT_ROLE,
+        "source_ledger": {
+            **training_source_ledger(origin_provenance),
+            "env_seeds": train_env_seeds(config, master_seed=master_seed),
+            "master_seed": int(master_seed),
+        },
+        "origin_provenance": {str(o): str(p)
+                              for o, p in sorted(origin_provenance.items())},
+        "code_revision": str(code_revision),
     }
     checkpoint = VersionedCheckpoint(
         contract_version_id=CURRENT_CONTRACT_VERSION,
@@ -538,4 +674,10 @@ def load_resume_checkpoint(
         "training_scope": str(state["training_scope"]),
         "artifact_role": str(state["artifact_role"]),
         "schema_hash": checkpoint.schema_hash,
+        # M1.3g-f-c-j-R1：随 checkpoint 携带的来源账本 / provenance / code revision
+        "source_ledger": dict(state["source_ledger"]),
+        "origin_provenance": {int(o): str(p)
+                              for o, p in dict(state["origin_provenance"]).items()},
+        "code_revision": str(state["code_revision"]),
+        "checkpoint_code_revision": str(checkpoint.code_revision),
     }
