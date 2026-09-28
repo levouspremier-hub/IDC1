@@ -1908,3 +1908,8 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 服务标准已冻结为 `m6-service-standard-v1`（0.95/0.95/0.01/0，frozen=True），
 > 评估器接线未改（无默认值）。遗留更正（§7.6/§7.7 的回滚验证实际在 `206ee73` 执行，
 > 最终 HEAD `94a94e9` 的完整范围是 6 个提交）交由 **M1.3g-f-c-i** 顺手更正。
+
+> ✅ **M1.3g-f-c-i 人工复审通过（2026-09-28）**：见 `docs/task_cards/M1.3g-f-c-i.md` §8。
+> 冻结配置 `configs/training/idc_training_config_v1.json`（v1）已确认；预算
+> `business 0.0 / carbon 1.0321066253` 为实测结果，未加人为下限。下一卡
+> **M1.3g-f-c-j**（训练闭环 + 批次边界 checkpoint）。
