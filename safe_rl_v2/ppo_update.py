@@ -40,7 +40,9 @@ from safe_rl_v2.ppo_objective import (
 )
 
 __all__ = [
+    "compute_advantage_oriented_arrays",
     "compute_targets_from_buffer",
+    "minibatch_ppo_step",
     "new_raw_log_prob_from_buffer",
     "single_ppo_update",
     "single_ppo_update_from_arrays",
@@ -101,6 +103,121 @@ def compute_targets_from_buffer(policy: Any, buffer: Any, *, gamma: float,
         gamma=gamma,
         lam=lam,
     )
+
+
+def compute_advantage_oriented_arrays(
+    policy: Any, buffer: Any, *, gamma: float, lam: float
+) -> dict[str, Any]:
+    """**该批首次更新前**一次性算好、随后 4 个 epoch 内**固定**的全部量。
+
+    返回 `old_raw_log_prob` / 三头优势（`adv_*`）/ 三头 critic target（`target_*`）：
+    优势与 target 均已 `detach()`，不参与任何反传；新 log-prob **始终**由
+    `raw_action` 现算（见 `minibatch_ppo_step`），故**不**在此缓存新 log-prob。
+    """
+    transitions = _require_non_empty(buffer)
+    targets = compute_targets_from_buffer(policy, buffer, gamma=gamma, lam=lam)
+    return {
+        "old_raw_log_prob": _floats(buffer, "old_raw_log_prob"),
+        "adv_reward": torch.as_tensor(targets["reward"][0], dtype=torch.float32),
+        "adv_business": torch.as_tensor(targets["business"][0], dtype=torch.float32),
+        "adv_carbon": torch.as_tensor(targets["carbon"][0], dtype=torch.float32),
+        "target_reward": torch.as_tensor(targets["reward"][1], dtype=torch.float32),
+        "target_business": torch.as_tensor(targets["business"][1], dtype=torch.float32),
+        "target_carbon": torch.as_tensor(targets["carbon"][1], dtype=torch.float32),
+        "num_transitions": len(transitions),
+    }
+
+
+def minibatch_ppo_step(
+    policy: Any,
+    optimizer: Any,
+    *,
+    observation: torch.Tensor,
+    raw_action: torch.Tensor,
+    old_raw_log_prob: torch.Tensor,
+    adv_reward: torch.Tensor,
+    adv_business: torch.Tensor,
+    adv_carbon: torch.Tensor,
+    critic_targets: dict[str, torch.Tensor],
+    lambda_business: float,
+    lambda_carbon: float,
+    clip_epsilon: float,
+) -> dict[str, Any]:
+    """对一个 **minibatch** 执行**恰好一次** Adam step（多 epoch / minibatch 用）。
+
+    与 `_single_update` 的区别（M1.3g-f-c-j）：
+
+    - 优势与 critic target 由**调用方**在**该批首次更新前**算好并传入，本批内**固定**；
+      本函数**不**重算 GAE、**不**重算 target；
+    - **不**更新 Lagrangian——乘子按**整批**更新一次，由调用方在 16 次 step 之后执行。
+
+    红线不变：新 log-prob **只**由 `raw_action` 现算；`old_raw_log_prob` 与优势
+    **一律 detach**；损失非有限时**明确失败**且**不**执行 `optimizer.step()`。
+    """
+    n = int(observation.shape[0])
+    if n == 0:
+        raise ValueError("minibatch 更新需要至少一个 transition")
+
+    old_detached = old_raw_log_prob.detach()
+    advantage = effective_advantage(
+        adv_reward.detach(), adv_business.detach(), adv_carbon.detach(),
+        lambda_business=float(lambda_business), lambda_carbon=float(lambda_carbon))
+
+    actor = ppo_clipped_actor_objective(
+        policy, observation=observation, raw_action=raw_action,
+        old_raw_log_prob=old_detached, adv_reward=advantage,
+        adv_business=torch.zeros_like(advantage),
+        adv_carbon=torch.zeros_like(advantage),
+        lambda_business=0.0, lambda_carbon=0.0, clip_epsilon=clip_epsilon)
+    actor_loss = actor["loss"]
+
+    _, values = policy.forward(observation)
+    critic_by_head = {
+        head: (values[:, i] - critic_targets[head]).pow(2).mean()
+        for i, head in enumerate(HEADS)
+    }
+    critic_loss = sum(critic_by_head.values())
+    loss = actor_loss + critic_loss
+
+    if not bool(torch.isfinite(loss)):
+        raise ValueError(
+            f"损失非有限（{loss.detach().item()!r}）：明确失败，"
+            "**不执行** optimizer.step()")
+
+    params_before = [p.detach().clone() for p in policy.parameters()]
+    optimizer.zero_grad()
+    loss.backward()
+    actor_params = [(name, p) for name, p in policy.named_parameters()
+                    if name.startswith("actor") or name == "log_std"]
+    grad_norm_actor = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for _, p in actor_params
+        if p.grad is not None)).item())
+    grad_norm_total = float(torch.sqrt(sum(
+        (p.grad.detach() ** 2).sum() for p in policy.parameters()
+        if p.grad is not None)).item())
+    optimizer.step()
+
+    delta = sum(float(((p.detach() - b) ** 2).sum().item())
+                for p, b in zip(policy.parameters(), params_before, strict=True))
+
+    return {
+        "loss_total": loss.detach(),
+        "actor_loss": actor_loss.detach(),
+        "critic_loss_total": critic_loss.detach(),
+        "critic_loss_by_head": {h: v.detach() for h, v in critic_by_head.items()},
+        "ratio": actor["ratio"],
+        "clip_fraction": actor["clip_fraction"],
+        "clip_epsilon": float(clip_epsilon),
+        "logprob_source": actor["logprob_source"],
+        "multipliers_used": {"business": float(lambda_business),
+                             "carbon": float(lambda_carbon)},
+        "optimizer_steps": 1,
+        "grad_norm_actor": grad_norm_actor,
+        "grad_norm_total": grad_norm_total,
+        "param_delta_norm": float(np.sqrt(delta)),
+        "num_transitions": n,
+        "claims": dict(CLAIMS),
+    }
 
 
 def _single_update(
