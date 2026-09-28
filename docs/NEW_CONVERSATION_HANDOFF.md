@@ -1923,3 +1923,7 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 冻结配置 `configs/training/idc_training_config_v1.json`（v1）已确认；预算
 > `business 0.0 / carbon 1.0321066253` 为实测结果，未加人为下限。下一卡
 > **M1.3g-f-c-j**（训练闭环 + 批次边界 checkpoint）。
+
+> ⚠️ **M1.3g-f-c-j 复审：闭环与恢复对照有效，来源账本与环境种子接线未达标（2026-09-28）**
+> → 返修卡 **M1.3g-f-c-j-R1**。须修：manifest 的 `code_revision` 必须指向含实际运行代码的
+> 提交；三个来源 hash 必须非空且可重算；环境种子须随本次 master seed（seed 1 → 1/2/300001）。
