@@ -259,7 +259,10 @@ def test_candidate_records_the_decided_values():
 def test_candidate_budgets_and_multipliers_are_recomputable():
     d = json.loads(CANDIDATE.read_text(encoding="utf-8"))
     b, mu = d["budgets"], d["multipliers"]
-    assert b["business_budget"] > 0 and b["carbon_budget"] > 0
+    # M1.3g-f-c-i：F3-R2 修复后参考轨迹的 `sla_violation_count` 逐 transition 全为 0，
+    # 故 `business_budget` 实测为 **0.0**（dh.6 规则照常取三提案最小，**不**加人为下限）。
+    # 因此这里断言「非负」而非「> 0」；carbon 仍来自实测的逐 transition 碳排均值。
+    assert b["business_budget"] >= 0.0 and b["carbon_budget"] > 0
     assert "violation_task_steps" in b["business_budget_unit"]
     assert "kgCO2e" in b["carbon_budget_unit"]
     for name in ("business", "carbon"):

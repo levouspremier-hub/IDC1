@@ -1,0 +1,191 @@
+{
+  "schema": "idc-training-config-v1",
+  "version": "v1",
+  "status": "frozen",
+  "note": "M1.3g-f-c-i 冻结的**数值训练配置**。`training` 段与候选 configs/training/idc_training_config_candidate_v1.json（其 status 仍为 candidate_not_frozen）**逐字段一致**——冻结不改变任何训练参数，只把数值锚定到一次可复核的 train-only 标定 run。**「训练配置数值已冻结」不等于「正式训练已放行」**：`formal_training_ready` 保持 false，正式训练入口未接通、预算未放行。本文件不含自报时间戳：验签输入全部来自 live 文件 hash 与 run 产物。",
+  "frozen_decision": {
+    "card": "M1.3g-f-c-i",
+    "service_standard_id": "m6-service-standard-v1",
+    "service_standard_frozen": true,
+    "service_standard_thresholds": {
+      "on_time_task_rate_min": 0.95,
+      "on_time_work_rate_min": 0.95,
+      "end_leftover_work_fraction_max": 0.01,
+      "non_interruptible_interruption_max": 0
+    },
+    "service_standard_note": "四项服务资格阈值由 M6-P1-F5 冻结为 m6-service-standard-v1；本文件只**引用**其 ID 与数值，不重新定义判定口径。"
+  },
+  "calibration": {
+    "run_id": "m13gci_calibration_after_f3r2",
+    "command": "python -m scripts.calibrate_training_config --run-id m13gci_calibration_after_f3r2",
+    "run_manifest_path": "runs/m13gci_calibration_after_f3r2/manifest.json",
+    "run_manifest_sha256": "b30de45ccf2a89b69c3bc333cab68d93c328705d87b0919c8acff2560b5a2197",
+    "run_report_path": "runs/m13gci_calibration_after_f3r2/report.json",
+    "run_report_sha256": "c0db25fdcdc5018a3d2af268fafdc30f4e1b890abfbcf2947df62088016aeada",
+    "split": "train",
+    "origins": [
+      48,
+      480,
+      912,
+      1344,
+      1776,
+      2208,
+      2688,
+      3120,
+      3552,
+      3984,
+      4416,
+      4848,
+      5328,
+      5760,
+      6192,
+      6624,
+      7056,
+      7488,
+      7968,
+      8400,
+      8832,
+      9264,
+      9696,
+      10176
+    ],
+    "proposals": [
+      1.0,
+      0.5,
+      0.25
+    ],
+    "transitions_per_proposal": [
+      1152,
+      1152,
+      1152
+    ],
+    "asset_hashes": {
+      "refs_v4": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8",
+      "formal_split_v5_train": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865",
+      "m13g_arrival_mapper_v1": "ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371",
+      "env_release_v1": "f86e6f0f163f86655c747b245960e38efd744b9a69f30283831f89e1416f556f",
+      "canonical_parquet": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+      "exogenous_v3_parquet": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    }
+  },
+  "candidate_source": {
+    "path": "configs/training/idc_training_config_candidate_v1.json",
+    "sha256": "a9437ca5875dd6f628ab7f36da4f43e1b407d47edb7a10aeec9e252ae494f2ae",
+    "candidate_status": "candidate_not_frozen",
+    "parity": "training 段 == 候选去掉 schema/status/note 后的全部键，逐字段一致",
+    "parity_rule": "json.dumps(candidate minus {schema,status,note}, sort_keys=True) == json.dumps(frozen['training'], sort_keys=True)"
+  },
+  "training": {
+    "corrector": {
+      "mode": "on",
+      "time_limit_s": 0.25,
+      "source": "production_default",
+      "source_note": "经 planning.corrector.resolve_corrector_budget 解析；非本地硬编码。",
+      "note": "训练/评估同一修正语义；off 留作日后独立重训的机制对照。"
+    },
+    "backend": {
+      "device": "cpu",
+      "torch_num_threads": 1,
+      "note": "求解器既有确定性选项不改（DETERMINISTIC_RANDOM_SEED=0, DETERMINISTIC_PARALLEL=False）。"
+    },
+    "policy": {
+      "hidden": 64,
+      "hidden_layers": 1,
+      "activation": "Tanh",
+      "log_std_init": 0.0,
+      "action_dim": 21,
+      "critic_heads": 3,
+      "obs_dim": 520,
+      "obs_dim_source": "formal env（horizon=48 时实测；不硬编码）"
+    },
+    "optimizer": {
+      "name": "Adam",
+      "lr": 0.0003,
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.0,
+      "schedule": "none"
+    },
+    "ppo": {
+      "clip_epsilon": 0.2,
+      "gae_lambda": 0.95,
+      "gamma_per_hour": 0.99,
+      "gamma_per_step": 0.99498743710662,
+      "gamma_formula": "sqrt(0.99)（半小时一步，按每小时 0.99 定义）"
+    },
+    "sampling": {
+      "forecast_cutoff": 48,
+      "forecast_source": "B6 ScenarioBundle 的 causal forecast（可见窗口 [t, t+forecast_cutoff)）",
+      "forecast_cutoff_note": "当前 safe_rl_v2/train.py 预检仍为 4；后续训练接线**必须**改为同值 48。",
+      "horizon": 48,
+      "episodes_per_batch": 4,
+      "transitions_per_batch": 192,
+      "epochs_per_batch": 4,
+      "minibatch_size": 48,
+      "minibatches_per_epoch": 4,
+      "frozen_within_batch": [
+        "old_raw_log_prob",
+        "advantage",
+        "critic_target"
+      ],
+      "lagrangian_updates_per_batch": 1
+    },
+    "scale": {
+      "batches_per_seed": 512,
+      "transitions_per_seed": 98304,
+      "train_seeds": [
+        0,
+        1,
+        2
+      ],
+      "seed_offsets": {
+        "task": 0,
+        "server": 1,
+        "forecast": 300000
+      },
+      "seed_note": "各 RNG 由主种子按固定偏移显式派生；不重播种全局 RNG。"
+    },
+    "budgets": {
+      "business_budget": 0.0,
+      "business_budget_unit": "violation_task_steps (per transition mean)",
+      "business_budget_from_proposal": 1.0,
+      "carbon_budget": 1.0321066252723965,
+      "carbon_budget_unit": "kgCO2e (per transition mean)",
+      "carbon_budget_from_proposal": 1.0,
+      "qualified_proposals": [
+        1.0,
+        0.5,
+        0.25
+      ]
+    },
+    "multipliers": {
+      "business": {
+        "constraint": "business",
+        "reference_proposal": 1.0,
+        "reference_transition_mean": 0.0,
+        "scale": 1.0,
+        "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+        "learning_rate": 0.01,
+        "learning_rate_formula": "0.01 / scale^2",
+        "max_multiplier": 10.0,
+        "max_multiplier_formula": "10 / scale",
+        "initial_multiplier": 0.0
+      },
+      "carbon": {
+        "constraint": "carbon",
+        "reference_proposal": 1.0,
+        "reference_transition_mean": 1.0321066252723965,
+        "scale": 1.0321066252723965,
+        "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+        "learning_rate": 0.009387519848334643,
+        "learning_rate_formula": "0.01 / scale^2",
+        "max_multiplier": 9.688921430342308,
+        "max_multiplier_formula": "10 / scale",
+        "initial_multiplier": 0.0
+      }
+    }
+  }
+}
