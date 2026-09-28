@@ -416,12 +416,11 @@ def run_training_batch(
 
     # --- 1. 采集（corrector on，预算取自冻结配置）--------------------------------
     _batch_t0 = time.perf_counter()
-    _collect_t0 = time.perf_counter()
     buffer, origin_provenance, collect_timing = _collect_with_config(
         policy, sampling_generator, origins=origins, horizon=horizon,
         env_seed=env_seed, corrector_time_limit_s=corrector_time_limit_s,
         master_seed=master_seed, config=config)
-    rollout_collect_s = time.perf_counter() - _collect_t0
+    rollout_collect_s = float(collect_timing["collect_s"])
     n = len(buffer)
     expected = episodes_per_batch * horizon
     if n != expected:
@@ -584,11 +583,13 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
     buffer = RolloutBuffer()
     provenance: dict[int, str] = {}
     env_build_s = 0.0
+    collect_s = 0.0
     for origin in origins:
         _t0 = time.perf_counter()
         env, injection = build_train_env(int(origin), master_seed=master_seed,
                                          config=config)
         env_build_s += time.perf_counter() - _t0
+        _c0 = time.perf_counter()
         if int(env.horizon) != int(horizon):
             raise FormalTrainLoopError(
                 f"环境 horizon={env.horizon} 与冻结配置 {horizon} 不一致")
@@ -601,7 +602,8 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
             raise FormalTrainLoopError(
                 f"origin {origin} 只采到 {stats['transitions']} 条 transition，"
                 f"期望 {horizon}")
-    return buffer, provenance, {"env_build_s": env_build_s}
+        collect_s += time.perf_counter() - _c0
+    return buffer, provenance, {"env_build_s": env_build_s, "collect_s": collect_s}
 
 
 def _stack(buffer: RolloutBuffer, field: str) -> torch.Tensor:

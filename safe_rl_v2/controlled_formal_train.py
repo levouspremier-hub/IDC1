@@ -116,12 +116,6 @@ def apply_frozen_thread_setting(config: dict) -> dict[str, Any]:
     }
 
 
-def _dir_size_bytes(path: Path) -> int:
-    if not path.exists():
-        return 0
-    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-
-
 def _step_metrics(batch: dict[str, Any]) -> dict[str, Any]:
     """一批的**逐 transition 均值**指标（供 metrics.parquet 与报告）。"""
     return {
@@ -324,8 +318,6 @@ def run(
         },
         "elapsed_s": float(elapsed),
         "peak_rss_bytes": peak_rss_bytes(),
-        "run_dir_size_bytes": _dir_size_bytes(
-            REPO_ROOT / base_dir / run_id),
         "checkpoint_size_bytes": (
             Path(checkpoint_out).stat().st_size
             if checkpoint_out is not None and Path(checkpoint_out).exists()
