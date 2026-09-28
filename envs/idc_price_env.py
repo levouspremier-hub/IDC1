@@ -1137,6 +1137,30 @@ class IDCPriceEnv20D(gym.Env):
         self.bess_energy_kWh = float(bess_energy_next)
         self.current_step += 1
 
+        # 12a. **进入下一步**：先把该步到达的任务激活（M6-P1-F3-R2）。
+        #
+        # 到达激活属于「进入某一步」而不是「处理某一步」：`_execute_tasks_action_guided`
+        # 的 `active_tasks` 是在本方法开头 `_activate_arrivals(t)` **之后**构造的，
+        # 因此决策步 `t` 的环境分配器一定会看到 `arrival_time == t` 的任务。
+        # 若激活留到下一次 `step()` 开头才做，则同一决策步的三方口径不一致：
+        #   - 观测（`_get_task_pool_features(t)` 的 `arrived_tasks` 判据是 `arrival_time <= t`）
+        #     与 corrector 快照（`planning.snapshot_adapter` 的判据是 `status != "not_arrived"`）
+        #     **看不到**当步到达任务；
+        #   - 环境分配器**看得到**，并让它们按 priority 抢先取走容量。
+        # 实测后果：origin 48 / step 3 到期任务计划 10.5179、实得 7.0000。
+        #
+        # 这**不是**未来信息泄漏：`arrival_time <= current_step` 的任务在该步本就可观测
+        # （环境自己在该步开头就会激活它们），`reset()` 也已在生成 t=0 观测**之前**
+        # `_activate_arrivals(current_time=0)`。`arrival_time > current_step` 的任务
+        # 仍保持 `not_arrived`，不进入观测、快照或分配器。
+        # 本调用与本方法开头的 `_activate_arrivals(t)` 口径一致且幂等（后者此后为 no-op）。
+        if not terminated:
+            self._activate_arrivals(current_time=self.current_step)
+            # 队列量必须与任务池特征同口径：`Q_t` 是观测的队列通道，若它仍停留在
+            # 「上一步结束时的积压」，就会与 `arrived_tasks`（`arrival_time <= t`）
+            # 描述两份不同的任务集。到达激活后重算，使其等于当步可见未完成工作量之和。
+            self.Q_t = self._compute_backlog_work()
+
         # 12b. 终止结算账务（在 info 构建前应用，使扁平字段与累计一致）
         if terminated:
             settlement = self._apply_terminal_settlement()
