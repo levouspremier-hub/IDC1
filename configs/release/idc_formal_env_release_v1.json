@@ -28,7 +28,7 @@
     "formal_env_ready": true,
     "formal_training_ready": false
   },
-  "release_revision": "913754e6071b80070f96e51599894936e564ba77",
+  "release_revision": "2e59c7c1e28d393025407492c9d96620335390fa",
   "schema": "idc-formal-env-release-v1",
   "supersedes": null
 }
