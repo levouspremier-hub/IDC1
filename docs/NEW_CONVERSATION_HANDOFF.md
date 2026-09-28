@@ -1924,6 +1924,15 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > `business 0.0 / carbon 1.0321066253` 为实测结果，未加人为下限。下一卡
 > **M1.3g-f-c-j**（训练闭环 + 批次边界 checkpoint）。
 
+> ✅ **M1.3g-f-c-j-R1 完成（2026-09-28）**：三项修正落地 —— ①先在 `a0c790f` 提交代码再跑短跑，
+> 四条新 run 的 `manifest.revision` 指向含实际运行代码的提交；②manifest/checkpoint 写入
+> **非空可重算**的三个 hash（`dependency_lock_hash`=uv.lock、`data_hash`=现有来源摘要口径、
+> `scenario_hash`=本次实际 origin 的 injection provenance），六项资产 hash 与 live **实测全等**；
+> ③训练环境改由本次 master seed + 冻结 `seed_offsets` 构造（seed 0 → 0/1/300000 语义不变，
+> **seed 1 → 1/2/300001**）。seed 0 恢复对照：第 3 批 22 个字段不一致 0 个，最终
+> policy/Adam/Lagrangian/两个 RNG 逐项一致。旧 run 与 checkpoint 保留未动（仅历史诊断证据）。
+> 等待人工复审。
+
 > ⚠️ **M1.3g-f-c-j 复审：闭环与恢复对照有效，来源账本与环境种子接线未达标（2026-09-28）**
 > → 返修卡 **M1.3g-f-c-j-R1**。须修：manifest 的 `code_revision` 必须指向含实际运行代码的
 > 提交；三个来源 hash 必须非空且可重算；环境种子须随本次 master seed（seed 1 → 1/2/300001）。
