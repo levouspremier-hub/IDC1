@@ -63,7 +63,19 @@ def _snapshot_ids(env) -> set[str]:
 
 @pytest.mark.parametrize("origin", ORIGINS)
 def test_decision_step_sees_one_task_state(origin: int) -> None:
-    """每个决策步：快照任务集 == 环境分配器任务集 == 当步已到达任务集。"""
+    """每个决策步：规划器看得见环境分配器将使用的**全部**任务，且不含未来任务。
+
+    三条断言（`snapshot.tasks` 按 M4.1a 契约还携带 `remaining_work == 0` 的已终结
+    任务，它们对 `allocate_tasks` 是惰性的——`demand <= 1e-9` 直接跳过——故只要求
+    单侧包含，并显式校验这些「多余项」确实是惰性的）：
+
+    1. `allocatable == 当步已到达且未终结`：环境自身两条口径（分配器
+       `active_tasks` 与观测 `arrived_tasks`）对同一次决策一致；
+    2. `snapshot ⊇ allocatable`：规划器看到分配器将使用的全部任务——**这是本卡
+       修复的缺陷**：修复前当步到达任务在分配器里、却不在快照里；
+    3. `snapshot` 中每个任务的 `arrival_time <= current_step`，多余项一律
+       `status == "finished"` 且 `remaining_work == 0`。
+    """
     env, _injection = build_env_for_origin(origin)
     action = np.asarray(reference_action(1.0, env.action_dim, env.model.N), dtype=np.float32)
     env.reset(seed=0)
@@ -74,19 +86,36 @@ def test_decision_step_sees_one_task_state(origin: int) -> None:
         visible, allocatable, snapshot = (
             _visible_ids(env), _allocatable_ids(env), _snapshot_ids(env),
         )
-        arrivals_seen += sum(
-            1 for task in env.tasks if int(task.arrival_time) == step
-        )
+        by_id = {str(task.task_id): task for task in env.tasks}
+        arrivals_seen += sum(1 for task in env.tasks if int(task.arrival_time) == step)
         context = (
             f"origin={origin} step={step}：观测/快照/分配器看到的任务集不一致\n"
-            f"  可见(已到达未终结) = {sorted(visible)}\n"
+            f"  当步已到达未终结 = {sorted(visible)}\n"
             f"  分配器 active_tasks = {sorted(allocatable)}\n"
             f"  快照 snapshot.tasks  = {sorted(snapshot)}\n"
-            f"  仅快照缺失 = {sorted(visible - snapshot)}\n"
-            f"  仅分配器缺失 = {sorted(visible - allocatable)}"
+            f"  分配器有而快照缺失 = {sorted(allocatable - snapshot)}\n"
+            f"  已到达未终结而分配器缺失 = {sorted(visible - allocatable)}"
         )
-        assert snapshot == visible, context
         assert allocatable == visible, context
+        assert allocatable <= snapshot, context
+
+        future = [
+            tid for tid in snapshot if int(by_id[tid].arrival_time) > step
+        ]
+        assert future == [], (
+            f"origin={origin} step={step}：快照含未到达任务 {future}"
+        )
+        not_inert = [
+            tid for tid in sorted(snapshot - allocatable)
+            if not (
+                str(by_id[tid].status) == "finished"
+                and float(by_id[tid].remaining_work) == pytest.approx(0.0)
+            )
+        ]
+        assert not_inert == [], (
+            f"origin={origin} step={step}：快照含既不在分配器集合里、又非惰性的任务 "
+            f"{not_inert}"
+        )
 
         _obs, _reward, terminated, truncated, _info = env.step(action)
         if terminated or truncated:
