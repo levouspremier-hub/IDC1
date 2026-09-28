@@ -1894,6 +1894,16 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 评估器接线**未改**：`evaluate(..., service_standard)` 仍无默认值，未传入 ⇒ 未判定。
 > F4 的「零余量／无区分力」类无限定表述已按复审返修要求收窄。等待人工复审。
 
+> ✅ **M1.3g-f-c-i 已完成（2026-09-28）**：F3-R2 修复后重跑 train-only 标定
+> （新 run `runs/m13gci_calibration_after_f3r2/`，24 origin × 三档提案，超时/回退 0）。
+> 按 dh.6 预注册规则重算：`business_budget` 1.3038194444 → **0.0**（三档
+> `sla_violation_count` 实测全为 0）、`carbon_budget` 1.0278989607 → **1.0321066253**；
+> business 乘子 `scale/lr/cap` 1.3038194/0.0058825428/7.6697736 → **1.0/0.01/10.0**，
+> carbon 乘子 → **1.0321066/0.0093875198/9.6889214**。数值配置已冻结为
+> **`configs/training/idc_training_config_v1.json`**（v1，frozen；候选仍
+> `candidate_not_frozen`）。**「数值冻结」≠「训练放行」**：`formal_training_ready` 仍 false。
+> 同卡更正了 F5 §7.6/§7.7 的回滚范围事实（最终范围 6 个提交）。等待人工复审。
+
 > ✅ **M6-P1-F5 人工复审通过（2026-09-28）**：见 `docs/task_cards/M6_P1_F5.md` §8。
 > 服务标准已冻结为 `m6-service-standard-v1`（0.95/0.95/0.01/0，frozen=True），
 > 评估器接线未改（无默认值）。遗留更正（§7.6/§7.7 的回滚验证实际在 `206ee73` 执行，
