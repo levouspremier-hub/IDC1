@@ -1909,6 +1909,16 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 评估器接线未改（无默认值）。遗留更正（§7.6/§7.7 的回滚验证实际在 `206ee73` 执行，
 > 最终 HEAD `94a94e9` 的完整范围是 6 个提交）交由 **M1.3g-f-c-i** 顺手更正。
 
+> ✅ **M1.3g-f-c-j 完成（2026-09-28）**：冻结配置驱动的训练闭环 + 批次边界训练恢复。
+> 新增 `safe_rl_v2/formal_train_loop.py` 与 `safe_rl_v2/controlled_formal_train.py`；
+> 一批 = 4 episode × 48 步 = 192 transition → 4 epoch × 4 minibatch = **16 次 Adam step**
+> → 整批 192 条信号更新**一次**乘子（实测 Adam 16/32/48、Lag 1/2/3）。
+> 三条 short-run：3 批连续 / 2 批+checkpoint / 新对象恢复第 3 批；第 3 批 20/20 字段与
+> 最终 policy/Adam/Lagrangian/两个 RNG **逐项一致**，边界对照点在第 3 批**开始前**。
+> **实现中实测并修复**：策略初值原先消耗全局 Torch RNG（非 corrector 预算所致），
+> 修复后同命令两次跑逐位相同。`training_scope=controlled_short_run`，claims 全 false，
+> 512 批 × 3 seed 未运行，`formal_training_ready` 仍 false。等待人工复审。
+
 > ✅ **M1.3g-f-c-i 人工复审通过（2026-09-28）**：见 `docs/task_cards/M1.3g-f-c-i.md` §8。
 > 冻结配置 `configs/training/idc_training_config_v1.json`（v1）已确认；预算
 > `business 0.0 / carbon 1.0321066253` 为实测结果，未加人为下限。下一卡
