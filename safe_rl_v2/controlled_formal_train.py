@@ -19,6 +19,7 @@ uv run python -m safe_rl_v2.controlled_formal_train --run-id <id> --batches 3 \
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -40,6 +41,7 @@ from safe_rl_v2.formal_train_loop import (
     live_asset_hash_check,
     load_frozen_training_config,
     load_resume_checkpoint,
+    peak_rss_bytes,
     run_training_batch,
     save_resume_checkpoint,
     train_env_seeds,
@@ -58,6 +60,30 @@ SAMPLING_SEED_OFFSET = 0
 SHUFFLE_SEED_OFFSET = 100_000
 
 
+def machine_profile() -> dict[str, Any]:
+    """目标机器信息（M9.1；用于预算报告的可核对上下文）。"""
+    import platform
+
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": platform.processor(),
+        "logical_cpu_count": os.cpu_count(),
+        "memory_bytes": _total_memory_bytes(),
+    }
+
+
+def _total_memory_bytes() -> int | None:
+    import subprocess
+
+    try:
+        out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True,
+                             text=True, check=True).stdout.strip()
+        return int(out)
+    except Exception:  # noqa: BLE001 - 平台不支持时明确返回 None，不编造
+        return None
+
+
 def _generators(seed: int) -> tuple[torch.Generator, torch.Generator]:
     sampling = torch.Generator()
     sampling.manual_seed(int(seed) + SAMPLING_SEED_OFFSET)
@@ -71,6 +97,29 @@ def _obs_dim_from_first_origin(origin: int) -> int:
 
     env, _injection = build_env_for_origin(int(origin))
     return int(env.obs_dim)
+
+
+def apply_frozen_thread_setting(config: dict) -> dict[str, Any]:
+    """按冻结配置的 `backend.torch_num_threads` 设置 Torch 线程数（M9.1）。
+
+    冻结配置 v1 声明 `torch_num_threads = 1`；若运行时不设置，进程会用 Torch 默认值
+    （本机实测为 4），测得的就不是**冻结配置**下的吞吐。本函数**只**改线程数，
+    不改任何训练数值与更新语义。
+    """
+    configured = int(config["training"]["backend"]["torch_num_threads"])
+    effective_before = int(torch.get_num_threads())
+    torch.set_num_threads(configured)
+    return {
+        "configured_torch_num_threads": configured,
+        "effective_torch_num_threads": int(torch.get_num_threads()),
+        "torch_num_threads_before_apply": effective_before,
+    }
+
+
+def _dir_size_bytes(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
 
 def _step_metrics(batch: dict[str, Any]) -> dict[str, Any]:
@@ -90,14 +139,25 @@ def _step_metrics(batch: dict[str, Any]) -> dict[str, Any]:
         "raw_exec_difference_count": int(batch["raw_exec_difference_count"]),
         "deadline_shortfall_steps": int(batch["deadline_shortfall_steps"]),
         "zero_action_fallback_steps": int(batch["zero_action_fallback_steps"]),
+        "total_batch_s": float(batch["timing_s"]["total_batch_s"]),
+        "env_build_s": float(batch["timing_s"]["env_build_s"]),
+        "rollout_collect_s": float(batch["timing_s"]["rollout_collect_s"]),
+        "ppo_update_s": float(batch["timing_s"]["ppo_update_s"]),
+        "residual_unattributed_s": float(
+            batch["timing_s"]["residual_unattributed_s"]),
+        "corrector_solve_median_s": batch["corrector_solve_stats"]["median_s"],
+        "corrector_solve_p95_s": batch["corrector_solve_stats"]["p95_s"],
+        "peak_rss_bytes": int(batch["peak_rss_bytes"]),
     }
 
 
 def _batch_record(batch: dict[str, Any], *, elapsed_s: float,
-                  checkpoint: dict[str, Any] | None) -> dict[str, Any]:
+                  checkpoint: dict[str, Any] | None,
+                  checkpoint_write_s: float) -> dict[str, Any]:
     """报告用的批次记录：去掉逐 step 明细（单独放），保留可对照的摘要。"""
     record = {k: v for k, v in batch.items() if k != "step_records"}
     record["elapsed_s"] = float(elapsed_s)
+    record["checkpoint_write_s"] = float(checkpoint_write_s)
     record["checkpoint"] = checkpoint
     return record
 
@@ -114,6 +174,7 @@ def run(
     from runs.writer import git_revision, write_run
 
     config = load_frozen_training_config()
+    thread_info = apply_frozen_thread_setting(config)
     summary = config_provenance_summary(config)
     training = config["training"]
     episodes_per_batch = int(training["sampling"]["episodes_per_batch"])
@@ -175,6 +236,7 @@ def run(
             origin_provenance.update(
                 {int(o): str(p) for o, p in batch["origin_provenance"].items()})
             checkpoint_info = None
+            _ckpt_t0 = time.perf_counter()
             if checkpoint_out is not None:
                 Path(checkpoint_out).parent.mkdir(parents=True, exist_ok=True)
                 checkpoint_info = save_resume_checkpoint(
@@ -184,9 +246,11 @@ def run(
                     origins=origins, next_batch_index=index + 1, obs_dim=obs_dim,
                     origin_provenance=origin_provenance, master_seed=seed,
                     code_revision=git_revision())
+            checkpoint_write_s = time.perf_counter() - _ckpt_t0
             batch_records.append(_batch_record(
                 batch, elapsed_s=time.perf_counter() - batch_started,
-                checkpoint=checkpoint_info))
+                checkpoint=checkpoint_info,
+                checkpoint_write_s=checkpoint_write_s))
             step_rows.extend(
                 {"batch_index": index, **row} for row in batch["step_records"])
             print(f"  批 {index}: transitions={batch['transitions']} "
@@ -231,6 +295,8 @@ def run(
             "source": training["corrector"].get("source"),
         },
         "seed": int(seed),
+        "machine": machine_profile(),
+        "threads": thread_info,
         "env_seeds": train_env_seeds(config, master_seed=seed),
         "master_seed": int(seed),
         "source_ledger": dict(ledger),
@@ -257,6 +323,13 @@ def run(
             "shuffle": batch_records[-1]["shuffle_generator_state_digest"],
         },
         "elapsed_s": float(elapsed),
+        "peak_rss_bytes": peak_rss_bytes(),
+        "run_dir_size_bytes": _dir_size_bytes(
+            REPO_ROOT / base_dir / run_id),
+        "checkpoint_size_bytes": (
+            Path(checkpoint_out).stat().st_size
+            if checkpoint_out is not None and Path(checkpoint_out).exists()
+            else None),
         "code_revision": git_revision(),
         "checkpoint_out": checkpoint_out,
     }

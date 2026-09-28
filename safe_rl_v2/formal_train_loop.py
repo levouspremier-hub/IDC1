@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -337,6 +338,37 @@ def controlled_origins(count: int = CONTROLLED_ORIGINS_COUNT) -> list[int]:
     return origins[:count]
 
 
+def peak_rss_bytes() -> int:
+    """本进程峰值常驻内存（`ru_maxrss`；macOS 单位是字节、Linux 是 KB，此处归一化）。
+
+    **不使用** `tracemalloc`（M9.1 卡明确禁止在计时区间启用）。
+    """
+    import resource
+    import sys
+
+    raw = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return raw if sys.platform == "darwin" else raw * 1024
+
+
+def corrector_solve_stats(buffer: RolloutBuffer) -> dict[str, Any]:
+    """本批 `correction_solve_time_s` 的中位数 / P95 / 最大值（实测，非差值）。"""
+    values = [
+        float(t.correction_info["correction_solve_time_s"])
+        for t in buffer.transitions
+        if t.correction_info.get("correction_solve_time_s") is not None
+    ]
+    if not values:
+        return {"measured": 0, "median_s": None, "p95_s": None, "max_s": None}
+    ordered = sorted(values)
+    p95_index = min(len(ordered) - 1, int(round(0.95 * (len(ordered) - 1))))
+    return {
+        "measured": len(values),
+        "median_s": float(np.median(ordered)),
+        "p95_s": float(ordered[p95_index]),
+        "max_s": float(ordered[-1]),
+    }
+
+
 def _optimizer_steps(optimizer: Any) -> int:
     """optimizer **真实**已执行的步数（取自 Adam 状态，而非调用次数）。"""
     steps = [float(v["step"]) for v in optimizer.state.values()
@@ -383,10 +415,13 @@ def run_training_batch(
     ppo = training["ppo"]
 
     # --- 1. 采集（corrector on，预算取自冻结配置）--------------------------------
-    buffer, origin_provenance = _collect_with_config(
+    _batch_t0 = time.perf_counter()
+    _collect_t0 = time.perf_counter()
+    buffer, origin_provenance, collect_timing = _collect_with_config(
         policy, sampling_generator, origins=origins, horizon=horizon,
         env_seed=env_seed, corrector_time_limit_s=corrector_time_limit_s,
         master_seed=master_seed, config=config)
+    rollout_collect_s = time.perf_counter() - _collect_t0
     n = len(buffer)
     expected = episodes_per_batch * horizon
     if n != expected:
@@ -410,6 +445,7 @@ def run_training_batch(
         raise FormalTrainLoopError(
             f"每 epoch 的 minibatch 数 {minibatches_per_epoch} 与冻结配置 "
             f"{sampling['minibatches_per_epoch']} 不一致")
+    _ppo_t0 = time.perf_counter()
     step_records: list[dict[str, Any]] = []
     for epoch in range(epochs):
         order = torch.randperm(n, generator=shuffle_generator).tolist()
@@ -438,6 +474,8 @@ def run_training_batch(
                 "clip_fraction": float(out["clip_fraction"]),
                 "param_delta_norm": float(out["param_delta_norm"]),
             })
+
+    ppo_update_s = time.perf_counter() - _ppo_t0
 
     # --- 4. 乘子：**整批 192 条**信号各更新一次（不在 minibatch 上更新）----------
     lagrangian.update({
@@ -484,6 +522,20 @@ def run_training_batch(
         # 该批**关键 transition**的摘要：观测 / raw 动作 / old_raw_log_prob 的逐元素字节
         # （用于「连续第 3 批」与「恢复后第 3 批」的精确对照）
         "env_seeds": train_env_seeds(config, master_seed=master_seed),
+        "timing_s": {
+            "env_build_s": float(collect_timing["env_build_s"]),
+            "rollout_collect_s": float(rollout_collect_s),
+            "ppo_update_s": float(ppo_update_s),
+            "total_batch_s": float(time.perf_counter() - _batch_t0),
+            "residual_unattributed_s": float(
+                (time.perf_counter() - _batch_t0)
+                - collect_timing["env_build_s"] - rollout_collect_s - ppo_update_s),
+        },
+        "timing_note": (
+            "分项为独立计时器读数；`residual_unattributed_s` 是**差值**（整批减去三项），"
+            "**不是**独立测量值。checkpoint 写入耗时由入口单独测量。"),
+        "corrector_solve_stats": corrector_solve_stats(buffer),
+        "peak_rss_bytes": peak_rss_bytes(),
         "origin_provenance": {str(o): p for o, p in sorted(origin_provenance.items())},
         # 该批**关键 transition**摘要的覆盖范围（如实说明，不夸大为「全部字段」）：
         # 仅 observation / raw_action / old_raw_log_prob 三个数组的逐元素字节
@@ -531,9 +583,12 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
     """
     buffer = RolloutBuffer()
     provenance: dict[int, str] = {}
+    env_build_s = 0.0
     for origin in origins:
+        _t0 = time.perf_counter()
         env, injection = build_train_env(int(origin), master_seed=master_seed,
                                          config=config)
+        env_build_s += time.perf_counter() - _t0
         if int(env.horizon) != int(horizon):
             raise FormalTrainLoopError(
                 f"环境 horizon={env.horizon} 与冻结配置 {horizon} 不一致")
@@ -546,7 +601,7 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
             raise FormalTrainLoopError(
                 f"origin {origin} 只采到 {stats['transitions']} 条 transition，"
                 f"期望 {horizon}")
-    return buffer, provenance
+    return buffer, provenance, {"env_build_s": env_build_s}
 
 
 def _stack(buffer: RolloutBuffer, field: str) -> torch.Tensor:
