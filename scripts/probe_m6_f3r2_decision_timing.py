@@ -50,7 +50,8 @@ def _summarise_snapshot_task(task) -> dict[str, Any]:
     }
 
 
-def probe(origin: int, compute: float, corrector: str, steps: int) -> dict[str, Any]:
+def probe(origin: int, compute: float, corrector: str, steps: int,
+          warmup_steps: int = 0) -> dict[str, Any]:
     import envs.idc_price_env as env_mod
     from planning.corrector import PRODUCTION_CORRECTOR_TIME_LIMIT_S
     from planning.snapshot_adapter import build_snapshot
@@ -106,7 +107,11 @@ def probe(origin: int, compute: float, corrector: str, steps: int) -> dict[str, 
             pre_remaining = {str(t.task_id): float(t.remaining_work) for t in env.tasks}
 
             calls.clear()
-            _obs, _reward, terminated, truncated, info = step_env.step(action)
+            # `warmup_steps` 个决策用**固定 raw 提案**（即 corrector off 的等价步）推进：
+            # 这些步在两个版本下动力学逐位相同，因此第 `warmup_steps` 步的**前状态**
+            # 在修复前后完全一致 —— 同一前状态对照，隔离修复本身的效果。
+            stepping = step_env if step >= warmup_steps else env
+            _obs, _reward, terminated, truncated, info = stepping.step(action)
             done_this_step = [
                 str(t.task_id) for t in env.tasks
                 if getattr(t, "last_executed_time", None) == step
@@ -155,6 +160,7 @@ def probe(origin: int, compute: float, corrector: str, steps: int) -> dict[str, 
         "corrector": corrector,
         "action_dim": int(env.action_dim),
         "horizon": int(env.horizon),
+        "warmup_steps": int(warmup_steps),
         "per_step": per_step,
     }
 
@@ -197,10 +203,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--compute", type=float, default=1.0)
     parser.add_argument("--corrector", choices=("on", "off"), default="on")
     parser.add_argument("--steps", type=int, default=5)
+    parser.add_argument(
+        "--warmup-steps", type=int, default=0,
+        help="前 N 个决策用固定 raw 提案推进（两版本动力学相同），使第 N 步的前状态可对照")
     parser.add_argument("--json-out", default=None)
     args = parser.parse_args(argv)
 
-    result = probe(args.origin, args.compute, args.corrector, args.steps)
+    result = probe(args.origin, args.compute, args.corrector, args.steps, args.warmup_steps)
     _print_report(result)
     if args.json_out:
         with open(args.json_out, "w", encoding="utf-8") as handle:

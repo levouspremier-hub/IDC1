@@ -159,6 +159,13 @@ def run_diagnosis_episode(origin: int, compute: float, corrector: str) -> dict[s
         "energy_conservation_violations": physical.energy_conservation_violations,
         "timeout_count": None if record_obj.correction is None
         else record_obj.correction.timeout_count,
+        # M6-P1-F3-R2：本卡要求 9 组配对同时报告**购电费 / 碳排 / 回退次数**。
+        # 三者均直接取自已冻结的 `EvaluationRecord` 字段，不新增口径。
+        "zero_action_fallback_count": None if record_obj.correction is None
+        else record_obj.correction.zero_action_fallback_count,
+        "purchase_cost_sgd": float(record_obj.purchase_cost_sgd),
+        "grid_energy_kwh": float(record_obj.grid_energy_kwh),
+        "carbon_kg_co2e": float(record_obj.carbon_kg_co2e),
         "first_interruption": first,
         "per_step": per_step,
         "source_ledger_hashes": source_ledger_hashes(env),
@@ -252,11 +259,14 @@ def main(argv: list[str] | None = None) -> int:
     for r in rows:
         f = r["first_interruption"]
         print(f"  o{r['origin']} c{r['compute']} {r['corrector']:3s}: "
-              f"on_time={r['on_time_task_rate']} leftover={r['end_leftover_work']:.1f} "
+              f"on_time={r['on_time_task_rate']} otw={r['on_time_work_rate']} "
+              f"leftover={r['end_leftover_work']:.1f} "
               f"ni_int={r['non_interruptible_interruption_count']} "
               f"phys(acc/soc/exc/cons)={r['access_limit_violation_steps']}/"
               f"{r['soc_violation_steps']}/{r['charge_discharge_exclusion_violations']}/"
               f"{r['energy_conservation_violations']} "
+              f"to={r['timeout_count']} fallback={r['zero_action_fallback_count']} "
+              f"cost={r['purchase_cost_sgd']:.2f} co2={r['carbon_kg_co2e']:.2f} "
               f"first_int={'step '+str(f['step'])+' task '+str(f['task_id']) if f else 'none'}")
     return 0
 
