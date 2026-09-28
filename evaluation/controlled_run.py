@@ -8,7 +8,8 @@
 4. 重新**读取**该 checkpoint（并校验来源对当前资产的绑定），跑一个评估 episode，
    产出 `EvaluationRecord`；
 5. 通过 `runs.writer.write_run` 写出 `config.yaml / metrics.parquet / report.json /
-   manifest.json`，并在 report 中如实标注**未判定**（服务标准未冻结）与
+   manifest.json`，并在 report 中如实标注**未判定**（本链路**不显式传入**服务标准，
+   故不判定资格；项目标准 `m6-service-standard-v1` 已冻结但不会被隐式采用）与
    **未评估**（五类正式方法一个都还没跑）。
 
 用法：
@@ -57,7 +58,7 @@ CLAIMS = {"trained": False, "performance_evaluated": False, "convergence_claimed
 STATEMENT = (
     "受控短跑评估链路验证：train-only、固定种子、**无参数更新**。"
     "只证明评估输入契约与指标计算可用，**不宣称任何性能结论**；"
-    "服务标准未冻结 ⇒ 服务资格为「未判定」。"
+    "本链路不显式传入服务标准 ⇒ 服务资格为「未判定」（冻结标准不被隐式采用）。"
 )
 NOT_EVALUATED_STATEMENT = (
     "协议 §1 的五类正式方法在本卡**一个都没有评估**（缺方法 ⇒ 「未评估」）；"
@@ -239,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             CONTROLLED_METHOD,
             lambda obs: deterministic_action(loaded.policy, obs),
             run_id=args.run_id,
-            service_standard=None,          # 项目标准尚未冻结 ⇒ 未判定
+            service_standard=None,          # 不显式传入 ⇒ 未判定（冻结标准不被隐式采用）
             seed=0,
             action_mode=loaded.action_mode,
             checkpoint_id=str(checkpoint_path),
@@ -356,7 +357,8 @@ def main(argv: list[str] | None = None) -> int:
                            "checkpoint_role": loaded.artifact_role})
     print(f"run 产物：{run_path}")
     print(f"checkpoint：{checkpoint_path}（sha256={checkpoint_info['sha256']}）")
-    print(f"  service_qualified = {record.service_qualified}（未判定：服务标准未冻结）")
+    print(f"  service_qualified = {record.service_qualified}"
+          f"（未判定：本链路未显式传入服务标准）")
     print(f"  购电费 {record.purchase_cost_sgd:.6f} SGD / 退化费 "
           f"{record.bess_degradation_cost_sgd:.6f} SGD / 碳排 "
           f"{record.carbon_kg_co2e:.6f} kgCO2e / 购电 "

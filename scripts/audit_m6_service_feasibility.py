@@ -11,7 +11,9 @@ evaluation.adapter.evaluate()            → M6-P1 评估器（service_standard=
 ```
 
 **三种提案是可行性参考轨迹**，不是五方法的正式基线，也不是训练结果。
-**本卡不冻结服务标准**：正式 `service_qualified` 恒为 `None`（未判定）；
+**本脚本不传入服务标准**：正式 `service_qualified` 恒为 `None`（未判定）——
+项目标准 `m6-service-standard-v1` 已由 M6-P1-F5 冻结，但本脚本仍显式传
+`service_standard=None`，以保持与历史 run 的可比性。
 本脚本另出一列**「提案门槛诊断」**，按协议 §2 的**提案值**逐项判定，供人工裁决。
 
 结论只依据这 24 个 train origin 与固定参考提案，**不外推**为全策略可达性证明。
@@ -45,7 +47,8 @@ METHOD = "reference_proposal_fixed_compute"
 STATEMENT = (
     "train-only 服务达标线可行性审计：24 个预先选定的 train origin × 三种固定参考提案"
     "（corrector on，生产默认 0.25 s）。**不是**训练结果，**不是**五方法基线；"
-    "服务标准未冻结 ⇒ 正式 service_qualified 恒为未判定。"
+    "本脚本不显式传入服务标准 ⇒ 正式 service_qualified 恒为未判定"
+    "（项目标准 m6-service-standard-v1 已冻结，但不被隐式采用）。"
 )
 
 DIAGNOSIS_PASS = "pass"

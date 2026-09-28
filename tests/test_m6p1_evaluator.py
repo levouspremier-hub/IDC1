@@ -79,7 +79,7 @@ def test_omitting_the_standard_is_a_type_error():
 
 def test_undetermined_when_no_standard_is_declared():
     rec = _run(_env(), standard=None)
-    assert rec.service_qualified is None, "标准未冻结 ⇒ 未判定，绝不默认达标"
+    assert rec.service_qualified is None, "未显式传入标准 ⇒ 未判定，绝不默认达标"
     assert rec.service_standard_id is None
     assert rec.service_standard_frozen is False
     assert "未判定" in rec.service_qualification_note
@@ -129,10 +129,32 @@ def test_undetermined_when_a_mandatory_component_has_a_zero_denominator():
     assert rec.service_qualified is None, "零分母 ⇒ 未判定，不自动合格"
 
 
-def test_the_project_standard_is_not_frozen_by_this_card():
+def test_the_project_standard_is_frozen_and_matches_the_protocol_record():
+    """M6-P1-F5 冻结的唯一项目标准：ID 与四个阈值须等于协议 §2.1 的冻结记录。"""
     mod = importlib.import_module("evaluation.service_standard")
-    assert mod.FROZEN_PROJECT_SERVICE_STANDARD is None, \
-        "95%/1% 提案尚未人工冻结；本卡不得自行冻结项目阈值"
+    standard = mod.FROZEN_PROJECT_SERVICE_STANDARD
+    assert isinstance(standard, mod.ServiceStandard), \
+        "冻结标准必须是实际的 ServiceStandard 实例，不是一个哨兵值"
+    assert standard.standard_id == "m6-service-standard-v1"
+    assert standard.frozen is True
+    assert standard.on_time_task_rate_min == 0.95
+    assert standard.on_time_work_rate_min == 0.95
+    assert standard.end_leftover_work_fraction_max == 0.01
+    assert standard.non_interruptible_interruption_max == 0
+
+
+def test_frozen_standard_takes_effect_only_when_explicitly_passed():
+    """冻结**不**等于隐式达标：显式传入才判定，不传仍是未判定。"""
+    mod = importlib.import_module("evaluation.service_standard")
+
+    implicit = _run(_env(), standard=None)
+    assert implicit.service_qualified is None
+    assert implicit.service_standard_id is None
+
+    explicit = _run(_env(), standard=mod.FROZEN_PROJECT_SERVICE_STANDARD)
+    assert isinstance(explicit.service_qualified, bool)
+    assert explicit.service_standard_id == "m6-service-standard-v1"
+    assert explicit.service_standard_frozen is True
 
 
 # =============================================================================

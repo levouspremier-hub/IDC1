@@ -133,7 +133,7 @@ def test_report_marks_undetermined_service_and_unevaluated_methods(controlled_ru
     report = json.loads((run_dir / "report.json").read_text(encoding="utf-8"))
 
     evaluation = report["evaluation"]
-    assert evaluation["service_qualified"] is None, "项目标准未冻结 ⇒ 未判定"
+    assert evaluation["service_qualified"] is None, "未显式传入标准 ⇒ 未判定"
     assert evaluation["service_standard_id"] is None
     assert evaluation["action_mode"] == "deterministic_mean"
     assert evaluation["seed"] == 0

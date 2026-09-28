@@ -4,7 +4,8 @@
 `rec.total_cost_sgd` / `rec.total_carbon_kg` 更名为 `purchase_cost_sgd` /
 `carbon_kg_co2e`（成本分列，见 `docs/M6_EVALUATION_PROTOCOL.md` §3）；
 `service_qualified=False` 的调用方开关**已删除**，改由**显式传入的服务标准**计算
-（标准未冻结 ⇒ `None` = 未判定）。**未删除任何测试**。
+（未显式传入标准 ⇒ `None` = 未判定；项目标准已由 M6-P1-F5 冻结为
+`m6-service-standard-v1`，但仍须**显式传入**才生效）。**未删除任何测试**。
 """
 
 import pytest

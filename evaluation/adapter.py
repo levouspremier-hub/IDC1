@@ -93,8 +93,9 @@ def evaluate(
 ) -> EvaluationRecord:
     """跑一个 episode 并聚合 `EvaluationRecord`。
 
-    `service_standard` **必须显式传入**（可以是 `None`，表示标准未冻结）；
-    它**没有默认值**，因此不存在「默认达标」的调用路径。
+    `service_standard` **必须显式传入**（可以是 `None`，表示本次不判定资格）；
+    它**没有默认值**，因此不存在「默认达标」的调用路径——项目标准
+    `m6-service-standard-v1` 已冻结，但**不会**被隐式采用。
     """
     if action_mode not in ACTION_MODES:
         raise ValueError(f"未知 action_mode：{action_mode!r}，必须属于 {list(ACTION_MODES)}")
