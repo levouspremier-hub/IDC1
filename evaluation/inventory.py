@@ -199,34 +199,35 @@ def evaluate_with_inventory(
 
 
 def assess_fair_pairing(
-    left: EvaluationRecord, left_inv: InventoryRecord,
-    right: EvaluationRecord, right_inv: InventoryRecord,
+    left: EvaluationRecord, left_inventory: InventoryRecord,
+    right: EvaluationRecord, right_inventory: InventoryRecord,
 ) -> FairPairingDecision:
     """按预登记的六个条件判定两条轨迹能否进入公平成本/碳配对差。
 
     不满足时**不生成**收益；调用方仍应完整报告两侧成本/碳与原因。
     """
-    gap = abs(left_inv.final_energy_kwh - right_inv.final_energy_kwh)
+    gap = abs(left_inventory.final_energy_kwh - right_inventory.final_energy_kwh)
     conditions = {
-        "episode_complete": bool(left_inv.episode_complete and right_inv.episode_complete),
+        "episode_complete": bool(
+            left_inventory.episode_complete and right_inventory.episode_complete),
         "service_qualified": bool(left.service_qualified is True
                                   and right.service_qualified is True),
         "no_physical_violation": bool(not violations_in(left.physical)
                                       and not violations_in(right.physical)),
-        "capacity_matches": bool(abs(left_inv.capacity_kwh - right_inv.capacity_kwh)
+        "capacity_matches": bool(abs(left_inventory.capacity_kwh - right_inventory.capacity_kwh)
                                  <= PHYSICS_ABS_TOL),
         "initial_energy_matches": bool(
-            abs(left_inv.initial_energy_kwh - right_inv.initial_energy_kwh)
+            abs(left_inventory.initial_energy_kwh - right_inventory.initial_energy_kwh)
             <= PHYSICS_ABS_TOL),
         "final_soc_within_env_tolerance": bool(
-            left_inv.final_soc_within_env_tolerance
-            and right_inv.final_soc_within_env_tolerance),
+            left_inventory.final_soc_within_env_tolerance
+            and right_inventory.final_soc_within_env_tolerance),
         "final_energy_gap_within_physics_tol": bool(gap <= PHYSICS_ABS_TOL),
     }
     reasons = tuple(reason_ for reason_ in (
         None if conditions["episode_complete"] else
-        f"episode 未完整运行 48 步或异常终止（左侧 {left_inv.steps} 步 / "
-        f"右侧 {right_inv.steps} 步）",
+        f"episode 未完整运行 48 步或异常终止（左侧 {left_inventory.steps} 步 / "
+        f"右侧 {right_inventory.steps} 步）",
         None if conditions["service_qualified"] else
         f"服务不合格或未判定（左侧 {left.service_qualified} / "
         f"右侧 {right.service_qualified}）",
@@ -234,14 +235,16 @@ def assess_fair_pairing(
         f"存在物理违规（左侧 {list(violations_in(left.physical))} / "
         f"右侧 {list(violations_in(right.physical))}）",
         None if conditions["capacity_matches"] else
-        f"BESS 容量不同（左侧 {left_inv.capacity_kwh} / 右侧 {right_inv.capacity_kwh}）",
+        f"BESS 容量不同（左侧 {left_inventory.capacity_kwh} / "
+        f"右侧 {right_inventory.capacity_kwh}）",
         None if conditions["initial_energy_matches"] else
-        f"初始储能量不同（左侧 {left_inv.initial_energy_kwh} / "
-        f"右侧 {right_inv.initial_energy_kwh}）",
+        f"初始储能量不同（左侧 {left_inventory.initial_energy_kwh} / "
+        f"右侧 {right_inventory.initial_energy_kwh}）",
         None if conditions["final_soc_within_env_tolerance"] else
-        f"终点 SOC 超出环境现有目标容差（左侧偏差 {left_inv.final_soc_deviation} / "
-        f"容差 {left_inv.soc_final_tolerance}；右侧偏差 {right_inv.final_soc_deviation} / "
-        f"容差 {right_inv.soc_final_tolerance}）",
+        f"终点 SOC 超出环境现有目标容差（左侧偏差 {left_inventory.final_soc_deviation} / "
+        f"容差 {left_inventory.soc_final_tolerance}；"
+        f"右侧偏差 {right_inventory.final_soc_deviation} / "
+        f"容差 {right_inventory.soc_final_tolerance}）",
         None if conditions["final_energy_gap_within_physics_tol"] else
         f"终点储能量之差 {gap} 超过物理数值容差 {PHYSICS_ABS_TOL}",
     ) if reason_ is not None)
