@@ -53,6 +53,9 @@ __all__ = [
     "CONFIG_STATUS_FROZEN",
     "CONTROLLED_BATCHES",
     "CONTROLLED_ORIGINS_COUNT",
+    "FORMAL_RESUME_ARTIFACT_ROLE",
+    "FORMAL_RESUME_SCHEMA",
+    "FORMAL_TRAINING_SCOPE",
     "FROZEN_CONFIG_LOGICAL_PATH",
     "RESUME_ARTIFACT_ROLE",
     "RESUME_SCHEMA",
@@ -87,6 +90,13 @@ CLAIMS = {"trained": False, "performance_evaluated": False, "convergence_claimed
 RESUME_SCHEMA = "m1.3g-f-c-j-controlled-resume-v1"
 #: 训练恢复产物的角色（**不**属于 `EVAL_INPUT_ARTIFACT_ROLES`）。
 RESUME_ARTIFACT_ROLE = "controlled_training_resume"
+
+#: **正式训练**（M1.3g-f-c-k）的 scope / role / schema —— 与受控短跑**明确可区分**，
+#: 两者不得互相冒充（受控短跑永远不能标成正式训练）。
+FORMAL_TRAINING_SCOPE = "formal_training"
+FORMAL_RESUME_ARTIFACT_ROLE = "formal_training_resume"
+FORMAL_RESUME_SCHEMA = "m13gfck-formal-train-resume-v1"
+TRAINING_SCOPES: tuple[str, ...] = (TRAINING_SCOPE, FORMAL_TRAINING_SCOPE)
 
 #: 受控短跑用**前 12 个** train-only origin（= 3 批 × 4 episode）。
 CONTROLLED_BATCHES = 3
@@ -627,6 +637,9 @@ def save_resume_checkpoint(
     origin_provenance: dict[int, str],
     master_seed: int,
     code_revision: str = "",
+    training_scope: str = TRAINING_SCOPE,
+    artifact_role: str = RESUME_ARTIFACT_ROLE,
+    schema: str = RESUME_SCHEMA,
 ) -> dict[str, Any]:
     """**批次边界**训练恢复 checkpoint：下一批游标 + 两个 RNG + 全部训练状态。
 
@@ -648,8 +661,8 @@ def save_resume_checkpoint(
         "steps_per_episode": int(training["sampling"]["horizon"]),
         "frozen_config": config,
         "config_summary": config_provenance_summary(config),
-        "training_scope": TRAINING_SCOPE,
-        "artifact_role": RESUME_ARTIFACT_ROLE,
+        "training_scope": str(training_scope),
+        "artifact_role": str(artifact_role),
         "source_ledger": {
             **training_source_ledger(origin_provenance),
             "env_seeds": train_env_seeds(config, master_seed=master_seed),
@@ -663,15 +676,16 @@ def save_resume_checkpoint(
         contract_version_id=CURRENT_CONTRACT_VERSION,
         action_dim=int(training["policy"]["action_dim"]),
         obs_dim=int(obs_dim),
-        schema_hash=RESUME_SCHEMA,
+        schema_hash=str(schema),
         code_revision=str(code_revision),
         state=state,
     )
     checkpoint.save(path)
     return {
         "path": str(path),
-        "schema_hash": RESUME_SCHEMA,
-        "artifact_role": RESUME_ARTIFACT_ROLE,
+        "schema_hash": str(schema),
+        "artifact_role": str(artifact_role),
+        "training_scope": str(training_scope),
         "next_batch_index": state["next_batch_index"],
         "contract_version": CONTRACT_VERSION,
     }
@@ -687,6 +701,9 @@ def load_resume_checkpoint(
     shuffle_generator: torch.Generator,
     config: dict,
     expected_obs_dim: int,
+    expected_schema: str = RESUME_SCHEMA,
+    expected_scope: str = TRAINING_SCOPE,
+    expected_role: str = RESUME_ARTIFACT_ROLE,
 ) -> dict[str, Any]:
     """把 checkpoint 状态写回**调用方提供的新对象**，返回下一批游标与摘要。
 
@@ -696,23 +713,25 @@ def load_resume_checkpoint(
     from checkpointing import VersionedCheckpoint
     from checkpointing.eval_input import EVAL_INPUT_SCHEMA
 
-    if RESUME_SCHEMA == EVAL_INPUT_SCHEMA:
+    if expected_schema == EVAL_INPUT_SCHEMA:
         raise FormalTrainLoopError("训练恢复 schema 不得与评估输入 schema 相同")
     checkpoint = VersionedCheckpoint.load(
         path, expected_action_dim=int(config["training"]["policy"]["action_dim"]),
-        expected_obs_dim=int(expected_obs_dim), expected_schema_hash=RESUME_SCHEMA)
+        expected_obs_dim=int(expected_obs_dim), expected_schema_hash=str(expected_schema))
     state = checkpoint.state
     if not isinstance(state, dict) or set(state) != set(BATCH_KEYS):
         missing = sorted(set(BATCH_KEYS) - set(state or {}))
         extra = sorted(set(state or {}) - set(BATCH_KEYS))
         raise FormalTrainLoopError(
             f"训练恢复状态字段必须精确等于 {list(BATCH_KEYS)}；缺少={missing} 多出={extra}")
-    if state["artifact_role"] != RESUME_ARTIFACT_ROLE:
+    if state["artifact_role"] != str(expected_role):
         raise FormalTrainLoopError(
-            f"artifact_role 必须是 {RESUME_ARTIFACT_ROLE!r}，实际 {state['artifact_role']!r}")
-    if state["training_scope"] != TRAINING_SCOPE:
+            f"artifact_role 必须是 {str(expected_role)!r}，实际 {state['artifact_role']!r}"
+            "（受控短跑与正式训练不得互相冒充）")
+    if state["training_scope"] != str(expected_scope):
         raise FormalTrainLoopError(
-            f"training_scope 必须是 {TRAINING_SCOPE!r}，实际 {state['training_scope']!r}")
+            f"training_scope 必须是 {str(expected_scope)!r}，实际 {state['training_scope']!r}"
+            "（受控短跑与正式训练不得互相冒充）")
     if state["frozen_config"] != config:
         raise FormalTrainLoopError(
             "checkpoint 的冻结配置与当前冻结配置不一致：拒绝跨配置恢复")

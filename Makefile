@@ -37,9 +37,13 @@ smoke:
 	@test -f scripts/smoke_main_chain.py || { echo "模块未完成：scripts/smoke_main_chain.py 不存在（M4 交付）"; exit 1; }
 	@uv run python scripts/smoke_main_chain.py
 
+# M1.3g-f-c-k：`make train` 进入**正式 train-only 训练循环**（不再落入 synthetic dry run）。
+# 入口为 `safe_rl_v2/formal_train.py`：冻结配置 v1 + M9.2 矩阵 v3 预登记顺序，
+# 经 env release v1 与 train release v1 双重验签后放行。`safe_rl_v2/train.py` 的
+# synthetic 路径与既有守卫**保持不变**（本卡的正式入口是新模块）。
 train:
-	@test -f safe_rl_v2/train.py || { echo "模块未完成：safe_rl_v2/train.py 不存在（M5.4 交付）"; exit 1; }
-	@uv run python -m safe_rl_v2.train $(TRAIN_ARGS)
+	@test -f safe_rl_v2/formal_train.py || { echo "模块未完成：safe_rl_v2/formal_train.py 不存在（M1.3g-f-c-k 交付）"; exit 1; }
+	@uv run python -m safe_rl_v2.formal_train $(TRAIN_ARGS)
 
 eval:
 	@test -d evaluation || { echo "模块未完成：evaluation/ 不存在（M6.2 交付）"; exit 1; }

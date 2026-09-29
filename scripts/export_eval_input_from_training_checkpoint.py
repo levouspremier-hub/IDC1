@@ -257,12 +257,13 @@ def main(argv: list[str] | None = None) -> int:
                         help="导出件路径；默认 runs/<run-id>/eval_input.pt")
     parser.add_argument("--origin", type=int, default=None,
                         help="评估用的 train origin；默认取源 checkpoint 的第 0 个 origin")
-    parser.add_argument("--seed", type=int, default=0,
-                        help="master seed（决定环境种子与 RNG 派生）")
     parser.add_argument("--scenario-seed", type=int, default=0,
-                        help=("共享场景种子，**只**用于公平配对的键 "
-                              "(split, episode_start, scenario_seed)；矩阵预登记为 0。"
-                              "与 master seed 是两个概念，不得混用。"))
+                        help=("共享**场景种子**：评估环境**实际**由它构造"
+                              "（环境种子 = scenario_seed + 冻结 seed_offsets），"
+                              "配对键记录的也是这个实际值。矩阵预登记为 0。"))
+    parser.add_argument("--training-seed", type=int, default=None,
+                        help=("源 checkpoint 的**训练 seed**（仅作结果分层与来源核对，"
+                              "**不**用于构造评估环境，也**不**进配对键）"))
     parser.add_argument("--base-dir", default="runs")
     args = parser.parse_args(argv)
 
@@ -302,7 +303,9 @@ def main(argv: list[str] | None = None) -> int:
         exported = REPO_ROOT / exported
     command = ("python -m scripts.export_eval_input_from_training_checkpoint "
                f"--source-checkpoint {args.source_checkpoint} --run-id {args.run_id} "
-               f"--seed {args.seed} --scenario-seed {args.scenario_seed}")
+               f"--scenario-seed {args.scenario_seed}"
+               + (f" --training-seed {args.training_seed}"
+                  if args.training_seed is not None else ""))
 
     report: dict[str, Any] = {}
     if not src.is_file():
@@ -331,9 +334,9 @@ def main(argv: list[str] | None = None) -> int:
         src_actions = np.stack([deterministic_raw_action(policy, o) for o in obs_np])
 
         # 导出前先取 source ledger 与种子
-        env_probe = _build_eval_env(origin, master_seed=int(args.seed), config=config)
+        env_probe = _build_eval_env(origin, master_seed=int(args.scenario_seed), config=config)
         digests = canonical_source_digests()
-        seed_offsets = train_env_seeds(config, master_seed=int(args.seed))
+        seed_offsets = train_env_seeds(config, master_seed=int(args.scenario_seed))
         env_seeds = {
             "task": int(seed_offsets["task_seed"]),
             "server": int(seed_offsets["server_seed"]),
@@ -355,6 +358,15 @@ def main(argv: list[str] | None = None) -> int:
             [[d.role, d.logical_path, d.sha256] for d in digests],
             sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
         del env_probe
+
+        # M1.3g-f-c-k 第 5 项：**训练 seed** 只用于核对源 checkpoint 的原始来源，
+        # **不**参与构造评估环境、**不**进配对键。
+        if args.training_seed is not None:
+            src_master = provenance_check["source_ledger_verbatim"].get("master_seed")
+            if src_master is None or int(src_master) != int(args.training_seed):
+                raise ExportError(
+                    f"源 checkpoint 记录的训练 master_seed={src_master!r} 与 "
+                    f"--training-seed {args.training_seed} 不一致 ⇒ 拒绝导出")
 
         checkpoint_info = save_evaluation_checkpoint(
             exported,
@@ -386,13 +398,13 @@ def main(argv: list[str] | None = None) -> int:
         # **源 policy** 与 **导出后加载的 policy** 各跑一个**完整 48 步 episode**
         # （同一 train origin、同一 scenario_seed、同一 corrector 设置）
         def _run_episode(policy_obj, *, label: str, role: str, checkpoint_id: str):
-            raw = _build_eval_env(origin, master_seed=int(args.seed), config=config)
+            raw = _build_eval_env(origin, master_seed=int(args.scenario_seed), config=config)
             wrapped = CorrectorWrapper(
                 raw, corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
             rec = evaluate(
                 wrapped, METHOD, lambda obs: deterministic_raw_action(policy_obj, obs),
                 run_id=f"{args.run_id}::{label}", service_standard=None,
-                seed=int(args.seed), action_mode="deterministic_mean",
+                seed=int(args.scenario_seed), action_mode="deterministic_mean",
                 checkpoint_id=checkpoint_id, checkpoint_role=role)
             inv = capture_inventory(wrapped, rec)
             return rec, inv, raw
@@ -464,7 +476,9 @@ def main(argv: list[str] | None = None) -> int:
             "origin": int(origin),
             "start": start,
             "seeds": env_seeds,
-            "master_seed": int(args.seed),
+            "scenario_seed_note": (
+                "评估环境**实际**由 scenario_seed 构造（环境种子 = scenario_seed + "
+                "冻结 seed_offsets）；配对键记录同一实际值。训练 seed 只作分层与来源核对。"),
             "source_ledger_hashes": dict(ledger_hashes),
             "deterministic_action_consistency": {
                 "probe_observations": int(obs_np.shape[0]),
@@ -488,7 +502,8 @@ def main(argv: list[str] | None = None) -> int:
         }
     except Exception as exc:  # noqa: BLE001 - 失败也如实记录
         write_run(args.run_id, config={"run_id": args.run_id, "status": "failed"},
-                  metrics=pd.DataFrame(), base_dir=str(base), seed=int(args.seed),
+                  metrics=pd.DataFrame(), base_dir=str(base),
+                  seed=int(args.scenario_seed),
                   command=command,
                   report={"entry": "python -m scripts.export_eval_input_from_training_checkpoint",
                           "claims": dict(CLAIMS),
@@ -524,8 +539,11 @@ def main(argv: list[str] | None = None) -> int:
                 "exported_checkpoint_sha256": checkpoint_info["sha256"],
                 "artifact_role": checkpoint_info["artifact_role"],
                 "parameter_updates": 0,
-                "seeds": env_seeds, "code_revision": git_revision()},
-        metrics=metrics, report=report, base_dir=str(base), seed=int(args.seed),
+                "seeds": env_seeds, "code_revision": git_revision(),
+                "scenario_seed": int(args.scenario_seed),
+                "source_training_seed": (None if args.training_seed is None
+                                         else int(args.training_seed)),},
+        metrics=metrics, report=report, base_dir=str(base), seed=int(args.scenario_seed),
         command=command, status="success",
         dependency_lock_hash=source_ledger["dependency_lock_hash"],
         data_hash=source_ledger["data_hash"],
