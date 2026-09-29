@@ -233,6 +233,9 @@ def verify(matrix: dict) -> list[tuple[str, bool, str]]:
     # 10. v2 专属（M9.2-R1）------------------------------------------------------
     if str(matrix.get("schema", "")).endswith("-v2"):
         _verify_v2(matrix, checks, check)
+    if str(matrix.get("schema", "")).endswith("-v3"):
+        _verify_v2(matrix, checks, check)   # v3 沿用 v2 的全部约定
+        _verify_v3(matrix, checks, check)
 
     check("实际比例可重算",
           all(abs(ratios[s] - (splits[s]["candidate_origins"]["end_exclusive"]
@@ -328,15 +331,49 @@ def _verify_v2(matrix: dict, checks: list, check) -> None:
           v1_path.is_file()
           and sup.get("sha256") == _sha256_file(v1_path)
           and "取代" in str(sup.get("relation", "")), str(sup.get("path")))
-    check("[v2] 逐字沿用 v1 的冻结数值清单已登记",
-          len(sup.get("unchanged_from_v1", [])) >= 5, "")
+    unchanged = next((v for k, v in sup.items() if k.startswith("unchanged_from_")), [])
+    check("[v2/v3] 逐字沿用上一版的冻结数值清单已登记",
+          len(unchanged) >= 5, f"{len(unchanged)} 项")
+
+
+PPO_TRAINING_TOKENS = ("PPO 训练配置", "512 批", "PPO checkpoint")
+
+
+def _verify_v3(matrix: dict, checks: list, check) -> None:
+    """M9.2-R2：非学习方法席位的 `blocking_reasons` 必须与其字段自洽。"""
+    for mid in NON_LEARNING_METHODS:
+        method = next(m for m in matrix["methods"] if m["method_id"] == mid)
+        blockers = " ".join(method["blocking_reasons"])
+        offending = [tok for tok in PPO_TRAINING_TOKENS if tok in blockers]
+        check(f"[v3] {mid} 的 blocking_reasons 不提 PPO 训练口径",
+              offending == [] and method["trains_ppo"] is False,
+              f"命中={offending}" if offending else "只列自身尚缺的方法配置/实现/证据")
+        check(f"[v3] {mid} 登记「不涉及 PPO 训练」的说明",
+              "trains_ppo=false" in str(method.get("blocking_reasons_note", "")), "")
+
+    for mid in PPO_METHODS:
+        method = next(m for m in matrix["methods"] if m["method_id"] == mid)
+        arts = " ".join(method["required_artifacts"])
+        check(f"[v3] {mid} 仍要求按新 21 维契约训练 + 已审核 checkpoint",
+              method["trains_ppo"] is True and "21 维" in arts and "checkpoint" in arts, "")
+
+    history = (matrix.get("supersedes") or {}).get("history") or []
+    versions = {str(entry.get("version")): str(entry.get("status")) for entry in history}
+    check("[v3] v1/v2 均标为历史版本",
+          versions.get("v1") == "historical" and versions.get("v2") == "historical",
+          str(versions))
+    for entry in history:
+        path = REPO_ROOT / str(entry.get("path", ""))
+        check(f"[v3] 历史版本 {entry.get('version')} 文件保留且 sha 一致",
+              path.is_file() and entry.get("sha256") == _sha256_file(path),
+              str(entry.get("path")))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.verify_m92_matrix",
         description="M9.2 实验矩阵只读校验器（从 live 来源重算并逐项比对）")
-    parser.add_argument("--matrix", default="configs/experiments/m9_experiment_matrix_v2.json")
+    parser.add_argument("--matrix", default="configs/experiments/m9_experiment_matrix_v3.json")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 

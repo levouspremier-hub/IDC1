@@ -97,6 +97,123 @@ def deterministic_raw_action(policy, obs: np.ndarray) -> np.ndarray:
     return deterministic_action(policy, obs)
 
 
+def verify_source_checkpoint_provenance(
+    *, source_state: dict, source_meta: dict, config: dict, origin: int,
+    live_injection_provenance: str,
+) -> dict[str, Any]:
+    """**逐项核对**源训练恢复 checkpoint 自带的来源与当前 live 资产（M9.2-R2）。
+
+    这是 R1 复审第 2 项的修复：导出**不得**用当前 live 账本替换源 checkpoint 自带的来源。
+    任何一项不一致 ⇒ 明确失败（**不**导出），绝不「用当前资产 hash 包装旧权重」。
+    """
+    import json as _json
+
+    from evaluation.sources import canonical_source_digests
+
+    ledger = source_state.get("source_ledger")
+    if not isinstance(ledger, dict):
+        raise ExportError("源 checkpoint 缺少 state.source_ledger")
+    frozen = source_state.get("frozen_config")
+    if not isinstance(frozen, dict):
+        raise ExportError("源 checkpoint 缺少 state.frozen_config")
+
+    live_lock = _sha256_file(REPO_ROOT / "uv.lock")
+    digests = canonical_source_digests()
+    live_data = hashlib.sha256(_json.dumps(
+        [[d.role, d.logical_path, d.sha256] for d in digests],
+        sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    provenance = source_state.get("origin_provenance") or {}
+    recorded_origin_prov = provenance.get(str(origin))
+    if recorded_origin_prov is None:
+        raise ExportError(f"源 checkpoint 的 origin_provenance 不含 origin {origin}")
+
+    checks = {
+        "frozen_config_matches_current": {
+            "source": _json.dumps(frozen, sort_keys=True, ensure_ascii=False)[:64] + "…",
+            "live": _json.dumps(config, sort_keys=True, ensure_ascii=False)[:64] + "…",
+            "match": bool(frozen == config),
+        },
+        "dependency_lock_hash": {
+            "source": str(ledger.get("dependency_lock_hash")),
+            "live_recomputed": live_lock,
+            "match": bool(str(ledger.get("dependency_lock_hash")) == live_lock),
+        },
+        "data_hash": {
+            "source": str(ledger.get("data_hash")),
+            "live_recomputed": live_data,
+            "match": bool(str(ledger.get("data_hash")) == live_data),
+        },
+        "origin_provenance": {
+            "source": str(recorded_origin_prov),
+            "live_recomputed": str(live_injection_provenance),
+            "match": bool(str(recorded_origin_prov) == str(live_injection_provenance)),
+        },
+    }
+    failing = sorted(name for name, entry in checks.items() if not entry["match"])
+    if failing:
+        raise ExportError(
+            "源 checkpoint 自带的来源与当前 live 资产不一致，**拒绝导出**（不得用当前资产 "
+            f"hash 包装旧权重）：{failing}")
+    return {
+        "checks": checks,
+        "all_match": True,
+        "source_code_revision": {
+            "envelope": str(source_meta.get("code_revision", "")),
+            "state": str(source_state.get("code_revision", "")),
+            "note": ("源代码 revision 是**历史值**，无法用 live 重算核对；"
+                     "此处如实记录，导出件写**当前** revision。"),
+        },
+        "source_ledger_verbatim": {
+            "dependency_lock_hash": str(ledger.get("dependency_lock_hash")),
+            "data_hash": str(ledger.get("data_hash")),
+            "scenario_hash": str(ledger.get("scenario_hash")),
+            "env_seeds": dict(ledger.get("env_seeds") or {}),
+            "master_seed": ledger.get("master_seed"),
+        },
+        "live_recomputed_ledger": {
+            "dependency_lock_hash": live_lock,
+            "data_hash": live_data,
+            "origin_provenance": str(live_injection_provenance),
+        },
+    }
+
+
+def _record_fingerprint(record: Any) -> dict[str, Any]:
+    """完整 `EvaluationRecord` 的可比指纹（排除**按构造必然不同**的标识字段）。"""
+    dump = record.model_dump()
+    for key in ("run_id", "checkpoint_id", "checkpoint_role"):
+        dump.pop(key, None)
+    return dump
+
+
+def compare_source_and_exported_records(
+    source_record: Any, source_inventory: Any,
+    exported_record: Any, exported_inventory: Any,
+) -> dict[str, Any]:
+    """比较源 policy 与导出后加载的 policy 在**完整 48 步 episode** 上的结果。"""
+    src_dump = _record_fingerprint(source_record)
+    exp_dump = _record_fingerprint(exported_record)
+    differing = sorted(k for k in set(src_dump) | set(exp_dump)
+                       if src_dump.get(k) != exp_dump.get(k))
+    src_inv = source_inventory.to_dict()
+    exp_inv = exported_inventory.to_dict()
+    inv_differing = sorted(k for k in set(src_inv) | set(exp_inv)
+                           if src_inv.get(k) != exp_inv.get(k))
+    return {
+        "evaluation_record_fields_compared": len(src_dump),
+        "evaluation_record_differing_fields": differing,
+        "inventory_fields_compared": len(src_inv),
+        "inventory_differing_fields": inv_differing,
+        "excluded_identity_fields": ["run_id", "checkpoint_id", "checkpoint_role"],
+        "source_record": src_dump,
+        "exported_record": exp_dump,
+        "source_inventory": src_inv,
+        "exported_inventory": exp_inv,
+        "identical": bool(not differing and not inv_differing),
+    }
+
+
 def _build_eval_env(origin: int, *, master_seed: int, config: dict):
     """用与训练**同一套**参数构造 train env（种子按冻结配置派生）。
 
@@ -119,7 +236,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="导出件路径；默认 runs/<run-id>/eval_input.pt")
     parser.add_argument("--origin", type=int, default=None,
                         help="评估用的 train origin；默认取源 checkpoint 的第 0 个 origin")
-    parser.add_argument("--seed", type=int, default=0, help="master seed（决定环境种子与 RNG）")
+    parser.add_argument("--seed", type=int, default=0,
+                        help="master seed（决定环境种子与 RNG 派生）")
+    parser.add_argument("--scenario-seed", type=int, default=0,
+                        help=("共享场景种子，**只**用于公平配对的键 "
+                              "(split, episode_start, scenario_seed)；矩阵预登记为 0。"
+                              "与 master seed 是两个概念，不得混用。"))
     parser.add_argument("--base-dir", default="runs")
     args = parser.parse_args(argv)
 
@@ -130,7 +252,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     from evaluation.adapter import evaluate
     from evaluation.controlled_run import source_ledger_hashes
-    from evaluation.inventory import capture_inventory
+    from evaluation.fair_pairing_report import (
+        EvaluatedSide,
+        build_fair_pairing_report,
+    )
+    from evaluation.inventory import PairingKey, capture_inventory
     from evaluation.sources import (
         canonical_source_digests,
         verify_evaluation_input_sources,
@@ -155,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         exported = REPO_ROOT / exported
     command = ("python -m scripts.export_eval_input_from_training_checkpoint "
                f"--source-checkpoint {args.source_checkpoint} --run-id {args.run_id} "
-               f"--seed {args.seed}")
+               f"--seed {args.seed} --scenario-seed {args.scenario_seed}")
 
     report: dict[str, Any] = {}
     if not src.is_file():
@@ -194,6 +320,10 @@ def main(argv: list[str] | None = None) -> int:
         }
         injection = env_probe.formal_injection
         start = str(injection.start)
+        # **先核对源 checkpoint 自带的来源**，与当前 live 资产逐项一致才继续
+        provenance_check = verify_source_checkpoint_provenance(
+            source_state=state, source_meta=meta, config=config, origin=int(origin),
+            live_injection_provenance=str(injection.provenance_hash))
         source_ledger = {
             "dependency_lock_hash": None, "data_hash": None,
             "scenario_hash": str(injection.provenance_hash),
@@ -232,21 +362,68 @@ def main(argv: list[str] | None = None) -> int:
             [deterministic_raw_action(loaded.policy, o) for o in obs_np])
         actions_match = bool(np.array_equal(src_actions, loaded_actions))
 
-        eval_env_raw = _build_eval_env(origin, master_seed=int(args.seed), config=config)
-        eval_env = CorrectorWrapper(
-            eval_env_raw, corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
-        record = evaluate(
-            eval_env, METHOD, lambda obs: deterministic_raw_action(loaded.policy, obs),
-            run_id=args.run_id, service_standard=None, seed=int(args.seed),
-            action_mode=loaded.action_mode, checkpoint_id=str(exported),
-            checkpoint_role=loaded.artifact_role)
-        inventory = capture_inventory(eval_env, record)
-        ledger_hashes = source_ledger_hashes(eval_env_raw)
+        # **源 policy** 与 **导出后加载的 policy** 各跑一个**完整 48 步 episode**
+        # （同一 train origin、同一 scenario_seed、同一 corrector 设置）
+        def _run_episode(policy_obj, *, label: str, role: str, checkpoint_id: str):
+            raw = _build_eval_env(origin, master_seed=int(args.seed), config=config)
+            wrapped = CorrectorWrapper(
+                raw, corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
+            rec = evaluate(
+                wrapped, METHOD, lambda obs: deterministic_raw_action(policy_obj, obs),
+                run_id=f"{args.run_id}::{label}", service_standard=None,
+                seed=int(args.seed), action_mode="deterministic_mean",
+                checkpoint_id=checkpoint_id, checkpoint_role=role)
+            inv = capture_inventory(wrapped, rec)
+            return rec, inv, raw
+
+        source_record, source_inventory, source_env = _run_episode(
+            policy, label="source_policy", role=str(state.get("artifact_role")),
+            checkpoint_id=str(src))
+        exported_record, exported_inventory, exported_env = _run_episode(
+            loaded.policy, label="exported_policy", role=loaded.artifact_role,
+            checkpoint_id=str(exported))
+        episode_comparison = compare_source_and_exported_records(
+            source_record, source_inventory, exported_record, exported_inventory)
+        if not actions_match or not episode_comparison["identical"]:
+            raise ExportError(
+                "源 policy 与导出 policy 的动作或完整 episode 结果不一致 ⇒ 不写 success："
+                f"actions_match={actions_match}, "
+                f"record_diff={episode_comparison['evaluation_record_differing_fields']}, "
+                f"inventory_diff={episode_comparison['inventory_differing_fields']}")
+
+        # 公平配对出口：两侧同键 (split, episode_start, scenario_seed)
+        pairing_key = PairingKey(split="train", episode_start=start,
+                                 scenario_seed=int(args.scenario_seed))
+        fair_pairing = build_fair_pairing_report(
+            EvaluatedSide(label="source_policy", record=source_record,
+                          inventory=source_inventory, pairing_key=pairing_key),
+            EvaluatedSide(label="exported_policy", record=exported_record,
+                          inventory=exported_inventory, pairing_key=pairing_key))
+
+        # 反例核对：**不同配对键**必须被拒绝（不生成公平收益）
+        other_key = PairingKey(split="train", episode_start=start,
+                               scenario_seed=int(args.scenario_seed) + 1)
+        mismatched = build_fair_pairing_report(
+            EvaluatedSide(label="source_policy", record=source_record,
+                          inventory=source_inventory, pairing_key=pairing_key),
+            EvaluatedSide(label="exported_policy", record=exported_record,
+                          inventory=exported_inventory, pairing_key=other_key))
+
+        record, inventory = exported_record, exported_inventory
+        ledger_hashes = source_ledger_hashes(exported_env)
         source_sha_after = _sha256_file(src)
         if source_sha_after != source_sha_before:
             raise ExportError("源 checkpoint 在本次运行中被改写（必须只读）")
 
         report = {
+            "source_provenance_verification": provenance_check,
+            "source_vs_exported_episode": episode_comparison,
+            "fair_pairing": fair_pairing,
+            "pairing_key_mismatch_control": {
+                "note": "不同配对键 ⇒ 必须拒绝配对（公平收益为 null）",
+                "result": mismatched,
+            },
+            "scenario_seed": int(args.scenario_seed),
             "entry": "python -m scripts.export_eval_input_from_training_checkpoint",
             "statement": STATEMENT,
             "claims": dict(CLAIMS),
@@ -311,6 +488,11 @@ def main(argv: list[str] | None = None) -> int:
         "service_qualified": record.service_qualified,
         "actions_match": report["deterministic_action_consistency"][
             "source_vs_exported_equal"],
+        "source_vs_exported_episode_identical":
+            report["source_vs_exported_episode"]["identical"],
+        "fair_pairing_eligible": fair_pairing["eligible"],
+        "fair_purchase_cost_delta_sgd": fair_pairing["fair_purchase_cost_delta_sgd"],
+        "fair_carbon_delta_kg_co2e": fair_pairing["fair_carbon_delta_kg_co2e"],
     }])
     run_path = write_run(
         args.run_id,
@@ -340,6 +522,20 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  库存          : initial_soc={inventory.initial_soc:.4f} "
           f"final_soc={inventory.final_soc:.4f} (目标 {inventory.soc_target:.4f} / "
           f"容差 {inventory.soc_final_tolerance:.4f})")
+    print("  源账本 vs live: 全部一致 =",
+          report["source_provenance_verification"]["all_match"])
+    print("  源/导出 episode 一致:",
+          report["source_vs_exported_episode"]["identical"],
+          "（比较 EvaluationRecord 字段",
+          report["source_vs_exported_episode"]["evaluation_record_fields_compared"],
+          "+ 库存字段", report["source_vs_exported_episode"]["inventory_fields_compared"], "）")
+    print("  公平配对键    :", fair_pairing["pairing_key"]["matches"],
+          "| eligible =", fair_pairing["eligible"],
+          "| Δ购电费 =", fair_pairing["fair_purchase_cost_delta_sgd"],
+          "| Δ碳排 =", fair_pairing["fair_carbon_delta_kg_co2e"])
+    print("  不同键对照    : eligible =",
+          mismatched["eligible"],
+          "| Δ购电费 =", mismatched["fair_purchase_cost_delta_sgd"])
     print("  参数更新      : 0")
     return 0
 

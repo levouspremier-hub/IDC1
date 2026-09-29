@@ -37,7 +37,8 @@ from evaluation.metrics import PHYSICS_ABS_TOL
 
 __all__ = [
     "FAIR_PAIRING_CONDITIONS",
-    "FairPairingDecision",
+    "FairPairingReport",
+    "PairingKey",
     "InventoryRecord",
     "assess_fair_pairing",
     "capture_inventory",
@@ -46,6 +47,7 @@ __all__ = [
 
 #: 预登记的公平配对条件（M9.2-R1；顺序即报告顺序）。
 FAIR_PAIRING_CONDITIONS: tuple[str, ...] = (
+    "pairing_key_matches",
     "episode_complete",
     "service_qualified",
     "no_physical_violation",
@@ -112,22 +114,82 @@ class InventoryRecord:
 
 
 @dataclass(frozen=True)
-class FairPairingDecision:
-    """两条轨迹能否进入「公平成本/碳收益」配对差。"""
+class PairingKey:
+    """公平配对的**唯一键**：`(split, episode_start, scenario_seed)`（M9.2-R1/R2）。
 
+    **训练 seed 不是**配对键的一部分（它只作结果分层）；无训练 seed 的基线在同一
+    `scenario_seed` 下只运行一次，并被多个 PPO 训练 seed 的配对引用。
+    """
+
+    split: str
+    episode_start: str
+    scenario_seed: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"split": self.split, "episode_start": self.episode_start,
+                "scenario_seed": int(self.scenario_seed)}
+
+    def same_as(self, other: PairingKey) -> bool:
+        return (self.split == other.split
+                and self.episode_start == other.episode_start
+                and int(self.scenario_seed) == int(other.scenario_seed))
+
+
+@dataclass(frozen=True)
+class FairPairingReport:
+    """公平成本/碳配对的**报告出口**（M9.2-R2）。
+
+    同时保留**双方原始**购电费 / 碳排 / 服务与库存记录；**只有**同键且既有服务、物理、
+    初末库存条件**全部通过**，才填 `fair_purchase_cost_delta_sgd` /
+    `fair_carbon_delta_kg_co2e`；否则两项为 **`None`** 并写原因。
+    """
+
+    left_key: PairingKey
+    right_key: PairingKey
+    key_matches: bool
     eligible: bool
     conditions: dict[str, bool]
     reasons: tuple[str, ...]
     final_energy_gap_kwh: float | None
     physics_abs_tol: float
+    left_purchase_cost_sgd: float
+    right_purchase_cost_sgd: float
+    left_carbon_kg_co2e: float
+    right_carbon_kg_co2e: float
+    left_service_qualified: bool | None
+    right_service_qualified: bool | None
+    left_inventory: dict[str, Any]
+    right_inventory: dict[str, Any]
+    fair_purchase_cost_delta_sgd: float | None
+    fair_carbon_delta_kg_co2e: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "pairing_key": {
+                "left": self.left_key.to_dict(),
+                "right": self.right_key.to_dict(),
+                "matches": bool(self.key_matches),
+                "rule": "键不同即拒绝配对（训练 seed 不是配对键）",
+            },
             "eligible": self.eligible,
             "conditions": dict(self.conditions),
             "reasons": list(self.reasons),
             "final_energy_gap_kwh": self.final_energy_gap_kwh,
             "physics_abs_tol": self.physics_abs_tol,
+            "raw_results_retained": {
+                "left": {"purchase_cost_sgd": self.left_purchase_cost_sgd,
+                         "carbon_kg_co2e": self.left_carbon_kg_co2e,
+                         "service_qualified": self.left_service_qualified,
+                         "inventory": self.left_inventory},
+                "right": {"purchase_cost_sgd": self.right_purchase_cost_sgd,
+                          "carbon_kg_co2e": self.right_carbon_kg_co2e,
+                          "service_qualified": self.right_service_qualified,
+                          "inventory": self.right_inventory},
+            },
+            "fair_purchase_cost_delta_sgd": self.fair_purchase_cost_delta_sgd,
+            "fair_carbon_delta_kg_co2e": self.fair_carbon_delta_kg_co2e,
+            "delta_rule": ("只有 eligible=True 时才填写；否则两项为 null，"
+                           "两侧原始成本/碳与服务/库存仍完整保留"),
             "on_failure": ("不满足 ⇒ 不生成公平成本/碳收益；两侧成本/碳与原因仍完整保留"),
         }
 
@@ -199,15 +261,18 @@ def evaluate_with_inventory(
 
 
 def assess_fair_pairing(
-    left: EvaluationRecord, left_inventory: InventoryRecord,
-    right: EvaluationRecord, right_inventory: InventoryRecord,
-) -> FairPairingDecision:
-    """按预登记的六个条件判定两条轨迹能否进入公平成本/碳配对差。
+    left: EvaluationRecord, left_inventory: InventoryRecord, left_key: PairingKey,
+    right: EvaluationRecord, right_inventory: InventoryRecord, right_key: PairingKey,
+) -> FairPairingReport:
+    """按预登记的键与条件判定两条轨迹能否进入公平成本/碳配对差。
 
-    不满足时**不生成**收益；调用方仍应完整报告两侧成本/碳与原因。
+    **键不同即拒绝**（`key_matches=False`）：即使其余条件全部满足，也**不**填公平收益。
+    不满足时**不生成**收益；两侧原始成本/碳与服务/库存记录仍完整保留。
     """
+    key_matches = left_key.same_as(right_key)
     gap = abs(left_inventory.final_energy_kwh - right_inventory.final_energy_kwh)
     conditions = {
+        "pairing_key_matches": bool(key_matches),
         "episode_complete": bool(
             left_inventory.episode_complete and right_inventory.episode_complete),
         "service_qualified": bool(left.service_qualified is True
@@ -225,6 +290,8 @@ def assess_fair_pairing(
         "final_energy_gap_within_physics_tol": bool(gap <= PHYSICS_ABS_TOL),
     }
     reasons = tuple(reason_ for reason_ in (
+        None if key_matches else
+        f"配对键不同（左 {left_key.to_dict()} / 右 {right_key.to_dict()}）⇒ 拒绝配对",
         None if conditions["episode_complete"] else
         f"episode 未完整运行 48 步或异常终止（左侧 {left_inventory.steps} 步 / "
         f"右侧 {right_inventory.steps} 步）",
@@ -248,10 +315,26 @@ def assess_fair_pairing(
         None if conditions["final_energy_gap_within_physics_tol"] else
         f"终点储能量之差 {gap} 超过物理数值容差 {PHYSICS_ABS_TOL}",
     ) if reason_ is not None)
-    return FairPairingDecision(
-        eligible=all(conditions.values()),
+    eligible = all(conditions.values())
+    return FairPairingReport(
+        left_key=left_key,
+        right_key=right_key,
+        key_matches=key_matches,
+        eligible=eligible,
         conditions=conditions,
         reasons=reasons,
         final_energy_gap_kwh=float(gap),
         physics_abs_tol=float(PHYSICS_ABS_TOL),
+        left_purchase_cost_sgd=float(left.purchase_cost_sgd),
+        right_purchase_cost_sgd=float(right.purchase_cost_sgd),
+        left_carbon_kg_co2e=float(left.carbon_kg_co2e),
+        right_carbon_kg_co2e=float(right.carbon_kg_co2e),
+        left_service_qualified=left.service_qualified,
+        right_service_qualified=right.service_qualified,
+        left_inventory=left_inventory.to_dict(),
+        right_inventory=right_inventory.to_dict(),
+        fair_purchase_cost_delta_sgd=(
+            float(right.purchase_cost_sgd - left.purchase_cost_sgd) if eligible else None),
+        fair_carbon_delta_kg_co2e=(
+            float(right.carbon_kg_co2e - left.carbon_kg_co2e) if eligible else None),
     )
