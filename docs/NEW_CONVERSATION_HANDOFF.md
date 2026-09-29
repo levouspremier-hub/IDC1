@@ -1963,6 +1963,18 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 两处遗留（预算 run 的三个来源 hash 为 null；报告对 `ppo_update_s` 覆盖范围的描述不准）
 > 交由 **M9.2** 合并收口。下一卡 **M9.2**（冻结场景与实验矩阵）。
 
+> ✅ **M9.2-R1 完成（2026-09-29）**：四处返修落地 —— ①`m9_experiment_matrix_v2.json`
+> 中规则法与独立滚动优化**不再要求** PPO 训练批次/21 维 checkpoint（v1 保留为历史记录、
+> 被 v2 明确取代；日期/origin/标准/预算/种子**逐字未变**）；②配对键改为
+> `(split, episode_start, scenario_seed)`，`scenario_seed=0` 预登记，训练 seed 仅分层，
+> 基线同场景**只跑一次**、不计作三个独立样本；③`evaluation/inventory.py` 新增库存记录与
+> **六条件**公平配对门禁（`service_qualified` 原义不变）；④新增
+> `scripts/export_eval_input_from_training_checkpoint.py`：训练恢复 checkpoint → 评估输入 →
+> 统一评估，**参数更新 0**、源文件只读、role 为 `controlled_short_run_eval_input`。
+> 实测：源/导出件确定性 raw action `max|Δ|=0.0`；两次统一评估指标与初末 SOC **逐位一致**；
+> 真实轨迹终点 SOC 0.9 超容差 ⇒ 门禁**拒绝**其公平配对（正是要拦的「用电池换成本」）。
+> 校验器 v2 **64/64**、v1 **36/36**。等待人工复审。
+
 > ⚠️ **M9.2 复审：切分/调度/来源校验可保留，四处须返修（2026-09-29）** → **M9.2-R1**：
 > ①非学习方法被误列 PPO checkpoint 为必需产物；②配对键误用 training_seed（基线无训练 seed）；
 > ③评估器缺初末 SOC 记录与库存可比门禁；④缺「训练 checkpoint → 评估输入 → 统一评估」接线。
