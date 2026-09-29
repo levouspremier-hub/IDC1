@@ -267,7 +267,13 @@ def run(*, run_id: str, seed: int, resume_from: str | None, base_dir: str,
 
     elapsed = time.perf_counter() - started
     ledger = training_source_ledger(origin_provenance)
-    last = records[-1]
+    # 计数**从活对象取**，而不是从 `records[-1]` 取：从已完成的 checkpoint 恢复时
+    # 本进程可能一批都不跑（records 为空），但累计计数仍然真实可读。
+    from safe_rl_v2.formal_train_loop import _optimizer_steps
+
+    adam_steps = int(_optimizer_steps(optimizer))
+    lag_updates = int(getattr(lagrangian, "_updates", 0))
+    transitions = adam_steps // 16 * 192
     report = {
         "entry": "python -m safe_rl_v2.formal_train",
         "statement": STATEMENT,
@@ -277,9 +283,9 @@ def run(*, run_id: str, seed: int, resume_from: str | None, base_dir: str,
         "seed": int(seed),
         "batches_run": len(records),
         "episodes_total": len(records) * per_batch,
-        "transitions_total": int(last["optimizer_steps_cumulative"]) // 16 * 192,
-        "adam_steps_total": int(last["optimizer_steps_cumulative"]),
-        "lagrangian_updates_total": int(last["lagrangian_updates_cumulative"]),
+        "transitions_total": transitions,
+        "adam_steps_total": adam_steps,
+        "lagrangian_updates_total": lag_updates,
         "batch_origin_list_digest": matrix["training_schedule"]["batch_origin_list_digest"],
         "batch_origin_rule": matrix["training_schedule"]["batch_origin_rule"],
         "origin_pool_size": len(matrix["training_schedule"]["origin_pool"]),
