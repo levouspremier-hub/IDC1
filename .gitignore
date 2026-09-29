@@ -35,6 +35,9 @@
 # M1.3g-f-c-h：训练配置**候选**（configs/ 为逐目录白名单）
 !configs/training/
 !configs/training/*.json
+# M9.2：冻结的实验矩阵（`configs/` 为逐目录白名单，故显式放行该子目录）
+!configs/experiments/
+!configs/experiments/*.json
 !data_io/
 !data_io/*.py
 !idc_model/

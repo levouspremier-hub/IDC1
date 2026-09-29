@@ -65,4 +65,31 @@
 3. **正式训练产物审核通过后**：在冻结协议下运行 validation，只在每个预定方法内部选择 checkpoint/预登记候选；随后锁定选择规则和报告模板。最终 test 对全部预定方法只运行一次，覆盖预定的至少 30 个不同测试日，不按结果改阈值、日期或方法。
 4. **M9.2/M9.3**：冻结完整实验矩阵并执行五方法公平对照；任何缺方法、失败或不合格都保留在报告中。旧 23 维结果只能作为独立历史参考。
 
-`formal_env_ready=true` 不代表可训练或可评估；当前 `formal_training_ready=false`，正式训练和 validation/test 均未由本协议放行。
+## 6. 冻结的实验矩阵（M9.2）
+
+共享场景、训练与评估日期、种子、五方法席位与统计规则已冻结为
+**`configs/experiments/m9_experiment_matrix_v1.json`**（`status = frozen_matrix`），
+由只读校验器 `python -m scripts.verify_m92_matrix` 从 **live** 来源逐项重算校验
+（36 项，全通过；篡改任何一项即 exit≠0）。
+
+要点：
+
+- **时间切分保留 v5 原样**：train 2024-01-01→2024-08-01、validation →2024-10-01、
+  test →2025-01-01。日对齐 origin 天数 **212 / 61 / 92**（比例 58.08% / 16.71% / 25.21%）。
+  实施计划写的 60/20/20 **并未满足**，该差异已在矩阵与 M9.2 卡中**如实登记**，
+  **不重切数据**、不声称已满足。
+- **评估日期**：validation 全部 **61** 个 + test 全部 **92** 个不重叠日 episode，
+  各 split 内 origin 从 `candidate_origins.start` 起每 48 步一个；清单**只**由 split manifest
+  的时间与 origin 元数据生成（未读真值、未跑评估）。
+- **训练日期**：train 内 212 个日对齐 origin 的固定池；512 批 × 4 episode，
+  `origin(b, s) = pool[(4b + s) mod 212]`，**三个训练 seed 共用同一预登记顺序**，
+  环境与策略 RNG 仍按冻结配置分别派生。受控短跑的 24-origin 顺序**不是**本表顺序。
+- **五方法席位**：规则 / 独立滚动优化 / 新 21 维惩罚 PPO / 安全 PPO＋单步修正 /
+  安全 PPO＋联合滚动修正——当前**全部**为 `planned/not_runnable`（未实现或无正式配置），
+  席位与缺项清单保留，**不造参数、checkpoint 或假运行**。
+- **配对与统计**：配对单位 = (split, episode, training_seed)；主比较是**同等服务下**
+  购电费 SGD 与购电归属碳排 kgCO₂e **分列**；按连续 **7 日块**、以训练 seed 分层的 95% 区间，
+  末尾不足 7 日的块保留；失败与不合格者完整报告但不进入配对差。
+
+**矩阵冻结 ≠ 正式训练放行。** `formal_env_ready=true` 不代表可训练或可评估；
+当前 `formal_training_ready=false`，正式训练和 validation/test 均未由本协议放行。
