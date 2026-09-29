@@ -1981,6 +1981,17 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > ①非学习方法被误列 PPO checkpoint 为必需产物；②配对键误用 training_seed（基线无训练 seed）；
 > ③评估器缺初末 SOC 记录与库存可比门禁；④缺「训练 checkpoint → 评估输入 → 统一评估」接线。
 
+> ✅ **M9.2-R2 完成（2026-09-29）**：四项返修落地 —— ①`m9_experiment_matrix_v3.json`
+> （v1/v2 标 historical 且保留；日期/origin/标准/预算与 v2 逐段相同），非学习方法的
+> `blocking_reasons` 不再提 PPO 训练口径；②导出前逐项核对**源 checkpoint 自带**的
+> `frozen_config`/`source_ledger`/`origin_provenance` 与 live（实测 4/4 一致，任一不符即拒绝导出）；
+> ③源 policy vs 导出 policy 在**完整 48 步 episode** 上比较 25 个 EvaluationRecord 字段 + 21 个
+> 库存字段，0 处不一致（剔除项列明）；④配对键进入公平收益出口，同键但
+> `service_qualified` 未判定且终点 SOC 超容差 ⇒ `eligible=False`，
+> **`fair_purchase_cost_delta_sgd` / `fair_carbon_delta_kg_co2e` 均为 `null`**，不同键亦拒绝。
+> **勘误**：该轨迹是**多存入约 40 kWh**（不是用掉电池）。校验器 v3 **74/74**、v2/v1 仍通过。
+> 等待人工复审。
+
 > ⚠️ **M9.2-R1 复审：四项须返修 + 一处勘误（2026-09-29）** → **M9.2-R2**：
 > ①v2 方法 `blocking_reasons` 与其 `trains_ppo=false` 自相矛盾；
 > ②导出用 live 账本替换了源 checkpoint 自带来源（未核对）⇒ 等于用当前 hash 包装旧权重；
