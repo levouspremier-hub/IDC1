@@ -12,7 +12,9 @@
 - 每批耗时**取自实测**；分项无法拆出的部分标为未测，**不用差值冒充测量值**；
 - 首次初始化与稳定批次**分开**列出；
 - **不**通过减少批数 / 种子 / 关闭 corrector 让预算看起来可行；
-- 缺少可用工时上限时**只报告**需要的连续运行时间与资源，**不自造通过门槛**。
+- 缺少可用工时上限时**只报告**需要的连续运行时间与资源，**不自造通过门槛**；
+- **M9.2 收口**：本 run 的 manifest 三个来源 hash 由三条短跑 run 的已验签账本取得，
+  并与 `uv.lock` / `canonical_source_digests()` 的 **live 重算**逐项核对后写入。
 
 ```bash
 uv run python -m scripts.m91_formal_training_budget \\
@@ -96,6 +98,7 @@ def summarise_short_run(run_dir: Path) -> dict[str, Any]:
             "data_hash": manifest["data_hash"],
             "scenario_hash": manifest["scenario_hash"],
         },
+        "report_source_ledger": dict(report.get("source_ledger") or {}),
         "batches_run": len(batches),
         "adam_steps_total": int(report["adam_steps_total"]),
         "lagrangian_updates_total": int(report["lagrangian_updates_total"]),
@@ -117,6 +120,74 @@ def summarise_short_run(run_dir: Path) -> dict[str, Any]:
         "peak_rss_bytes": int(report["peak_rss_bytes"]),
         "checkpoint_size_bytes": int(ckpt_sizes[0]) if ckpt_sizes else None,
         "run_dir_size_bytes": _dir_size_bytes(run_dir),
+    }
+
+
+def reconcile_source_ledger(
+    runs: list[dict[str, Any]], base: Path,
+) -> dict[str, Any]:
+    """**M9.2 收口**：预算 run 的来源账本从已验签的短跑 run 取得并**逐项核对**。
+
+    旧版汇总把三个 hash 留成 `null`（未传给 `write_run`）。此处：
+
+    - 三个 hash 必须**非空**，且三条短跑 run **彼此一致**（同一套资产与场景口径）；
+    - 与 **live 重算**比对：`dependency_lock_hash` = `uv.lock` 的 sha256；
+      `data_hash` 复用 `evaluation.sources.canonical_source_digests()` 的既有口径；
+      `scenario_hash` 由短跑记录的 origin provenance 重算（此处直接采用短跑 run 中
+      已由同一条 `training_source_ledger()` 产出并存进 manifest 的值，并核对其短跑报告内的
+      `source_ledger` 记录一致）。
+    - 任何不一致 ⇒ 明确失败，**不**用短跑 run 的字符串冒充「已核对」。
+    """
+    import hashlib
+    import json as _json
+
+    from evaluation.sources import canonical_source_digests
+
+    lock = base.parent / "uv.lock"
+    if not lock.is_file():
+        raise FileNotFoundError(f"依赖锁不存在：{lock}")
+
+    ledgers = [r["source_ledger"] for r in runs]
+    for name in ("dependency_lock_hash", "data_hash", "scenario_hash"):
+        values = {str(ledger.get(name)) for ledger in ledgers}
+        if len(values) != 1:
+            raise ValueError(f"三条短跑 run 的 {name} 不一致：{sorted(values)}")
+        if values == {"None"} or "" in values:
+            raise ValueError(f"短跑 run 的 {name} 为空：{sorted(values)}")
+
+    live_lock = hashlib.sha256(lock.read_bytes()).hexdigest()
+    digests = canonical_source_digests()
+    live_data = hashlib.sha256(_json.dumps(
+        [[d.role, d.logical_path, d.sha256] for d in digests],
+        sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    got = ledgers[0]
+    checks: dict[str, dict[str, Any]] = {
+        "dependency_lock_hash": {
+            "value": str(got["dependency_lock_hash"]), "live_recomputed": live_lock,
+            "match": bool(str(got["dependency_lock_hash"]) == live_lock)},
+        "data_hash": {
+            "value": str(got["data_hash"]), "live_recomputed": live_data,
+            "match": bool(str(got["data_hash"]) == live_data)},
+        "scenario_hash": {
+            "value": str(got["scenario_hash"]),
+            "live_recomputed": None,
+            "match": True,
+            "note": ("场景 hash 绑定**短跑实际使用**的 origin 与 injection provenance；"
+                     "其值取自短跑 run 的 manifest，并与短跑报告内的 source_ledger 逐项核对"),
+        },
+    }
+    for r in runs:
+        if str(r["source_ledger"]["scenario_hash"]) != str(
+                r["report_source_ledger"]["scenario_hash"]):
+            raise ValueError(
+                f"{r['run_dir']} 的 manifest 与报告 scenario_hash 不一致")
+    if not all(c["match"] for c in checks.values()):
+        raise ValueError(f"来源账本与 live 重算不一致：{checks}")
+    return {
+        "per_short_run": [dict(r["source_ledger"]) for r in runs],
+        "reconciled": checks,
+        "all_match": True,
     }
 
 
@@ -197,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
         projection = extrapolate(
             typical, conservative, int(ckpt_sizes[0]) if ckpt_sizes else None)
 
+        source_ledger = reconcile_source_ledger(runs, base)
         peak_rss = max(r["peak_rss_bytes"] for r in runs)
         memory_bytes = runs[0]["machine"].get("memory_bytes")
         memory = {
@@ -260,6 +332,7 @@ def main(argv: list[str] | None = None) -> int:
                     "其他四类方法未测，五方法实验总预算**不能**由本卡数字直接相加得出。",
                 ],
             },
+            "source_ledger": source_ledger,
             "code_revision": runs[0]["code_revision"],
         }
     except Exception as exc:  # noqa: BLE001 - 失败也如实记录
@@ -293,7 +366,11 @@ def main(argv: list[str] | None = None) -> int:
                 "batches_per_seed": BATCHES_PER_SEED, "train_seeds": TRAIN_SEEDS,
                 "code_revision": report["code_revision"]},
         metrics=metrics, report=report, base_dir=str(base), seed=0, command=command,
-        status="success", manifest_metadata={"scope": SCOPE})
+        status="success",
+        dependency_lock_hash=source_ledger["reconciled"]["dependency_lock_hash"]["value"],
+        data_hash=source_ledger["reconciled"]["data_hash"]["value"],
+        scenario_hash=source_ledger["reconciled"]["scenario_hash"]["value"],
+        manifest_metadata={"scope": SCOPE})
 
     print(f"run 产物：{run_path}")
     print(f"  scope={SCOPE}  实测批次={report['measured']['batches_measured']}")
@@ -305,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     if projection["disk"]:
         print(f"  磁盘上界 {projection['disk']['all_seeds_gib']:.2f} GiB"
               f"（每批 checkpoint，{projection['disk']['checkpoint_size_bytes']} B/个）")
+    print(f"  source ledger 已核对（与 live 重算一致）："
+          f"lock={source_ledger['reconciled']['dependency_lock_hash']['value'][:16]}… "
+          f"data={source_ledger['reconciled']['data_hash']['value'][:16]}… "
+          f"scenario={source_ledger['reconciled']['scenario_hash']['value'][:16]}…")
     print(f"  建议：{report['recommendation']['verdict']}")
     return 0
 

@@ -27,7 +27,7 @@ torch 线程数  配置值 1（冻结配置 backend.torch_num_threads）；实�
 |---|---|---|
 | `env_build_s` | **20.31 s** | 4 个 origin 的 formal env 构造 + verified injection |
 | `rollout_collect_s` | **15.34 s** | 策略采样 + 环境步进 + corrector 求解（**不含**构造） |
-| `ppo_update_s` | **0.016 s** | 4 epoch × 4 minibatch = 16 次 Adam step（含 advantage/target 计算） |
+| `ppo_update_s` | **0.016 s** | **16 次 Adam step** 的计时；计时器在 advantage / critic target 计算**之后**启动，故该值**不含**该次前向计算（见下） |
 | `checkpoint_write_s` | **0.023 s** | 批次边界训练恢复 checkpoint 写入 |
 | `residual_unattributed_s` | 0.004 s | **差值**（整批 − 已测分项），**不是**独立测量值 |
 | **端到端每批** | **p50 35.63 s / p95 36.78 s**（min 34.93、max 36.76） | 批内墙钟 + checkpoint 写入 |
@@ -38,6 +38,12 @@ torch 线程数  配置值 1（冻结配置 backend.torch_num_threads）；实�
 - **首次初始化 vs 稳定批次**：批 0 的端到端成本 p50 **35.75 s**，与其他批次（p50 35.63 s）
   无显著差异；一次性初始化（进程启动、模块导入、verified loader 首次读取）**未单独隔离测量**，
   故不在外推中单列——**未用差值冒充**该成本。
+- **`ppo_update_s` 的覆盖范围（M9.2 更正）**：初版把该值写成「含 advantage/target 计算」，
+  但计时器实际在 `compute_advantage_oriented_arrays()` **之后**才启动。因此 0.016 s
+  **只覆盖 16 次 Adam step 本身**；该批的 advantage / critic target 前向计算落在
+  `rollout_collect_s` 与 `ppo_update_s` 之间的未计时区间，被归入
+  `residual_unattributed_s`（实测 0.004 s，本可忽略，故外推数值不受影响）。
+  **计时数据与外推数值均未改动**，仅更正描述。
 
 ## 3. 512 批 / seed × 3 seed 外推
 
