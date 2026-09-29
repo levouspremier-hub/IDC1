@@ -23,7 +23,7 @@
     },
     "formal_train_entry": {
       "path": "safe_rl_v2/formal_train.py",
-      "sha256": "51923ee36c6f93ffd9a9088f261a9e5c00fa9f67ecbfedb3d0c8bc47e7d8ed6a"
+      "sha256": "caf1b75424ed5a2fce5564628194c9dd064721488b71a482211fa3b49b8f1b58"
     },
     "formal_train_loop": {
       "path": "safe_rl_v2/formal_train_loop.py",
@@ -48,7 +48,7 @@
     "formal_env_ready": true,
     "formal_training_ready": true
   },
-  "release_revision": "8f6bc0d5a0d6ec5aaebd4496c3f5ae48338683c2",
+  "release_revision": "c91837b57fcfa761bca8f32c824ad55c17f221a7",
   "schema": "idc-formal-train-release-v1",
   "supersedes": null
 }
