@@ -1949,6 +1949,16 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > 磁盘上界 1.22 GiB。**建议本机运行**；但未获工时上限 ⇒ 不自造门槛。
 > 报告 `docs/audits/M9_FORMAL_TRAINING_BUDGET.md`。其他四类方法**未测**。等待人工复审。
 
+> ✅ **M9.2 完成（2026-09-29）**：实验矩阵已冻结为
+> `configs/experiments/m9_experiment_matrix_v1.json`（`frozen_matrix`），配只读校验器
+> `python -m scripts.verify_m92_matrix`（36/36 通过；四类篡改全部 exit≠0）。
+> 切分保留 v5：日对齐 origin **212 / 61 / 92**（58.08/16.71/25.21%）——实施计划的 60/20/20
+> **并未满足**，已如实登记、**不重切**。评估日 = validation 61 + test 92（不重叠）。
+> 训练 = 212-origin 池、512 批 × 4 episode、`origin(b,s)=pool[(4b+s) mod 212]`、三 seed 同一顺序。
+> 五方法全部 `planned/not_runnable`。M9.1 两处收口完成：新预算 run `m91_formal_training_budget_v2`
+> 三 hash 非空且与 live 一致（旧 run 未覆盖），报告 `ppo_update_s` 描述更正（数值不变）。
+> 等待人工复审。
+
 > ✅ **M9.1 人工复审通过（2026-09-29）**：见 `docs/task_cards/M9.1.md` §8。
 > 两处遗留（预算 run 的三个来源 hash 为 null；报告对 `ppo_update_s` 覆盖范围的描述不准）
 > 交由 **M9.2** 合并收口。下一卡 **M9.2**（冻结场景与实验矩阵）。
