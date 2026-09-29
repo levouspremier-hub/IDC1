@@ -179,11 +179,23 @@ def verify_source_checkpoint_provenance(
     }
 
 
+#: 按构造必然不同、或纯属墙钟测量的字段：**不**作为「源 vs 导出」等价判据。
+#: - `run_id` / `checkpoint_id` / `checkpoint_role`：两侧由构造决定地不同；
+#: - `correction.solve_time_median_s` / `solve_time_p95_s`：MIP 求解的**墙钟耗时**，
+#:   同一轨迹两次运行也会不同，属噪声而非等价性判据。
+_NON_EQUIVALENCE_FIELDS = ("run_id", "checkpoint_id", "checkpoint_role")
+_NON_EQUIVALENCE_CORRECTION_FIELDS = ("solve_time_median_s", "solve_time_p95_s")
+
+
 def _record_fingerprint(record: Any) -> dict[str, Any]:
-    """完整 `EvaluationRecord` 的可比指纹（排除**按构造必然不同**的标识字段）。"""
+    """完整 `EvaluationRecord` 的可比指纹（剔除上述非等价字段，剔除项在报告中列明）。"""
     dump = record.model_dump()
-    for key in ("run_id", "checkpoint_id", "checkpoint_role"):
+    for key in _NON_EQUIVALENCE_FIELDS:
         dump.pop(key, None)
+    correction = dump.get("correction")
+    if isinstance(correction, dict):
+        for key in _NON_EQUIVALENCE_CORRECTION_FIELDS:
+            correction.pop(key, None)
     return dump
 
 
@@ -198,6 +210,9 @@ def compare_source_and_exported_records(
                        if src_dump.get(k) != exp_dump.get(k))
     src_inv = source_inventory.to_dict()
     exp_inv = exported_inventory.to_dict()
+    # 库存记录的 `run_id` 由两侧标签构造而来，同样不是等价判据
+    src_inv.pop("run_id", None)
+    exp_inv.pop("run_id", None)
     inv_differing = sorted(k for k in set(src_inv) | set(exp_inv)
                            if src_inv.get(k) != exp_inv.get(k))
     return {
@@ -205,7 +220,13 @@ def compare_source_and_exported_records(
         "evaluation_record_differing_fields": differing,
         "inventory_fields_compared": len(src_inv),
         "inventory_differing_fields": inv_differing,
-        "excluded_identity_fields": ["run_id", "checkpoint_id", "checkpoint_role"],
+        "excluded_identity_fields": list(_NON_EQUIVALENCE_FIELDS),
+        "excluded_correction_timing_fields": list(_NON_EQUIVALENCE_CORRECTION_FIELDS),
+        "excluded_inventory_identity_fields": ["run_id"],
+        "exclusion_rationale": (
+            "标识字段按构造必然不同；修正器解算耗时是**墙钟**测量，同轨迹两次运行也不同，"
+            "属噪声而非等价判据。其余**全部** EvaluationRecord 字段与**全部**库存字段"
+            "逐一比较。"),
         "source_record": src_dump,
         "exported_record": exp_dump,
         "source_inventory": src_inv,
