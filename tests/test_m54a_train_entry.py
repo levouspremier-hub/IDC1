@@ -58,9 +58,16 @@ def test_train_has_a_main_entry_point():
 
 
 def test_makefile_runs_train_as_a_module():
-    """Makefile 不得再直接执行文件路径（那会导致 sys.path 缺仓库根）。"""
+    """Makefile 不得直接执行文件路径（那会导致 sys.path 缺仓库根）。
+
+    **M1.3g-f-c-k**：`make train` 按该卡要求改指**正式 train-only 入口**
+    `safe_rl_v2.formal_train`（冻结配置 v1 + 矩阵 v3 预登记顺序，经 env/train release
+    双重验签放行）。本断言随之更新模块名，**意图不变**：仍必须是 `-m` 模块调用、
+    不得直接执行文件路径、必须支持 `TRAIN_ARGS` 透传。
+    `safe_rl_v2/train.py` 的 synthetic 路径与其守卫**逐字未改**。
+    """
     body = train_target_body()
-    assert "-m safe_rl_v2.train" in body, body
+    assert "-m safe_rl_v2.formal_train" in body, body
     assert "python safe_rl_v2/train.py" not in body, "Makefile 仍在直接执行文件路径"
     assert "TRAIN_ARGS" in body, "Makefile 必须支持 TRAIN_ARGS 透传"
 
