@@ -340,8 +340,12 @@ def run(*, run_id: str, seed: int, resume_from: str | None, base_dir: str,
         seed=int(seed), command=command, status="success",
         dependency_lock_hash=ledger["dependency_lock_hash"],
         data_hash=ledger["data_hash"], scenario_hash=ledger["scenario_hash"],
+        # `seed` 是 writer 的**保留字段**（由 `seed=` 参数写入），不得经
+        # `manifest_metadata` 覆盖 —— 实测触发过 `ValueError` 并导致 512 批训练完成后
+        # 无法落盘（M1.3g-f-c-k 本卡修正）。
         manifest_metadata={"training_scope": FORMAL_TRAINING_SCOPE,
-                            "seed": int(seed), "batches_run": len(records)})
+                            "training_seed": int(seed),
+                            "batches_run": len(records)})
     print(f"run 产物：{run_path}")
     print(f"  seed={seed}  批数={len(records)}  adam={report['adam_steps_total']}  "
           f"lag={report['lagrangian_updates_total']}")
