@@ -98,10 +98,15 @@ def deterministic_raw_action(policy, obs: np.ndarray) -> np.ndarray:
 
 
 def _build_eval_env(origin: int, *, master_seed: int, config: dict):
-    """用与训练**同一套**参数构造 train env（种子按冻结配置派生）。"""
+    """用与训练**同一套**参数构造 train env（种子按冻结配置派生）。
+
+    `build_train_env` 返回 `(env, injection)`；本入口只要 env。
+    """
     from safe_rl_v2.formal_train_loop import build_train_env
 
-    return build_train_env(int(origin), master_seed=int(master_seed), config=config)
+    env, _injection = build_train_env(int(origin), master_seed=int(master_seed),
+                                      config=config)
+    return env
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -227,16 +232,16 @@ def main(argv: list[str] | None = None) -> int:
             [deterministic_raw_action(loaded.policy, o) for o in obs_np])
         actions_match = bool(np.array_equal(src_actions, loaded_actions))
 
+        eval_env_raw = _build_eval_env(origin, master_seed=int(args.seed), config=config)
         eval_env = CorrectorWrapper(
-            _build_eval_env(origin, master_seed=int(args.seed), config=config),
-            corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
+            eval_env_raw, corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
         record = evaluate(
             eval_env, METHOD, lambda obs: deterministic_raw_action(loaded.policy, obs),
             run_id=args.run_id, service_standard=None, seed=int(args.seed),
             action_mode=loaded.action_mode, checkpoint_id=str(exported),
             checkpoint_role=loaded.artifact_role)
         inventory = capture_inventory(eval_env, record)
-        ledger_hashes = source_ledger_hashes(eval_env)
+        ledger_hashes = source_ledger_hashes(eval_env_raw)
         source_sha_after = _sha256_file(src)
         if source_sha_after != source_sha_before:
             raise ExportError("源 checkpoint 在本次运行中被改写（必须只读）")
