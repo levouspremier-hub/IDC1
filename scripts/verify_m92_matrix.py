@@ -7,6 +7,9 @@ uv run python -m scripts.verify_m92_matrix \
     --matrix configs/experiments/m9_experiment_matrix_v1.json
 ```
 
+支持 **v1** 与 **v2** 两种矩阵：先跑对两者都成立的通用检查（§1–§9），
+再按 `schema` 追加版本专属检查（v2 见 §10）。
+
 校验内容（全部来自矩阵与 live 文件，不依赖矩阵自述）：
 
 1. 六个来源文件 + 服务标准模块的 **live SHA-256** 与矩阵记录一致；
@@ -227,6 +230,10 @@ def verify(matrix: dict) -> list[tuple[str, bool, str]]:
           and deviation["decision"].startswith("保留"),
           deviation["summary"][:60] + "…")
     ratios = matrix["split_freeze"]["actual_origin_day_ratio"]
+    # 10. v2 专属（M9.2-R1）------------------------------------------------------
+    if str(matrix.get("schema", "")).endswith("-v2"):
+        _verify_v2(matrix, checks, check)
+
     check("实际比例可重算",
           all(abs(ratios[s] - (splits[s]["candidate_origins"]["end_exclusive"]
                                - splits[s]["candidate_origins"]["start"]) // 48
@@ -237,11 +244,99 @@ def verify(matrix: dict) -> list[tuple[str, bool, str]]:
     return checks
 
 
+NON_LEARNING_METHODS = ("rule_baseline", "independent_rolling_optimization")
+PPO_METHODS = ("penalty_ppo", "safe_ppo_single_step_corrector",
+               "safe_ppo_joint_rolling_corrector")
+
+
+def _verify_v2(matrix: dict, checks: list, check) -> None:
+    """M9.2-R1 的四处返修在 v2 中的落地校验。"""
+    # ① 方法所需产物
+    by_id = {m["method_id"]: m for m in matrix["methods"]}
+    for mid in NON_LEARNING_METHODS:
+        arts = " ".join(by_id[mid]["required_artifacts"])
+        check(f"[v2] {mid} 不要求 PPO checkpoint / 训练批次",
+              by_id[mid]["trains_ppo"] is False
+              and by_id[mid]["has_training_seed"] is False
+              and "PPO checkpoint" not in arts and "训练批次" not in arts,
+              f"trains_ppo={by_id[mid]['trains_ppo']}")
+        check(f"[v2] {mid} 显式登记「不需要」清单",
+              by_id[mid]["explicitly_not_required"] == [
+                  "PPO 训练批次（512 批 × seed）", "21 维 PPO checkpoint"], "")
+    for mid in PPO_METHODS:
+        arts = " ".join(by_id[mid]["required_artifacts"])
+        check(f"[v2] {mid} 仍要求按新 21 维契约训练 + 已审核 checkpoint",
+              by_id[mid]["trains_ppo"] is True
+              and by_id[mid]["has_training_seed"] is True
+              and "21 维" in arts and "checkpoint" in arts, "")
+
+    # ② 配对键与分层
+    pairing = matrix["pairing"]
+    check("[v2] 配对键 == (split, episode_start, scenario_seed)",
+          pairing["primary_pairing_key"] == ["split", "episode_start", "scenario_seed"],
+          str(pairing["primary_pairing_key"]))
+    check("[v2] 预登记主场景 scenario_seed == 0",
+          pairing["preregistered_scenario_seed"] == 0, "")
+    check("[v2] 训练 seed 只作分层、不进入配对键",
+          "training_seed" not in pairing["primary_pairing_key"]
+          and "分层" in pairing["training_seed_role"], "")
+    check("[v2] 基线在同一场景只运行一次、不计作三个独立样本",
+          pairing["baseline_runs_once_per_scenario"] is True
+          and "不得计作三次独立基线运行" in pairing["baseline_pairing_rule"], "")
+    check("[v2] 独立样本计数口径写明",
+          "不**增加独立样本数" in pairing["sample_counting"]
+          or "不增加独立样本数" in pairing["sample_counting"], "")
+
+    # ③ 库存公平门禁
+    fair = matrix["fair_cost_carbon_pairing"]
+    conditions = " ".join(fair["conditions_all_required"])
+    for token in ("完整运行 48 步", "service_qualified", "物理违规", "容量相同",
+                  "bess_soc_final_tolerance", "PHYSICS_ABS_TOL"):
+        check(f"[v2] 公平配对条件含 {token}", token in conditions, "")
+    check("[v2] 条件不满足时不生成公平收益、原始结果仍保留",
+          "不生成" in fair["on_failure"] and "完整保留" in fair["on_failure"], "")
+    check("[v2] 库存字段清单含初末 SOC / 容量 / 容差 / 结算量",
+          {"initial_soc", "final_soc", "capacity_kwh", "soc_final_tolerance",
+           "terminal_soc_recovery_kwh"} <= set(fair["recorded_fields"]), "")
+    check("[v2] terminal_soc_recovery_kwh 仅为诊断、不冒充购电或 SGD",
+          "不**冒充" in fair["terminal_soc_recovery_is_diagnostic_only"]
+          or "不冒充" in fair["terminal_soc_recovery_is_diagnostic_only"], "")
+    check("[v2] 服务资格语义不变、库存是独立字段",
+          "service_qualified` 原义保留" in fair["service_qualified_semantics_unchanged"], "")
+    check("[v2] 日 episode 单位写明（非跨日连续库存实验）",
+          "独立的 48 步日 episode" in fair["episode_unit"]
+          and "不是**跨日连续库存实验" in fair["episode_unit"].replace("**", "**"), "")
+
+    # ④ 训练 checkpoint → 评估输入接线
+    wiring = matrix["eval_input_wiring"]
+    check("[v2] 登记导出入口且参数更新为 0",
+          wiring["entry"] ==
+          "python -m scripts.export_eval_input_from_training_checkpoint"
+          and int(wiring["parameter_updates"]) == 0, wiring["entry"])
+    check("[v2] 受控短跑源不得冒充 formal_training_policy",
+          "controlled_short_run_eval_input" in wiring["role_rule"]
+          and "formal_training_policy" in wiring["role_rule"]
+          and "不得" in wiring["role_rule"], "")
+    check("[v2] 记录源/导出件 SHA、scope、来源、种子与 revision",
+          {"源 checkpoint SHA-256", "导出件 SHA-256", "training_scope", "来源 hash",
+           "种子", "代码 revision"} <= set(wiring["recorded"]), "")
+
+    # v2 取代 v1：v1 文件必须仍在，且取代关系写明
+    sup = matrix.get("supersedes") or {}
+    v1_path = REPO_ROOT / str(sup.get("path", ""))
+    check("[v2] 明确取代 v1 且 v1 文件保留可读",
+          v1_path.is_file()
+          and sup.get("sha256") == _sha256_file(v1_path)
+          and "取代" in str(sup.get("relation", "")), str(sup.get("path")))
+    check("[v2] 逐字沿用 v1 的冻结数值清单已登记",
+          len(sup.get("unchanged_from_v1", [])) >= 5, "")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m scripts.verify_m92_matrix",
         description="M9.2 实验矩阵只读校验器（从 live 来源重算并逐项比对）")
-    parser.add_argument("--matrix", default="configs/experiments/m9_experiment_matrix_v1.json")
+    parser.add_argument("--matrix", default="configs/experiments/m9_experiment_matrix_v2.json")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 

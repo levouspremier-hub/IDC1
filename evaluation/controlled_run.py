@@ -33,7 +33,8 @@ from checkpointing.eval_input import (
     load_evaluation_checkpoint,
     save_evaluation_checkpoint,
 )
-from evaluation.adapter import PLANNED_METHODS, evaluate, planned_method_rows
+from evaluation.adapter import PLANNED_METHODS, planned_method_rows
+from evaluation.inventory import evaluate_with_inventory
 from evaluation.sources import canonical_source_digests, verify_evaluation_input_sources
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -235,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
         eval_env = CorrectorWrapper(
             build_train_env(args.origin),
             corrector_time_limit_s=PRODUCTION_CORRECTOR_TIME_LIMIT_S)
-        record = evaluate(
+        # M9.2-R1：统一评估**同时**返回库存记录（`service_qualified` 语义不变）
+        record, inventory = evaluate_with_inventory(
             eval_env,
             CONTROLLED_METHOD,
             lambda obs: deterministic_action(loaded.policy, obs),
@@ -248,6 +250,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         report = {
             "entry": "python -m evaluation.controlled_run",
+            "inventory": inventory.to_dict(),
+            "inventory_note": (
+                "库存可比性是**独立于服务资格**的字段；`service_qualified` 语义不变。\n"
+                "本链路只跑一条轨迹，故不做配对判定（`fair_cost_carbon_pair_eligible`\n"
+                "需两条轨迹，由评估层 `assess_fair_pairing()` 给出）。"),
             "statement": STATEMENT,
             "claims": dict(CLAIMS),
             "split": SPLIT,
@@ -321,6 +328,13 @@ def main(argv: list[str] | None = None) -> int:
         "carbon_kg_co2e": record.carbon_kg_co2e,
         "carbon_per_completed_work": record.carbon_per_completed_work,
         "completed_work": record.completed_work,
+        "initial_soc": inventory.initial_soc,
+        "final_soc": inventory.final_soc,
+        "initial_energy_kwh": inventory.initial_energy_kwh,
+        "final_energy_kwh": inventory.final_energy_kwh,
+        "final_soc_deviation": inventory.final_soc_deviation,
+        "final_soc_within_env_tolerance": inventory.final_soc_within_env_tolerance,
+        "terminal_soc_recovery_kwh": inventory.terminal_soc_recovery_kwh,
         "pv_available_kwh": record.pv.available_kwh,
         "pv_used_kwh": record.pv.used_kwh,
         "pv_curtail_kwh": record.pv.curtail_kwh,
