@@ -1,0 +1,54 @@
+{
+  "approved_decision_id": "M1.3g-f-c-k",
+  "binds": {
+    "env_release_v1": {
+      "path": "configs/release/idc_formal_env_release_v1.json",
+      "sha256": "f86e6f0f163f86655c747b245960e38efd744b9a69f30283831f89e1416f556f"
+    },
+    "experiment_matrix_v3": {
+      "path": "configs/experiments/m9_experiment_matrix_v3.json",
+      "sha256": "47e21a1c31549ea409dd323b05f1d7f09f0ab502d61d127e3980bdb8d164aa88"
+    },
+    "formal_split_v5_test": {
+      "path": "data/manifest/formal_splits_v5/test.json",
+      "sha256": "76c6bb79446fbbc5dd1566c4e617d6b0d746f2ae87caa2eb26a6a18b853a827f"
+    },
+    "formal_split_v5_train": {
+      "path": "data/manifest/formal_splits_v5/train.json",
+      "sha256": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865"
+    },
+    "formal_split_v5_validation": {
+      "path": "data/manifest/formal_splits_v5/validation.json",
+      "sha256": "ac1c50db28a8d6376513c6a2e6023cd7e45eaa6f4b8ad34f2b474a55a55d9933"
+    },
+    "formal_train_entry": {
+      "path": "safe_rl_v2/formal_train.py",
+      "sha256": "51923ee36c6f93ffd9a9088f261a9e5c00fa9f67ecbfedb3d0c8bc47e7d8ed6a"
+    },
+    "formal_train_loop": {
+      "path": "safe_rl_v2/formal_train_loop.py",
+      "sha256": "d71f5bf60fd12d2876a3804659285e17d3800bd4cd77f31a0a45ce8c9b5b9247"
+    },
+    "frozen_refs_v4": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8"
+    },
+    "m13g_arrival_mapper_v1": {
+      "path": "data/manifest/m13g_arrival_mapper_v1.json",
+      "sha256": "ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371"
+    },
+    "training_config_v1": {
+      "path": "configs/training/idc_training_config_v1.json",
+      "sha256": "fac44a5bb13e7ef69d207c013faf410c0c0d9fc78d33df2b5da92c71a871ad67"
+    }
+  },
+  "contract_version": "contract-v9",
+  "note": "formal train-only 训练发布批准（M1.3g-f-c-k）：env release v1 声明 formal_env_ready=true / formal_training_ready=false，本产物在其之上**单独**放行正式 train-only 训练循环。本产物不覆盖 v5 split 与 env release v1 的任何字节；不声称收敛或性能。",
+  "readiness": {
+    "formal_env_ready": true,
+    "formal_training_ready": true
+  },
+  "release_revision": "8f6bc0d5a0d6ec5aaebd4496c3f5ae48338683c2",
+  "schema": "idc-formal-train-release-v1",
+  "supersedes": null
+}
