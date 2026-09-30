@@ -47,8 +47,13 @@ STATEMENT = (
 )
 METHOD = "controlled_short_run_policy_via_eval_input"
 
-#: 本入口支持的训练恢复 schema（`safe_rl_v2.formal_train_loop.RESUME_SCHEMA`）。
-SUPPORTED_TRAINING_SCHEMAS = ("m1.3g-f-c-j-controlled-resume-v1",)
+#: 本入口支持的**训练恢复** schema → 对应导出的**评估输入角色**（M1.3g-f-c-k）。
+#: 受控短跑只能导出 `controlled_short_run_eval_input`；**正式训练** checkpoint 导出的才是
+#: `formal_training_policy` —— 两者**不得互相冒充**。
+SUPPORTED_TRAINING_SCHEMAS: dict[str, tuple[str, str]] = {
+    "m1.3g-f-c-j-controlled-resume-v1": ("controlled_training_resume", "controlled"),
+    "m13gfck-formal-train-resume-v1": ("formal_training_resume", "formal"),
+}
 
 
 class ExportError(ValueError):
@@ -59,8 +64,11 @@ def _sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def read_training_checkpoint(path: Path) -> tuple[dict, dict]:
-    """只读读取训练恢复 checkpoint，校验 schema / role / 必需状态字段。"""
+def read_training_checkpoint(path: Path) -> tuple[dict, dict, str]:
+    """只读读取训练恢复 checkpoint，校验 schema / role / 必需状态字段。
+
+    返回 `(metadata, state, kind)`，`kind ∈ {"controlled", "formal"}`。
+    """
     from checkpointing.eval_input import EVAL_INPUT_SCHEMA
     from checkpointing.versioned import read_checkpoint_payload
 
@@ -73,13 +81,14 @@ def read_training_checkpoint(path: Path) -> tuple[dict, dict]:
             "本入口要求**训练恢复** checkpoint")
     if schema not in SUPPORTED_TRAINING_SCHEMAS:
         raise ExportError(f"不支持的训练恢复 schema：{schema!r}")
+    expected_role, kind = SUPPORTED_TRAINING_SCHEMAS[schema]
     if not isinstance(state, dict) or "policy" not in state:
         raise ExportError("训练恢复 checkpoint 缺少 state.policy（真实权重）")
-    if state.get("artifact_role") != "controlled_training_resume":
+    if state.get("artifact_role") != expected_role:
         raise ExportError(
-            f"训练恢复 artifact_role 应为 controlled_training_resume，"
-            f"实际 {state.get('artifact_role')!r}")
-    return meta, state
+            f"artifact_role 应为 {expected_role!r}，实际 {state.get('artifact_role')!r}"
+            "（受控短跑与正式训练不得互相冒充）")
+    return meta, state, kind
 
 
 def export_policy_state(state: dict) -> dict[str, torch.Tensor]:
@@ -315,7 +324,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         config = load_frozen_training_config()
-        meta, state = read_training_checkpoint(src)
+        meta, state, kind = read_training_checkpoint(src)
+        # 正式训练 → `formal_training_policy`；受控短跑 → `controlled_short_run_eval_input`
+        from checkpointing.eval_input import FORMAL_ROLE
+        eval_role = FORMAL_ROLE if kind == "formal" else CONTROLLED_ROLE
         origins = [int(o) for o in state.get("origins") or []]
         if not origins:
             raise ExportError("训练恢复 checkpoint 缺少 origins（无法确定评估用 origin）")
@@ -373,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             policy=policy,
             obs_dim=obs_dim,
             code_revision=git_revision(),
-            artifact_role=CONTROLLED_ROLE,
+            artifact_role=eval_role,
             action_mode="deterministic_mean",
             policy_config={
                 "hidden": int(config["training"]["policy"]["hidden"]),
@@ -471,8 +483,9 @@ def main(argv: list[str] | None = None) -> int:
                 "parameter_updates": 0,
             },
             "exported_checkpoint": dict(checkpoint_info),
-            "role_rule": ("受控短跑源只标 controlled_short_run_eval_input；"
-                          "**不**冒充已审核的 formal_training_policy"),
+            "source_kind": kind,
+            "role_rule": ("受控短跑源只标 controlled_short_run_eval_input；正式训练源标 "
+                          "formal_training_policy；两者**不**得互相冒充"),
             "origin": int(origin),
             "start": start,
             "seeds": env_seeds,
