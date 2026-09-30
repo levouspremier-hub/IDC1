@@ -335,7 +335,9 @@ def main(argv: list[str] | None = None) -> int:
 
         obs_dim = int(meta["obs_dim"])
         policy_state = export_policy_state(state)
-        policy = build_seeded_policy(config, obs_dim=obs_dim, seed=int(args.seed))
+        # 策略初值只为建对象；**权重随即被源 checkpoint 覆盖**，故与 seed 无关。
+        policy = build_seeded_policy(config, obs_dim=obs_dim,
+                                     seed=int(args.scenario_seed))
         policy.load_state_dict(policy_state)
         policy.eval()
 
