@@ -2000,6 +2000,19 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > **勘误**：该轨迹终点 90 kWh = **多存入约 40 kWh**，**不是**「用掉电池」；不得据此宣称
 > 购电费优势。SOC 0.9 超容差 ⇒ 不可作公平配对（此实测事实保留）。
 
+> ✅ **M1.3g-f-c-k 完成（2026-09-30）**：正式 train-only 入口
+> `safe_rl_v2/formal_train.py`（`make train` 已指向它）+ **train release v1**
+> （`formal_training_ready: true`，env release v1 与 v5 **字节未变**）。
+> **3 个 seed × 512 批全部完成**（各 2048 episode / 98 304 transition / 8192 Adam step /
+> 512 次乘子更新；合计 **294 912** transitions；耗时 4h52m + 5h01m + 4h49m），
+> 批次顺序摘要逐 seed 等于矩阵 v3 预登记值，0 失败 run。
+> 期间**实测并修复**两处：`manifest_metadata` 覆盖 writer 保留字段 `seed`
+> （导致 seed 0 训完 512 批却无法落盘）、从已完成 checkpoint 恢复的空批次 `IndexError`；
+> 每次修入口都按先例前向刷新 train release（只差 entry 的 sha256 与 revision）。
+> 最终 checkpoint 已按 **`formal_training_policy`** 角色导出并通过源/导出完整 episode
+> 对照（25 + 21 字段 0 处不一致）。**只证明接线可复现，不声称收敛或性能**。
+> 等待人工复审。
+
 > ✅ **M9.2-R2 人工复审通过（2026-09-29）**：见 `docs/task_cards/M9.2-R2.md` §9。
 > v3 矩阵、源账本核对、源/导出完整 episode 对照、公平收益出口与勘误均已达标。
 > 下一卡 **M1.3g-f-c-k**（正式训练入口 + 发布 + 3 seed × 512 批）。
