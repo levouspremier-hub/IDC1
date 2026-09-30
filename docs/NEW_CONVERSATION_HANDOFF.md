@@ -2000,6 +2000,21 @@ corrector off 服务完美（1.0 / 0 / 0），两种模式四类物理违规均�
 > **勘误**：该轨迹终点 90 kWh = **多存入约 40 kWh**，**不是**「用掉电池」；不得据此宣称
 > 购电费优势。SOC 0.9 超容差 ⇒ 不可作公平配对（此实测事实保留）。
 
+> ⚠️ **M6-P2a 完成（2026-09-30）——重要发现，需人工裁决**：审核三个正式训练产物
+> **3/3 全通过**（512 批 / 98 304 transition / 8192 Adam / 512 乘子更新、批次顺序摘要 ==
+> 矩阵 v3、checkpoint 契约与正式 loader 读回一致、三 seed 各一次
+> `formal_training_policy` 导出 + 源/导出完整 episode 0 处不一致）。
+> **636 个 train-only episode（212 train 日 × 3 seed）**：服务 **636/636 合格**
+> （按时率/工作量率 1.0、期末剩余 0、不可中断中断 0、四类物理违规 0），
+> 但**终点库存 0/636 合格**——**每一个 episode 都停在 `bess_soc_min = 0.10`**
+> （目标 0.5、容差 0.05）⇒ 按 M9.2-R1 的公平配对门禁，**没有一条可比**，
+> 协议 §1 的主比较无法产出。
+> **已定位**：`planning/model.py` 的 H 步规划目标只有 electricity/degradation/business/
+> deadline 四项，**SOC 只有上下界、没有终点目标项**，故规划器最优地放光电池；
+> env 的终点 SOC 惩罚只在最后一步加一次（权重 2.0），不足以约束。
+> **结论：现有 checkpoint 不具备进入 validation 的条件**（详见卡 §7.6），
+> 修复建议 A/B 均改训练语义 ⇒ 需重训。**未**读 validation/test、**未**重训。
+
 > ✅ **M1.3g-f-c-k 完成（2026-09-30）**：正式 train-only 入口
 > `safe_rl_v2/formal_train.py`（`make train` 已指向它）+ **train release v1**
 > （`formal_training_ready: true`，env release v1 与 v5 **字节未变**）。
