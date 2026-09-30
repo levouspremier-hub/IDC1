@@ -790,7 +790,17 @@ def test_v5_readiness_is_still_false():
 
 
 @needs_assets
-def test_make_train_still_exits_two_without_synthetic_fallback():
+def test_make_train_fails_closed_without_a_synthetic_fallback():
+    """`make train` 必须 **fail closed**，且**不**回退 synthetic。
+
+    **M1.3g-f-c-k 更新**：训练已由 `train release v1` 正式放行，`make train` 现进入
+    **正式**入口 `safe_rl_v2.formal_train`；无参数时以 **usage 错误** exit 2
+    （显式要求 `--run-id` / `--seed`），**仍不**跑任何合成 dry run。
+
+    原第三条断言「`runs/` 下不得存在 `checkpoint*.pt`」在本卡后**不再成立**：
+    正式入口的批次边界与最终 checkpoint 是**预期**产物。故改以「失败发生在做任何工作
+    **之前**」为判据（stderr 报出缺失的必需参数），意图不变：fail closed、不回退合成。
+    """
     import subprocess
 
     result = subprocess.run(
@@ -798,7 +808,8 @@ def test_make_train_still_exits_two_without_synthetic_fallback():
     )
     assert result.returncode == 2
     assert "synthetic" not in result.stdout.lower() or "回退" in result.stdout
-    assert not list(REPO_ROOT.glob("runs/*/checkpoint*.pt"))
+    combined = result.stdout + result.stderr
+    assert "--run-id" in combined and "--seed" in combined, combined[-400:]
 
 
 def _boom(path, text):
