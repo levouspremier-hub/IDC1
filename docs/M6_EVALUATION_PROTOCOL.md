@@ -68,9 +68,9 @@
 ## 6. 冻结的实验矩阵（M9.2）
 
 共享场景、训练与评估日期、种子、五方法席位与统计规则已冻结为
-**`configs/experiments/m9_experiment_matrix_v1.json`**（`status = frozen_matrix`），
-由只读校验器 `python -m scripts.verify_m92_matrix` 从 **live** 来源逐项重算校验
-（36 项，全通过；篡改任何一项即 exit≠0）。
+**`configs/experiments/m9_experiment_matrix_v4.json`**（M6-P2b；`status = frozen_matrix`），
+从 v3 继承实验设计，仅更新库存训练语义与配置绑定。旧 v1/v2/v3 保留。
+`scenario.inventory_release.load_matrix()` 校验设计逐字段相同与所有来源的 live hash。
 
 要点：
 
@@ -87,9 +87,22 @@
 - **五方法席位**：规则 / 独立滚动优化 / 新 21 维惩罚 PPO / 安全 PPO＋单步修正 /
   安全 PPO＋联合滚动修正——当前**全部**为 `planned/not_runnable`（未实现或无正式配置），
   席位与缺项清单保留，**不造参数、checkpoint 或假运行**。
-- **配对与统计**：配对单位 = (split, episode, training_seed)；主比较是**同等服务下**
+- **配对与统计**：配对单位 = (split, episode_start, scenario_seed)，主场景种子为 0；
+  training_seed 0/1/2 只用于结果分层，基线每场景运行一次并在各层引用，不增加独立样本数。
+  主比较是**同等服务与库存条件下**
   购电费 SGD 与购电归属碳排 kgCO₂e **分列**；按连续 **7 日块**、以训练 seed 分层的 95% 区间，
   末尾不足 7 日的块保留；失败与不合格者完整报告但不进入配对差。
 
 **矩阵冻结 ≠ 正式训练放行。** `formal_env_ready=true` 不代表可训练或可评估；
-当前 `formal_training_ready=false`，正式训练和 validation/test 均未由本协议放行。
+v4 继承矩阵中 `formal_training_ready=false`；正式训练由独立的训练发布 v2、
+实际代码/资产验签，以及三种子各 8 批的 train-only 短跑闸门合取放行。
+旧 checkpoint 无法恢复新版训练或进入新版正式评估，只能用于显式历史诊断。
+validation/test 仍须等待新训练产物复审；训练成本是否漂亮不作为 readiness 门槛。
+
+M6-P2b 共同终点目标为既定 50% SOC，合格区间仍为 45%–55%。双方完整 episode、
+冻结服务标准与物理约束通过，且终点电量差 ≤1e-6 kWh，才生成公平成本/碳配对差。
+滚动规划覆盖真实 episode 的全部剩余步数；因果预测与明确声明的窗口外假设不变。
+规划中不可达、求解失败/超时、实际终点与规划终点的偏差分别报告。
+实际库存不合格本身不构成预测误差的归因证据。终点恢复诊断量不冒充已发生的购电。
+联合滚动安全 PPO 修复通过也只占一个席位；仍缺规则、独立滚动、惩罚 PPO、
+单步安全 PPO 四个正式席位，不能称五方法比较已就绪。

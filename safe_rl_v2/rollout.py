@@ -275,5 +275,12 @@ def collect_rollout(
                 <= unwrapped.bess_soc_final_tolerance,
             "charge_kwh": unwrapped.total_bess_charge_kWh,
             "discharge_kwh": unwrapped.total_bess_discharge_kWh,
+            "final_planning_audit": correction_info["inventory_audit"],
+            "inventory_unreachable_steps": sum(
+                t.correction_info["inventory_audit"].get("target_reachable") is False
+                for t in buffer.transitions[-stats["transitions"]:]),
+            "inventory_unproven_steps": sum(
+                t.correction_info["inventory_audit"].get("target_reachable") is None
+                for t in buffer.transitions[-stats["transitions"]:]),
         }
     return stats

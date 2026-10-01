@@ -498,6 +498,9 @@ def run_training_batch(
         "carbon": np.asarray([float(t.carbon_cost) for t in buffer.transitions]),
     })
     multipliers_post = {k: float(v) for k, v in lagrangian.multipliers().items()}
+    effective_adv = (frozen["adv_reward"]
+                     - multipliers_pre["business"] * frozen["adv_business"]
+                     - multipliers_pre["carbon"] * frozen["adv_carbon"])
 
     return {
         "batch_index": int(batch_index),
@@ -570,9 +573,12 @@ def run_training_batch(
                                              for t in buffer.transitions])),
             "head_grad_norm_mean": float(np.mean([s["storage_head_grad_norm"]
                                                   for s in step_records])),
-            "effective_advantage_mean": float((frozen["adv_reward"]
-                - multipliers_pre["business"] * frozen["adv_business"]
-                - multipliers_pre["carbon"] * frozen["adv_carbon"]).mean()),
+            "effective_advantage_mean": float(effective_adv.mean()),
+            "effective_advantage_std": float(effective_adv.std()),
+            "raw_storage_advantage_covariance": float((
+                (raw_action[:, -1] - raw_action[:, -1].mean())
+                * (effective_adv - effective_adv.mean())).mean()),
+            "exec_storage_std": float(np.std([t.exec_action[-1] for t in buffer.transitions])),
             "reward_sum": float(sum(t.reward for t in buffer.transitions)),
             "economic_reward_sum": float(sum(t.correction_info.get(
                 "inventory_training_diagnostics", {}).get("r_cost", 0.0)
@@ -580,6 +586,9 @@ def run_training_batch(
             "terminal_reward_sum": float(sum(t.correction_info.get(
                 "inventory_training_diagnostics", {}).get("r_soc_final", 0.0)
                                              for t in buffer.transitions)),
+            "degradation_reward_sum": float(sum(t.correction_info.get(
+                "inventory_training_diagnostics", {}).get("r_bess_degradation", 0.0)
+                                                for t in buffer.transitions)),
         },
         "claims": dict(CLAIMS),
     }

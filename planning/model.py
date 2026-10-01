@@ -850,7 +850,8 @@ def _projection_empty(
         residuals_by_constraint={}, max_constraint_residual=0.0,
         power_approximation_used=True,
         inventory_audit=dict(audit.get("inventory_audit", {"target_reachable": None,
-                          "band_reachable": None,
+                          "band_reachable": None, "target_gap_kwh": None,
+                          "band_gap_kwh": None, "predicted_terminal_kwh": None,
                           "status": "unproven", "reachability_solve_time_s": 0.0}
                          if isinstance(snapshot, InventorySnapshot) else {})),
     )

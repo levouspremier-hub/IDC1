@@ -124,6 +124,21 @@ def test_wrapper_keeps_raw_and_records_actual_inventory():
     assert info['inventory_audit']['actual_energy_kwh'] == pytest.approx(50.0)
 
 
+def test_final_step_timeout_records_unknown_prediction_and_actual_inventory(monkeypatch):
+    from safe_rl.corrector_wrapper import CorrectorWrapper
+    class Timeout:
+        status = 1
+        x = None
+    monkeypatch.setattr('scipy.optimize.milp', lambda **kwargs: Timeout())
+    wrapped = CorrectorWrapper(_env(horizon=1), corrector_time_limit_s=.25)
+    _, _, done, _, info = wrapped.step(np.zeros(21, dtype=np.float32))
+    assert done
+    assert info['correction_reason'] == 'timeout'
+    assert info['inventory_audit']['target_reachable'] is None
+    assert info['inventory_audit']['terminal_execution_residual_kwh'] is None
+    assert info['inventory_audit']['actual_soc'] == pytest.approx(.5)
+
+
 def test_observed_half_hour_roundoff_does_not_trigger_zero_fallback():
     import json
     from pathlib import Path
@@ -138,3 +153,22 @@ def test_observed_half_hour_roundoff_does_not_trigger_zero_fallback():
     assert result.solver_status == 'optimal'
     assert result.inventory_audit['target_reachable'] is True
     assert result.soc_kwh[-1] == pytest.approx(50.0, abs=1e-6)
+
+
+@pytest.mark.leakage
+def test_formal_inventory_inputs_ignore_future_truth_and_unarrived_task_details():
+    from safe_rl_v2.formal_train_loop import build_train_env, load_frozen_training_config
+
+    env, _ = build_train_env(48, master_seed=0, config=load_frozen_training_config())
+    env.terminal_inventory_enabled = True
+    env.reset(seed=0)
+    before = build_snapshot(env)
+    for series in (env.price_t, env.pv_t, env.wt_t, env.T_amb, env.carbon_factor_t):
+        series[1:] += 1000.0
+    for task in env.tasks:
+        if task.status == 'not_arrived':
+            task.workload *= 1000
+            task.remaining_work *= 1000
+    after = build_snapshot(env)
+    assert before == after
+    assert after.planning_horizon_steps == 48

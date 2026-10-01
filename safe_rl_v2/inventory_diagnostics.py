@@ -47,6 +47,8 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "physical_violation_count": len(violations_in(record.physical)),
         "final_soc": inventory.final_soc,
         "target_gap_kwh": abs(inventory.final_energy_kwh - inventory.target_energy_kwh),
+        "band_gap_kwh": max(abs(inventory.final_energy_kwh - inventory.target_energy_kwh)
+                            - env.bess_soc_final_tolerance * env.bess_capacity_kWh, 0.0),
         "inventory_qualified": inventory.final_soc_within_env_tolerance,
         "target_qualified": abs(inventory.final_energy_kwh - inventory.target_energy_kwh) <= 1e-6,
         "purchase_cost_sgd": record.purchase_cost_sgd,
@@ -67,9 +69,11 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "inventory_unreachable_steps": sum(a.get("target_reachable") is False for a in audit)
         if terminal else None,
         "failure": record.failure_classification,
+        "final_planning_audit": audit[-1] if terminal and audit else {},
         "injection_provenance": injection.provenance_hash,
     }
-    for key in ("measured_reward", "r_cost", "r_soc_final", "r_bess_degradation", "r_carbon"):
+    reward_keys = sorted({key for r in rows for key in r if key.startswith("r_")})
+    for key in ["measured_reward", *reward_keys]:
         result[key + "_sum"] = sum(float(r[key]) for r in rows)
         result[key + "_discounted"] = sum(gamma ** i * float(r[key])
                                            for i, r in enumerate(rows))

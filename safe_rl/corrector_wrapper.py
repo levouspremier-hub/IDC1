@@ -77,13 +77,25 @@ class CorrectorWrapper(gym.Wrapper):
                 "actual_energy_kwh": float(self.env.bess_energy_kWh),
                 "actual_soc": float(self.env.bess_soc),
                 "episode_complete": bool(terminated),
+                "actual_terminal_band_gap_kwh": (max(
+                    (float(self.env.bess_soc_target)
+                     - float(self.env.bess_soc_final_tolerance))
+                    * float(self.env.bess_capacity_kWh) - float(self.env.bess_energy_kWh),
+                    float(self.env.bess_energy_kWh) - (float(self.env.bess_soc_target)
+                        + float(self.env.bess_soc_final_tolerance))
+                    * float(self.env.bess_capacity_kWh), 0.0) if terminated else None),
                 "actual_terminal_target_gap_kwh": (
                     abs(float(self.env.bess_energy_kWh) - float(self.env.bess_soc_target
                         * self.env.bess_capacity_kWh)) if terminated else None),
+                "terminal_execution_residual_kwh": (
+                    float(self.env.bess_energy_kWh)
+                    - correction.inventory_audit["predicted_terminal_kwh"]
+                    if terminated and correction.inventory_audit.get("predicted_terminal_kwh")
+                    is not None
+                    else None),
             }
             info["inventory_training_diagnostics"] = {
-                key: float(info[key]) for key in (
-                    "r_cost", "r_soc_final", "r_bess_degradation", "r_carbon")
+                key: float(value) for key, value in info.items() if key.startswith("r_")
             }
             info["inventory_training_diagnostics"].update(
                 charge_kw=float(info["bess_charge_power_kW"]),
