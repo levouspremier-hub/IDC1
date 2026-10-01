@@ -319,3 +319,9 @@ seed0 新初始化8批受控短跑已启动；seed1/2、三种子闸门、新完
 并写五类产物及代码/测试/数据来源hash。当前仍在运行，不称完整门禁通过。
 最终语义24-origin历史重放、奖励对照、3×512重训与636日诊断仍待完成；
 长训、validation/test均未启动，四个其他方法席位仍缺。
+
+完整门禁首轮 `m6p2b_checks_v2_r2` 保留为失败：ruff通过，但mypy将交叉导入
+的测试识别成两个模块名（同一 terminal_inventory.py），pytest未启动。
+`00225e7` 只在 Makefile 指定 `--explicit-package-bases`，不排除文件或错误。
+独立完整mypy 183文件通过。新完整门禁 `m6p2b_checks_v2_r2_retry1` 已重新启动，
+ruff/mypy通过，pytest进行中；本节仍不声明完整门禁或长训完成。
