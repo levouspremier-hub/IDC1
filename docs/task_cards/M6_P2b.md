@@ -157,3 +157,18 @@ train origin 的已验签温度预测与执行诊断真值，冻结 `ceil(max(�
 不自动启动其他种子或validation/test，不覆盖既有资产。50%来自上一版共同
 终点协议，不是物理要求；45%–55%仍是库存合格区间。若修改共同参考目标或
 公平成本结算规则，应显式修订所有方法的同一协议，不能静默放宽1e-6阈值。
+
+## 三组正式产物与残余缺陷复审（2026-10-02）
+
+用户要求查验旧三组正式训练是否还有问题。本批只读检查旧权重、旧636日诊断、
+新版96日短跑及当前规划/验收代码；允许新增 scripts/m6p2b_defect_audit.py、
+docs/audits/M6_P2b_DEFECT_AUDIT.md 和全新 runs/m6p2b_defect_audit_v2_r1/。
+允许用短小受控算例检验服务预留与规划执行是否一致，求解仍使用0.25秒预算。
+禁止更新权重、启动长训、运行validation/test、修改运行时语义或覆盖旧产物。
+
+改前证据：旧636日库存资格0/636；新版96日精确目标2/96而short_gate仍通过。
+现有make check重试日志停在55%，原执行会话及进程均已不存在，不能报告为通过。
+验收命令：uv run python -m scripts.m6p2b_defect_audit；uv run ruff check
+scripts/m6p2b_defect_audit.py；git diff --check。证据保存五类产物、旧资产当前hash、
+checkpoint原生读回、算例输入/求解状态/缺口、代码定位以及报告/manifest读回校验。
+本复审独立回滚点9c62643；结果分开列明已复现缺陷、验收漏洞与尚未证明的风险。
