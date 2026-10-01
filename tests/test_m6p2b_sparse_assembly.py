@@ -77,3 +77,19 @@ def test_certified_reachability_and_action_solver_timeout_are_separate(monkeypat
     assert result.inventory_audit['target_reachable'] is True
     assert result.inventory_audit['reachability_method'] == 'base_only_zero_gap_certificate'
     assert result.inventory_audit['predicted_terminal_kwh'] is None
+
+
+def test_observed_stage_b_native_solve_error_is_repaired_without_domain_relaxation():
+    import json
+    from pathlib import Path
+    from contracts.inventory import InventorySnapshot
+    fixture = json.loads((Path(__file__).parent / 'fixtures'
+                          / 'm6p2b_stage_b_solve_error.json').read_text())
+    snapshot = InventorySnapshot.model_validate(fixture['snapshot'])
+    raw = fixture['raw_action']
+    result = model.solve_time_indexed_mip_raw_projection(
+        snapshot, DispatchProposal(compute_actions=raw[:20], storage_action=raw[-1]))
+    assert result.solver_status == 'optimal'
+    assert result.max_constraint_residual <= 1e-6
+    assert result.inventory_audit['target_reachable'] is True
+    assert abs(result.soc_kwh[-1] - 50.) <= 1e-6
