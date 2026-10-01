@@ -1062,10 +1062,18 @@ def solve_time_indexed_mip_raw_projection(
             guard.aggregate_arrival_work)
         ub[off_aggregate_backlog] = 0.
         ub[off_aggregate_backlog + H] = guard.aggregate_backlog_work[-1]
-        ub[off_prefix:off_prefix + n_task] = 1.
+        known_rate_upper = sum(min(task.remaining_work, task.max_rate_work_per_step)
+                               for task in snapshot.tasks)
+        backlog_upper = 0.
         for k in range(H):
-            ub[off_aggregate_busy + k] = int(sum(guard.aggregate_arrival_work[:k + 1]) > 1e-8)
+            available_work_upper = backlog_upper + guard.aggregate_arrival_work[k]
+            ub[off_aggregate_work + k] = min(sum(cap), available_work_upper)
+            backlog_upper = max(available_work_upper - max(sum(cap) - known_rate_upper, 0.), 0.)
+            ub[off_aggregate_backlog + k + 1] = min(
+                ub[off_aggregate_backlog + k + 1], backlog_upper)
+            ub[off_aggregate_busy + k] = int(backlog_upper > 1e-8)
         for i, task in enumerate(snapshot.tasks):
+            ub[off_prefix + i] = int(min(task.remaining_work, task.max_rate_work_per_step) > 1e-8)
             ub[off_bus + i] = max(
                 task.remaining_work - guard.known_service_required_end_work[i], 0.)
             ub[off_dls + i] = max(
