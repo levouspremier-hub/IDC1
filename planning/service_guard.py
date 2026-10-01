@@ -18,6 +18,9 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
         raise ValueError("unknown terminal service guard version")
     if not bool(getattr(env, "terminal_inventory_enabled", False)):
         raise ValueError("service guard requires terminal inventory contract")
+    margin = float(getattr(env, "terminal_service_temperature_margin_c", 0.))
+    if not np.isfinite(margin) or margin < 0:
+        raise ValueError("invalid service temperature margin")
     now = int(env.current_step)
     live = {str(t.task_id): t for t in env.tasks if t.status != "not_arrived"}
     summaries = [dict(task_id=t.task_id, remaining_work=t.remaining_work,
@@ -75,7 +78,7 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
                 group[g] += extra
                 reserve_work -= extra
         loads = float(env.base_load) + group / np.maximum(rates, 1e-6)
-        power = float(env._idc_power_kw(np.clip(loads, 0., 1.), float(temp)))
+        power = float(env._idc_power_kw(np.clip(loads, 0., 1.), float(temp) + margin))
         powers.append(power)
         charge_limits.append(min(float(env.bess_charge_power_max_kW),
                                  max(float(env.access_limit_kw) - power, 0.)))
@@ -83,10 +86,12 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
             remaining_known[i]["remaining_work"] = max(
                 remaining_known[i]["remaining_work"] - sum(row), 0.)
     return ArrivedServiceReserve(
-        charge_limit_kw=charge_limits[0], charge_limits_kw=charge_limits,
+        temperature_margin_c=margin, charge_limit_kw=charge_limits[0],
+        charge_limits_kw=charge_limits,
         reserved_service_power_kw=powers[0],
         group_work_floor=actual_floor.tolist(), current_allocation=floor.matrix,
         note="Current arrived deadlines and running noninterruptible work retain executor order; "
-        "charging reserve assumes zero renewables at each remaining step, B6 temperature, "
+        "charging reserve assumes zero renewables at each remaining step, B6 temperature plus "
+        "registered train margin, "
         "earliest known work plus same-step B6 aggregate arrivals; no unseen task instances. "
         "Reachability under these planning assumptions is not a physical impossibility proof.")

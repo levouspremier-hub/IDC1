@@ -52,6 +52,7 @@ def test_service_reserve_uses_only_arrived_tasks_and_forecast_channels():
     env, _ = build_train_env(48, master_seed=0, config=load_frozen_training_config())
     env.terminal_inventory_enabled = True
     env.terminal_service_guard_version = 'arrived-service-reserve-v1'
+    env.terminal_service_temperature_margin_c = 4.4
     env.reset(seed=0)
     before = build_snapshot(env)
     assert before.service_guard is not None
@@ -132,3 +133,11 @@ def test_temperature_reserve_retains_service_when_signed_forecast_underestimates
     assert info['access_curtailment_work'] <= 1e-6
     assert env.tasks[0].remaining_work == pytest.approx(4., abs=1e-6)
     assert snapshot.planning_forecast.temperature == [25.] * 8
+
+
+@pytest.mark.parametrize("margin", [-1., float("nan"), float("inf")])
+def test_invalid_temperature_margin_is_rejected(margin):
+    env = guarded_env()
+    env.terminal_service_temperature_margin_c = margin
+    with pytest.raises(ValueError, match="temperature margin"):
+        build_snapshot(env)

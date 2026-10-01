@@ -54,6 +54,13 @@ def historical_policy(seed):
 
 
 def replay(config, origins, run_id):
+    from scenario.inventory_release import diagnostic_candidate_config
+    repaired_config = diagnostic_candidate_config()
+    repaired_config["status"] = "historical_diagnostic_only"
+    # Old weights remain exactly 520-dimensional. The new policy state interface
+    # is intentionally absent ONLY in this explicit historical comparison arm.
+    repaired_config["training"]["corrector"].pop("observation_version")
+    repaired_config["training"]["policy"]["obs_dim"] = 520
     rows, probes, provenance, sources = [], [], {}, []
     for seed in (0, 1, 2):
         policy, path, sha = historical_policy(seed)
@@ -62,11 +69,12 @@ def replay(config, origins, run_id):
         for origin in origins:
             for terminal in (False, True):
                 result, _steps, _record, _inv = evaluate_origin(
-                    config, origin, 0, action_fn, terminal=terminal, run_id=run_id)
+                    repaired_config if terminal else config, origin, 0, action_fn,
+                    terminal=terminal, run_id=run_id)
                 result.update(policy_seed=seed, arm="repaired" if terminal else "historical")
                 rows.append(result)
                 provenance[origin] = result["injection_provenance"]
-            env, _ = build_train_env(origin, master_seed=0, config=config)
+            env, _ = build_train_env(origin, master_seed=0, config=repaired_config)
             env.terminal_inventory_enabled = True
             obs, _ = env.reset(seed=0)
             raw = deterministic_action(policy, obs)
@@ -100,7 +108,10 @@ def replay(config, origins, run_id):
         sources.append({"seed": seed, "path": str(path.relative_to(ROOT)), "sha256": sha,
                         "parameter_updates": 0})
     report = {"historical_sources": sources, "same_state_storage_probes": probes,
-              "reward_decision": "original reward retained pending short-run evidence",
+              "reward_decision": repaired_config["reward_semantics"],
+              "repaired_candidate_config": repaired_config,
+              "old_policy_state_interface_retained_for_historical_diagnostic_only": True,
+              "formal_acceptance_claimed": False,
               "scope": "historical_train_only_diagnostic", "origins": list(origins)}
     return rows, report, provenance
 
@@ -163,7 +174,8 @@ def freeze_calibration(config, folder, report):
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
     frozen["training"]["corrector"].update(
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
-        service_guard_version="arrived-service-reserve-v1")
+        service_guard_version="arrived-service-reserve-v1",
+        service_temperature_margin_c=config["service_temperature_reserve"]["margin_c"])
     frozen["training"]["backend"]["note"] = (
         "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False")
     frozen["frozen_decision"]["card"] = "M6-P2b"

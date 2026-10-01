@@ -24,6 +24,8 @@ class ArrivedServiceReserve(ContractBase):
     version: Literal["arrived-service-reserve-v1"] = "arrived-service-reserve-v1"
     renewable_reserve_assumption: Literal["zero-renewables-through-real-remainder"] = (
         "zero-renewables-through-real-remainder")
+    temperature_margin_c: float = 0.0
+    temperature_reserve_assumption: str = "B6 forecast plus registered nonnegative train margin"
     charge_limit_kw: float
     charge_limits_kw: list[float]
     reserved_service_power_kw: float
@@ -64,6 +66,8 @@ def validate_inventory_snapshot(snapshot: InventorySnapshot) -> None:
                 or not np.all(np.isfinite(charge_limits)) or np.any(charge_limits < 0)
                 or np.any(charge_limits > snapshot.bess_charge_power_max_kw)
                 or charge_limits[0] != guard.charge_limit_kw
+                or not np.isfinite(guard.temperature_margin_c)
+                or guard.temperature_margin_c < 0
                 or not np.isfinite(guard.reserved_service_power_kw)
                 or guard.reserved_service_power_kw < 0
                 or not np.all(np.isfinite(allocation)) or np.any(allocation < 0)

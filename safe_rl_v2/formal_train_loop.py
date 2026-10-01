@@ -335,6 +335,8 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
             if service_guard_version != SERVICE_GUARD_VERSION:
                 raise FormalTrainLoopError("unregistered arrived service guard version")
             env.terminal_service_guard_version = service_guard_version
+            env.terminal_service_temperature_margin_c = float(
+                config["training"]["corrector"].get("service_temperature_margin_c", 0.))
     return env, injection
 
 

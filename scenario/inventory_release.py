@@ -66,6 +66,14 @@ def reward_repair_spec():
             "evidence_sha256": "72cf0cc0d06db7d8dc7e1d8b391a7acd0268abd5f25d2caa0286c5150a19a278"}
 
 
+def temperature_reserve_spec():
+    return {"version": "train-temperature-upper-reserve-v1", "margin_c": 4.4,
+            "formula": "ceil(max(train_realized_c - signed_B6_forecast_c, 0) * 10) / 10",
+            "evidence_path": "runs/m6p2b_temperature_calibration_v2_r1/report.json",
+            "evidence_sha256": "386a5020d78e8684385e3e07ef869f7bb93b4e64645348892d9e97940f745fb7",
+            "physical_error_bound_proven": False, "forecast_arrays_modified": False}
+
+
 def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1"):
     """Explicit unreleased semantics for calibration/probes, never formal restore."""
     from safe_rl_v2.formal_train_loop import load_frozen_training_config
@@ -77,10 +85,12 @@ def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1")
         config["reward_repair"] = reward_repair_spec()
     elif reward_semantics != "original-env-reward-v1":
         raise ValueError("unregistered candidate reward semantics")
+    config["service_temperature_reserve"] = temperature_reserve_spec()
     config["training"]["corrector"].update(
         inventory_version=SEMANTICS, horizon_policy="real_episode_remainder",
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
-        service_guard_version="arrived-service-reserve-v1")
+        service_guard_version="arrived-service-reserve-v1",
+        service_temperature_margin_c=temperature_reserve_spec()["margin_c"])
     config["training"]["policy"]["obs_dim"] = observation_spec()["dimension"]
     config["candidate_source"] = {
         "path": "configs/training/idc_training_config_v1.json",
@@ -106,6 +116,11 @@ def load_config():
             or config["reward_semantics"] != "common-sgd-degradation-v1"
             or config.get("reward_repair") != reward_repair_spec()):
         raise ValueError("unregistered inventory/reward/budget semantics")
+    reserve = config.get("service_temperature_reserve")
+    if (reserve != temperature_reserve_spec()
+            or corrector.get("service_temperature_margin_c") != reserve["margin_c"]
+            or sha(ROOT / reserve["evidence_path"]) != reserve["evidence_sha256"]):
+        raise ValueError("registered train temperature reserve binding mismatch")
     evidence = config["reward_repair"]
     if sha(ROOT / evidence["evidence_path"]) != evidence["evidence_sha256"]:
         raise ValueError("reward repair train-only evidence hash mismatch")
