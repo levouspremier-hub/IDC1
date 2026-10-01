@@ -148,6 +148,19 @@ def test_seed0_only_short_gate_cannot_authorize_three_seed_formal_training(tmp_p
         train.require_short_gate(binding)
 
 
+def test_aggregate_reservation_cannot_move_arrived_work_to_a_cheaper_charging_step():
+    env = fixture_env(task=False)
+    env.task_arrival_forecast[:] = [0., 5., 0.]
+    snapshot = build_snapshot(env)
+    snapshot = snapshot.model_copy(update={"planning_forecast": snapshot.planning_forecast.model_copy(
+        update={"price": [.2, .01, 1.]})})
+    plan = solve_time_indexed_mip_raw_projection(
+        snapshot, DispatchProposal(compute_actions=[0.] * 20, storage_action=0.), time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    assert plan.inventory_audit["aggregate_service_work"][1] == pytest.approx(5.)
+    assert plan.inventory_audit["aggregate_backlog_work"][2] == pytest.approx(0.)
+
+
 def test_registered_power_upper_bound_covers_nonlinear_idc_and_group_mix():
     from planning.service_guard import power_upper_envelope
 
