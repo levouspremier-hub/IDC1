@@ -134,3 +134,11 @@ uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_shor
 改前证据：`runs/m6p2b_reward_counterfactual_v2_r4/metrics.parquet` 的两条 amplitude=.1
 服务失败，72 日中服务 70、库存区间 72、物理违规及回退 0。输入复用提交 43fac23
 为本定位批次的独立回滚点，定位后必须先提交对应失败测试再修改执行语义。
+
+温度误差返修允许在同一 trace 入口增加 `--temperature-calibration`，只取固定24
+train origin 的已验签温度预测与执行诊断真值，冻结 `ceil(max(真值-预测,0)*10)/10`
+摄氏度作为服务功率预留的温度上偏假设。物理执行仍用原真值链；预测数组不变，
+假设不构成物理不可达证明，超出该训练误差范围仍须记录，不保证 heldout 数据。
+允许在 inventory 契约、service_guard、训练配置/发布接线中显式绑定该常数、公式与
+证据 hash。验收新增 `tests/test_m6p2b_service_guard.py` 的温度低估失败用例，先提交
+失败测试；范围仍不含环境 step。回滚点 d03e327，误差证据见 service_trace_v2_r1。
