@@ -138,7 +138,11 @@ def load_config():
     for key, value in report["candidate"].items():
         if key in ("schema", "status", "note", "corrector"):
             continue
-        if config["training"].get(key) != value:
+        actual = config["training"].get(key)
+        if key == "backend":
+            actual = {k: v for k, v in actual.items() if k != "note"}
+            value = {k: v for k, v in value.items() if k != "note"}
+        if actual != value:
             raise ValueError(f"v2 config differs from measured calibration: {key}")
     if any(not row["match"] for row in live_asset_hash_check(config).values()):
         raise ValueError("v2 calibration live asset mismatch")
