@@ -236,6 +236,13 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
         if config["training"]["corrector"].get("inventory_version") != "terminal-inventory-v1":
             raise FormalTrainLoopError("v2 requires explicit terminal inventory semantics")
         env.terminal_inventory_enabled = True
+        env.terminal_inventory_reward_version = config.get(
+            "reward_semantics", "original-env-reward-v1")
+        if env.terminal_inventory_reward_version == "common-sgd-degradation-v1":
+            actual_weight = (env.reward_cost_weight / env.cost_ref
+                             * env.bess_degradation_cost_ref)
+            if abs(actual_weight - config["reward_repair"]["equivalent_weight"]) > 1e-12:
+                raise FormalTrainLoopError("reward repair coefficient differs from frozen binding")
         observation_version = config["training"]["corrector"].get("observation_version")
         if observation_version is not None:
             from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION

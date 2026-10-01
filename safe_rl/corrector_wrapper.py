@@ -18,6 +18,8 @@ from planning.snapshot_adapter import build_snapshot
 
 INVENTORY_OBSERVATION_VERSION = "terminal-state-observation-v1"
 INVENTORY_OBSERVATION_FIELDS = ("current_soc", "target_soc", "episode_remaining_fraction")
+ORIGINAL_REWARD_VERSION = "original-env-reward-v1"
+COMMON_SGD_REWARD_VERSION = "common-sgd-degradation-v1"
 
 
 class CorrectorWrapper(gym.Wrapper):
@@ -32,6 +34,15 @@ class CorrectorWrapper(gym.Wrapper):
                 f"corrector_time_limit_s 必须为显式正数，实际 {corrector_time_limit_s!r}"
             )
         self.corrector_time_limit_s = float(corrector_time_limit_s)
+        self.reward_version = getattr(
+            env.unwrapped, "terminal_inventory_reward_version", ORIGINAL_REWARD_VERSION)
+        if self.reward_version not in (ORIGINAL_REWARD_VERSION, COMMON_SGD_REWARD_VERSION):
+            raise ValueError("unknown inventory reward semantics")
+        if self.reward_version == COMMON_SGD_REWARD_VERSION:
+            if not bool(getattr(env.unwrapped, "terminal_inventory_enabled", False)):
+                raise ValueError("inventory reward semantics require terminal inventory contract")
+            if env.unwrapped.cost_ref <= 0 or env.unwrapped.bess_degradation_cost_ref <= 0:
+                raise ValueError("inventory reward semantics require positive frozen scales")
         self.inventory_observation_version = getattr(
             env.unwrapped, "terminal_inventory_observation_version", None)
         if self.inventory_observation_version is not None:
@@ -93,6 +104,23 @@ class CorrectorWrapper(gym.Wrapper):
         )
 
         obs, reward, terminated, truncated, info = self.env.step(exec_action)
+        original_reward = float(reward)
+        original_degradation_reward = float(info["r_bess_degradation"])
+        purchase_slope = float(self.env.reward_cost_weight / self.env.cost_ref)
+        degradation_slope = float(
+            self.env.reward_bess_degradation_weight / self.env.bess_degradation_cost_ref)
+        if self.reward_version == COMMON_SGD_REWARD_VERSION:
+            degradation_slope = purchase_slope
+            info["r_bess_degradation"] = -degradation_slope * float(info["bess_degradation_cost"])
+            reward = original_reward - original_degradation_reward + info["r_bess_degradation"]
+        info["reward_semantics_audit"] = {
+            "version": self.reward_version, "original_env_reward": original_reward,
+            "original_degradation_reward": original_degradation_reward,
+            "purchase_reward_per_sgd": purchase_slope,
+            "degradation_reward_per_sgd": degradation_slope,
+            "equivalent_degradation_weight": degradation_slope
+            * float(self.env.bess_degradation_cost_ref),
+        }
 
         # raw 原样保留（逐元素）；exec 为正确器第 0 步投影输出
         info["raw_action"] = raw_action

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 import warnings
@@ -11,7 +12,8 @@ import numpy as np
 import pandas as pd
 
 from runs.writer import write_run
-from safe_rl_v2.formal_train_loop import training_source_ledger
+from safe_rl.corrector_wrapper import CorrectorWrapper
+from safe_rl_v2.formal_train_loop import build_train_env, training_source_ledger
 from safe_rl_v2.inventory_diagnostics import evaluate_origin
 from scenario.inventory_release import (
     CONFIG_PATH,
@@ -54,16 +56,22 @@ def main():
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--origins-limit", type=int)
     parser.add_argument("--candidate", action="store_true")
+    parser.add_argument("--reward-version", choices=("original-env-reward-v1",
+                                                   "common-sgd-degradation-v1"))
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("counterfactual run already exists")
-    config = diagnostic_candidate_config() if args.candidate else load_config()
+    if args.reward_version is not None and not args.candidate:
+        raise ValueError("reward override is allowed only in explicit candidate diagnostics")
+    config = (diagnostic_candidate_config(**(
+        {"reward_semantics": args.reward_version} if args.reward_version is not None else {}))
+        if args.candidate else load_config())
     origins = list(select_origins())
     if args.origins_limit is not None:
         if not 1 <= args.origins_limit <= 24:
             raise ValueError("diagnostic origin prefix must have 1..24 entries")
         origins = origins[:args.origins_limit]
-    rows, pairs, provenance = [], [], {}
+    rows, pairs, probes, provenance = [], [], [], {}
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
@@ -102,7 +110,9 @@ def main():
                         "purchase_gain_sgd": purchase_gain,
                         "degradation_extra_sgd": degradation_extra,
                         "net_money_gain_sgd": purchase_gain - degradation_extra,
-                        "original_reward_gain": arm["measured_reward_sum"]
+                        "original_reward_gain": arm["original_env_reward_sum"]
+                        - baseline["original_env_reward_sum"],
+                        "measured_reward_gain": arm["measured_reward_sum"]
                         - baseline["measured_reward_sum"],
                         "reward_units_per_purchase_sgd": cost_slope,
                         "reward_units_per_degradation_sgd": degradation_slope,
@@ -112,9 +122,26 @@ def main():
                     }
                     pair["common_sgd_reward_arithmetic_gain"] = (
                         pair["original_reward_gain"]
-                        - (arm["r_bess_degradation_sum"] - baseline["r_bess_degradation_sum"])
+                        - (arm["original_degradation_reward_sum"]
+                           - baseline["original_degradation_reward_sum"])
                         - cost_slope * degradation_extra)
                     pairs.append(pair)
+                env, _ = build_train_env(origin, master_seed=0, config=config)
+                env.reset(seed=0)
+                for storage in (-1., 0., 1.):
+                    clone = copy.deepcopy(env)
+                    raw = np.asarray([1.] * 20 + [storage], dtype=np.float32)
+                    _, reward, _, _, info = CorrectorWrapper(
+                        clone, corrector_time_limit_s=.25).step(raw)
+                    probes.append({
+                        "origin": origin, "step": 0, "raw_storage": storage,
+                        "exec_storage": float(info["exec_action"][-1]), "reward": float(reward),
+                        "actual_charge_kw": info["bess_charge_power_kW"],
+                        "actual_discharge_kw": info["bess_discharge_power_kW"],
+                        "purchase_cost_sgd": info["electricity_cost"],
+                        "degradation_cost_sgd": info["bess_degradation_cost"],
+                        "correction_reason": info["correction_reason"],
+                        "reward_semantics_audit": info["reward_semantics_audit"]})
                 print(f"origin={origin} fair_pairs={sum(p['eligible'] for p in pairs[-2:])} "
                       f"net_money={[round(p['net_money_gain_sgd'], 6) for p in pairs[-2:]]}",
                       flush=True)
@@ -137,19 +164,25 @@ def main():
         "charge/discharge only with current SOC below/above target +/- .1",
         "proposal_version": "inventory-aware-causal-price-probe-v2",
         "amplitudes": [0., .05, .1], "parameter_updates": 0,
-        "original_reward_retained": True, "reward_arithmetic_only": True,
+        "original_reward_retained": config["reward_semantics"] == "original-env-reward-v1",
+        "reward_semantics": config["reward_semantics"],
+        "reward_arithmetic_only": config["reward_semantics"] == "original-env-reward-v1",
         "candidate_semantics_binding": semantics_binding(), "instrumentation_sha256": sha(__file__),
         "training_config_sha256": sha(ROOT / CONFIG_PATH) if not args.candidate else None,
         "pairs": pairs,
+        "same_state_storage_probes": probes,
         "fair_profitable_pairs": sum(p["eligible"] and p["net_money_gain_sgd"] > 1e-6
                                      for p in pairs),
         "profitable_pairs_with_negative_original_reward": sum(
             p["eligible"] and p["net_money_gain_sgd"] > 1e-6 and p["original_reward_gain"] < 0
             for p in pairs),
+        "profitable_pairs_with_positive_measured_reward": sum(
+            p["eligible"] and p["net_money_gain_sgd"] > 1e-6 and p["measured_reward_gain"] > 0
+            for p in pairs),
         "validation_run": False, "test_run": False, "formal_acceptance_claimed": False,
         "proposed_formula": "r_degradation = -reward_cost_weight * degradation_SGD / cost_ref",
         "coefficient_basis": "Same marginal reward per SGD for grid purchase and degradation; "
-        "frozen refs and all other reward terms unchanged; not implemented by this diagnostic",
+        "frozen refs and all other reward terms unchanged; registered wrapper semantics reported",
     }
     folder = write_run(
         args.run_id, config=config, metrics=pd.DataFrame(rows), report=report,

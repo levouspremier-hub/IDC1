@@ -138,7 +138,10 @@ def calibrate(config, origins, run_id):
     candidate = training_config_candidate(budgets, multipliers, observation_dims.pop())
     return rows, {"passed": passed, "scope": "train_only_calibration", "origins": list(origins),
                   "proposal_summaries": summaries, "candidate": candidate,
-                  "asset_hashes": asset_hashes(), "reward_changed": False}, provenance
+                  "asset_hashes": asset_hashes(),
+                  "reward_semantics": config["reward_semantics"],
+                  "reward_changed": config["reward_semantics"]
+                  != "original-env-reward-v1"}, provenance
 
 
 def freeze_calibration(config, folder, report):
@@ -154,8 +157,8 @@ def freeze_calibration(config, folder, report):
     frozen = copy.deepcopy(config)
     frozen.update(schema="idc-training-config-v2", version="v2", status="frozen",
                   configuration_revision="r2",
-                  note="M6-P2b train-only re-calibration; original environment reward retained",
-                  training=training, reward_semantics="original-env-reward-v1")
+                  note="M6-P2b train-only re-calibration; common SGD degradation reward",
+                  training=training)
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
     frozen["training"]["corrector"].update(
@@ -248,7 +251,7 @@ def short_gate():
             provenance.update({int(k): v for k, v in batch["origin_provenance"].items()})
     return sources, {"passed": not failed, "failed_checks": failed, "short_runs": sources,
                      "inventory_binding": binding,
-                     "reward_decision": "keep original reward" if not failed
+                     "reward_decision": load_config()["reward_semantics"] if not failed
                      else "short-run failures require repair before formal training"}, provenance
 
 
@@ -376,7 +379,7 @@ def main(argv=None):
                   "phase": args.phase, "origins": list(origins),
                   "environment_training_config": config,
                   "inventory_semantics": "terminal-inventory-v1",
-                  "reward_semantics": "original-env-reward-v1",
+                  "reward_semantics": config.get("reward_semantics", "original-env-reward-v1"),
                   "global_corrector_budget_s": .25},
                   metrics=pd.DataFrame(rows), report=report, base_dir=str(ROOT / "runs"),
                   command=command, status="success" if report.get("passed", True) else "failed",

@@ -59,8 +59,13 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "purchase_cost_sgd": record.purchase_cost_sgd,
         "degradation_cost_sgd": record.bess_degradation_cost_sgd,
         "reward_units_per_purchase_sgd": float(env.reward_cost_weight / env.cost_ref),
-        "reward_units_per_degradation_sgd": float(
-            env.reward_bess_degradation_weight / env.bess_degradation_cost_ref),
+        "reward_units_per_degradation_sgd": rows[0]["reward_semantics_audit"][
+            "degradation_reward_per_sgd"],
+        "reward_semantics": rows[0]["reward_semantics_audit"]["version"],
+        "original_env_reward_sum": sum(r["reward_semantics_audit"]["original_env_reward"]
+                                       for r in rows),
+        "original_degradation_reward_sum": sum(
+            r["reward_semantics_audit"]["original_degradation_reward"] for r in rows),
         "carbon_kg": record.carbon_kg_co2e,
         "charge_kwh": float(env.total_bess_charge_kWh),
         "discharge_kwh": float(env.total_bess_discharge_kWh),

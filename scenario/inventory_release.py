@@ -57,13 +57,26 @@ def observation_spec():
             "shared_by_all_methods": True}
 
 
-def diagnostic_candidate_config():
+def reward_repair_spec():
+    return {"version": "common-sgd-degradation-v1",
+            "formula": "r_degradation = -(reward_cost_weight / cost_ref) * degradation_SGD",
+            "coefficient_basis": "same marginal reward per SGD; original cost/carbon/service terms",
+            "equivalent_weight": 1. / 600., "frozen_refs_unchanged": True,
+            "evidence_path": "runs/m6p2b_reward_counterfactual_v2_r3/report.json",
+            "evidence_sha256": "72cf0cc0d06db7d8dc7e1d8b391a7acd0268abd5f25d2caa0286c5150a19a278"}
+
+
+def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1"):
     """Explicit unreleased semantics for calibration/probes, never formal restore."""
     from safe_rl_v2.formal_train_loop import load_frozen_training_config
     config = copy.deepcopy(load_frozen_training_config())
     config.update(schema="idc-training-config-v2", version="v2",
                   configuration_revision="r2", status="candidate_diagnostic_only",
-                  reward_semantics="original-env-reward-v1")
+                  reward_semantics=reward_semantics)
+    if reward_semantics == "common-sgd-degradation-v1":
+        config["reward_repair"] = reward_repair_spec()
+    elif reward_semantics != "original-env-reward-v1":
+        raise ValueError("unregistered candidate reward semantics")
     config["training"]["corrector"].update(
         inventory_version=SEMANTICS, horizon_policy="real_episode_remainder",
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
@@ -90,8 +103,12 @@ def load_config():
     if corrector.get("service_guard_version") != "arrived-service-reserve-v1":
         raise ValueError("r2 requires registered causal arrived service reserves")
     if (corrector["inventory_version"] != SEMANTICS or corrector["time_limit_s"] != .25
-            or config["reward_semantics"] != "original-env-reward-v1"):
+            or config["reward_semantics"] != "common-sgd-degradation-v1"
+            or config.get("reward_repair") != reward_repair_spec()):
         raise ValueError("unregistered inventory/reward/budget semantics")
+    evidence = config["reward_repair"]
+    if sha(ROOT / evidence["evidence_path"]) != evidence["evidence_sha256"]:
+        raise ValueError("reward repair train-only evidence hash mismatch")
     from safe_rl_v2.formal_train_loop import live_asset_hash_check
     from scripts.calibrate_training_config import select_origins
     calibration = config["calibration"]
@@ -142,7 +159,7 @@ def build_release():
         raise ValueError("inventory release source closure must be committed")
     return {
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
-        "reward_semantics": "original-env-reward-v1", "approved_decision_id": "M6-P2b",
+        "reward_semantics": "common-sgd-degradation-v1", "approved_decision_id": "M6-P2b",
         "release_iteration": "r2",
         "supersedes": {"path": "configs/release/idc_formal_train_release_v2.json",
                        "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2.json")},

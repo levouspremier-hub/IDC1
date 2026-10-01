@@ -36,7 +36,8 @@ def test_common_sgd_degradation_scale_changes_only_that_reward_term(monkeypatch)
         if key.startswith('r_') and key != 'r_bess_degradation':
             assert info[key] == old[key]
     assert info['reward_semantics_audit']['version'] == 'common-sgd-degradation-v1'
-    assert info['reward_semantics_audit']['original_degradation_reward'] == old['r_bess_degradation']
+    assert (info['reward_semantics_audit']['original_degradation_reward']
+            == old['r_bess_degradation'])
 
 
 def test_unknown_reward_semantics_are_rejected():
