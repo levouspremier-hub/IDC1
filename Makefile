@@ -18,7 +18,7 @@ check:
 	@echo "== ruff check =="
 	@if [ -z "$(MAIN_PY)" ]; then echo "ruff: 无新主链文件（M1-M5 将加入）"; else uv run ruff check $(MAIN_PY); fi
 	@echo "== mypy =="
-	@if [ -z "$(MAIN_PY)" ]; then echo "mypy: 无新主链文件（M1-M5 将加入）"; else uv run mypy $(MAIN_PY); fi
+	@if [ -z "$(MAIN_PY)" ]; then echo "mypy: 无新主链文件（M1-M5 将加入）"; else uv run mypy --explicit-package-bases $(MAIN_PY); fi
 	@echo "== pytest -m 'not slow' =="
 	@uv run pytest -m 'not slow'; code=$$?; if [ $$code -eq 5 ]; then echo "pytest: 0 个测试被收集（M0.4 增加测试骨架）"; exit 0; else exit $$code; fi
 
