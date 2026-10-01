@@ -105,7 +105,8 @@ uv run python -m safe_rl_v2.inventory_train --short --seed 2 --run-id m6p2b_shor
 uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_short_gate_v2_r2
 ```
 
-上述 r3 counterfactual 为全 24-origin、零参数更新的未发布候选诊断，尚在运行。
+上述 r3 counterfactual 为已完成的全 24-origin、零参数更新原奖励候选诊断；
+r4 是全未来预留及新奖励的实测对照，残余两个服务失败已逐步定位并返修。
 初版 r2 因零购电费计算奖励斜率时报错，失败产物完整保留，原始逐步数据未成功
 落盘，报告明确标注仅有控制台舍入摘要，不能当作正式测量。斜率现从实际环境
 系数与冻结参考值计算，后续异常会保存已完成 episode 和完整失败状态。
