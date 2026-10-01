@@ -1023,7 +1023,8 @@ def solve_time_indexed_mip_raw_projection(
     off_aggregate_work = off_inventory_gap + (1 if inventory_enabled else 0)
     off_aggregate_backlog = off_aggregate_work + (H if coupled else 0)
     off_prefix = off_aggregate_backlog + (H + 1 if coupled else 0)
-    n_vars = off_prefix + (n_task if coupled else 0)
+    off_aggregate_busy = off_prefix + (n_task if coupled else 0)
+    n_vars = off_aggregate_busy + (H if coupled else 0)
 
     # 经济/服务目标（阶段 B 的 tie-break，单位 SGD）
     c_econ = np.zeros(n_vars)
@@ -1062,6 +1063,8 @@ def solve_time_indexed_mip_raw_projection(
         ub[off_aggregate_backlog] = 0.
         ub[off_aggregate_backlog + H] = guard.aggregate_backlog_work[-1]
         ub[off_prefix:off_prefix + n_task] = 1.
+        for k in range(H):
+            ub[off_aggregate_busy + k] = int(sum(guard.aggregate_arrival_work[:k + 1]) > 1e-8)
         for i, task in enumerate(snapshot.tasks):
             ub[off_bus + i] = max(
                 task.remaining_work - guard.known_service_required_end_work[i], 0.)
@@ -1112,6 +1115,11 @@ def solve_time_indexed_mip_raw_projection(
                             capacity_row[a(i, g, k)] = 1.
                             reserve_row[a(i, g, k)] = coefficient[g]
                     add(capacity_row, -np.inf, sum(cap), f"aggregate_shared_capacity[{k}]")
+                    add({off_aggregate_backlog + k + 1: 1.,
+                         off_aggregate_busy + k: -sum(guard.aggregate_arrival_work)},
+                        -np.inf, 0., f"aggregate_backlog_nonempty[{k}]")
+                    greedy_row = {**capacity_row, off_aggregate_busy + k: -sum(cap)}
+                    add(greedy_row, 0., np.inf, f"aggregate_earliest_processing[{k}]")
                     headroom = max(snapshot.access_limit_kw - guard.reserve_base_power_kw[k], 0.)
                     big_m = cmax + sum(c * w for c, w in zip(coefficient, cap, strict=True))
                     big_m += aggregate_coefficient * sum(cap)
@@ -1182,6 +1190,7 @@ def solve_time_indexed_mip_raw_projection(
     integrality[off_z:off_z + H] = 1
     if coupled and guard is not None:
         integrality[off_prefix:off_prefix + n_task] = 1
+        integrality[off_aggregate_busy:off_aggregate_busy + H] = 1
     # 全局 deadline：阶段 A 与 B 共享同一次调用的总预算
     deadline = (call_deadline if call_deadline is not None else
                 None if time_limit_s is None else _monotonic() + float(time_limit_s))
@@ -1207,7 +1216,7 @@ def solve_time_indexed_mip_raw_projection(
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
     _audit: dict = {
-        "n_variables": n_vars, "n_integer_variables": H + (n_task if coupled else 0),
+        "n_variables": n_vars, "n_integer_variables": H + (H + n_task if coupled else 0),
         "n_constraints": len(rows) + 1,
     }
 
@@ -1248,6 +1257,9 @@ def solve_time_indexed_mip_raw_projection(
                 witness[off_aggregate_work:off_aggregate_work + H] = guard.aggregate_service_work
                 witness[off_aggregate_backlog:off_aggregate_backlog + H + 1] = (
                     guard.aggregate_backlog_work)
+                for k in range(H):
+                    witness[off_aggregate_busy + k] = int(
+                        guard.aggregate_backlog_work[k + 1] > 1e-8)
                 for i in range(n_task):
                     witness[off_prefix + i] = int(sum(
                         guard.known_service_allocation[0][i]) > 1e-8)
@@ -1517,7 +1529,7 @@ def solve_time_indexed_mip_raw_projection(
     return RawProjectionResult(
         backend="mip", solver_status=SOLVER_OPTIMAL, failure_class=failure,
         horizon_steps=H, n_variables=n_vars,
-        n_integer_variables=H + (n_task if coupled else 0), n_constraints=len(rows_b),
+        n_integer_variables=H + (H + n_task if coupled else 0), n_constraints=len(rows_b),
         stage_a_status=status_a, stage_b_status=status_b,
         stage_a_solve_time_s=tA, stage_b_solve_time_s=tB,
         stage_a_objective=offset_a, stage_b_objective=float(c_econ @ x),

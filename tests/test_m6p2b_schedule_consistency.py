@@ -152,8 +152,8 @@ def test_aggregate_reservation_cannot_move_arrived_work_to_a_cheaper_charging_st
     env = fixture_env(task=False)
     env.task_arrival_forecast[:] = [0., 5., 0.]
     snapshot = build_snapshot(env)
-    snapshot = snapshot.model_copy(update={"planning_forecast": snapshot.planning_forecast.model_copy(
-        update={"price": [.2, .01, 1.]})})
+    forecast = snapshot.planning_forecast.model_copy(update={"price": [.2, .01, 1.]})
+    snapshot = snapshot.model_copy(update={"planning_forecast": forecast})
     plan = solve_time_indexed_mip_raw_projection(
         snapshot, DispatchProposal(compute_actions=[0.] * 20, storage_action=0.), time_limit_s=.25)
     assert plan.solver_status == "optimal"
