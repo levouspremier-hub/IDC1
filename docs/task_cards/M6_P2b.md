@@ -117,3 +117,11 @@ uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_shor
 `-(reward_cost_weight/cost_ref)*实际退化SGD`，其他分项、refs_v4 与环境 step 不变。
 先提交 `tests/test_m6p2b_reward_semantics.py` 的失败测试；落实后重新短跑，不能
 把算术正向信号称为 PPO 已学会，也不能凭此放行未解决的服务/库存问题。
+
+长训准备允许在 formal_train_loop.py 复用已验签 train 注入，并扩大 snapshot_adapter
+的同源 bundle 缓存。依据首轮真实分项计时，前 3 批每批重复环境构造约 19–20 秒，
+不是 PPO 更新瓶颈。该优化不修改 B6 生成代码、日期、输入或 RNG：缓存键须包括
+实际输入/代码完整 hash 与生成 revision/dirty 状态，资产变化必须重新验签而不能
+返回旧场景；每个环境得到独立 deepcopy 注入、数组、任务及 SOC，新旧环境状态
+不能共享。先提交 `tests/test_m6p2b_verified_input_reuse.py` 的失败测试，完成后重新
+核对恢复、泄漏与逐位输入一致性。当前 reward/service 诊断结束前不修改其运行代码。
