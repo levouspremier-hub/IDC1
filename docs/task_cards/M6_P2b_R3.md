@@ -8,6 +8,7 @@
 允许contracts/inventory.py、planning/service_guard.py/model.py/corrector.py、
 safe_rl/corrector_wrapper.py、safe_rl_v2/inventory_diagnostics.py/formal_train_loop.py/
 inventory_train.py、scripts/m6p2b_inventory_repair.py/defect_audit.py及必要的本卡
+safe_rl_v2/rollout.py（仅汇总已记录inventory审计，不改变raw/logp/buffer语义）、
 受控诊断入口、scenario/inventory_release.py、checkpointing/inventory_eval_input.py、
 相关tests、docs及全新v2_r3配置/发布、v4_r3矩阵和runs/m6p2b_*_v2_r3*产物。
 保留旧文件。新service reserve版本与实际规划代码、wrapper、奖励及配置共同绑定。
