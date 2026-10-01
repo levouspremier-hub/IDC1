@@ -110,8 +110,10 @@ def _source_attrs(env) -> dict[str, str]:
     return _FORMAL_SOURCE_ATTRS if _is_formal(env) else _LEGACY_SOURCE_ATTRS
 
 
-@lru_cache(maxsize=64)
-def _verified_formal_bundle(split: str, local_origin: int, horizon: int) -> ScenarioBundle:
+@lru_cache(maxsize=256)
+def _verified_formal_bundle(
+    split: str, local_origin: int, horizon: int, source_fingerprint: str | None = None
+) -> ScenarioBundle:
     """按**同一条正式入口**重建该 episode 的 formal `ScenarioBundle`。
 
     `build_verified_formal_env_injection` 构造环境时正是用
@@ -156,6 +158,10 @@ def _formal_bundle(env) -> ScenarioBundle:
             "formal 注入的 horizon 必须与环境的 horizon 一致："
             f"{inj.horizon} != {env.horizon}"
         )
+    fingerprint = getattr(env, "verified_train_input_fingerprint", None)
+    if fingerprint is not None:
+        return _verified_formal_bundle(
+            str(inj.split), int(inj.local_origin), int(inj.horizon), str(fingerprint))
     return _verified_formal_bundle(str(inj.split), int(inj.local_origin), int(inj.horizon))
 
 

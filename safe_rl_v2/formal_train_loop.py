@@ -32,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
@@ -202,6 +203,76 @@ def train_env_seeds(config: dict, *, master_seed: int) -> dict[str, int]:
     }
 
 
+def _train_input_fingerprint() -> str:
+    """Full byte hashes and generator Git state; no mtime-based trust shortcuts.
+
+    Walk the registered manifest dependency graph (including upstream raw files)
+    only to invalidate reuse. The original verified factory remains the sole
+    authority on a miss; fingerprinting never approves new assets.
+    """
+    import subprocess
+
+    from evaluation.sources import ROLE_LOGICAL_PATHS
+    from scenario.arrival_mapper import ARRIVAL_MAPPER_SOURCE_PATHS
+    from scenario.b6_refs import B6_REFS_SOURCE_PATHS
+    from scenario.b6_split_manifests import B6_SPLIT_SOURCE_PATHS
+    from scenario.env_release import ENV_RELEASE_SOURCE_PATHS
+    from scenario.formal_scenario_b6 import B6_FORMAL_SOURCE_PATHS
+
+    sources = sorted(set((*ARRIVAL_MAPPER_SOURCE_PATHS, *B6_REFS_SOURCE_PATHS,
+                          *B6_SPLIT_SOURCE_PATHS, *ENV_RELEASE_SOURCE_PATHS,
+                          *B6_FORMAL_SOURCE_PATHS, "scenario/env_injection.py",
+                          "safe_rl_v2/formal_train_loop.py")))
+    paths = {REPO_ROOT / p for p in (*sources, *ROLE_LOGICAL_PATHS.values(),
+                                    "pyproject.toml", "uv.lock")}
+    visited = set()
+    entries = []
+
+    def referenced_paths(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if (isinstance(child, str) and (key == "path" or key.endswith("_path"))
+                        and "://" not in child):
+                    path = REPO_ROOT / child
+                    if path.is_file() and path.resolve().is_relative_to(REPO_ROOT):
+                        paths.add(path)
+                else:
+                    referenced_paths(child)
+        elif isinstance(value, list):
+            for child in value:
+                referenced_paths(child)
+
+    while paths:
+        path = paths.pop()
+        if path in visited:
+            continue
+        visited.add(path)
+        content = path.read_bytes()
+        entries.append((str(path.relative_to(REPO_ROOT)), str(path.resolve()),
+                        hashlib.sha256(content).hexdigest()))
+        if path.suffix == ".json":
+            referenced_paths(json.loads(content))
+    git_state = [subprocess.check_output(
+        ["git", *args, "--", *sources], cwd=REPO_ROOT, text=True).strip()
+        for args in (("log", "-1", "--format=%H"), ("status", "--porcelain"))]
+    return hashlib.sha256(json.dumps([sorted(entries), git_state]).encode()).hexdigest()
+
+
+@lru_cache(maxsize=256)
+def _verified_train_input(origin: int, horizon: int, cutoff: int, fingerprint: str):
+    from scenario.arrival_mapper import load_verified_mapper_chain
+    from scenario.env_injection import build_verified_formal_env_injection
+    from scripts.calibrate_training_config import start_for_origin
+
+    load_verified_mapper_chain("train")
+    return build_verified_formal_env_injection(
+        "train", start=start_for_origin(origin), horizon=horizon, forecast_cutoff=cutoff)
+
+
+def clear_verified_train_input_cache() -> None:
+    _verified_train_input.cache_clear()
+
+
 def build_train_env(origin: int, *, master_seed: int, config: dict):
     """按**本次 master seed** + 冻结配置构造 train formal env（M1.3g-f-c-j-R1）。
 
@@ -225,13 +296,22 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
     forecast_cutoff = int(sampling["forecast_cutoff"])
     seeds = train_env_seeds(config, master_seed=master_seed)
 
-    load_verified_mapper_chain("train")
-    injection = injection_module.build_verified_formal_env_injection(
-        "train", start=start_for_origin(int(origin)), horizon=horizon,
-        forecast_cutoff=forecast_cutoff)
+    fingerprint = None
+    if config.get("version") == "v2":
+        import copy
+        fingerprint = _train_input_fingerprint()
+        injection = copy.deepcopy(_verified_train_input(
+            int(origin), horizon, forecast_cutoff, fingerprint))
+    else:
+        load_verified_mapper_chain("train")
+        injection = injection_module.build_verified_formal_env_injection(
+            "train", start=start_for_origin(int(origin)), horizon=horizon,
+            forecast_cutoff=forecast_cutoff)
     env = env_cls(horizon=horizon, forecast_cutoff=forecast_cutoff,
                   delta_t_hours=float(DELTA_T_HOURS), formal_injection=injection,
                   **seeds)
+    if fingerprint is not None:
+        env.verified_train_input_fingerprint = fingerprint
     if config.get("version") == "v2":
         if config["training"]["corrector"].get("inventory_version") != "terminal-inventory-v1":
             raise FormalTrainLoopError("v2 requires explicit terminal inventory semantics")
