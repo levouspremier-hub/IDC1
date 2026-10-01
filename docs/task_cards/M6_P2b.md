@@ -173,3 +173,11 @@ uv run ruff check
 scripts/m6p2b_defect_audit.py；git diff --check。证据保存五类产物、旧资产当前hash、
 checkpoint原生读回、算例输入/求解状态/缺口、代码定位以及报告/manifest读回校验。
 本复审独立回滚点9c62643；结果分开列明已复现缺陷、验收漏洞与尚未证明的风险。
+
+复审完成：旧正式3/3各24项原生审核通过，资产hash未变；新96日短跑目标2/96。
+固定种子同快照反例证明：准确预测下，推迟当前任务可使目标从可达到不可达；
+另复现聚合到达积压未结转。短跑只查末步可达性的条件会掩盖前述可避免损失，
+validation readiness缺失败归因与公平条件检查。相关既有测试36通过，审计入口
+ruff/mypy通过；完整make check重试未完成，不能放行。证据和完整结论见
+docs/audits/M6_P2b_DEFECT_AUDIT.md及runs/m6p2b_defect_audit_v2_r2/。
+本次仅完成复审，没有修复上述新发现、重发资产或训练；整张M6-P2b尚未完成。
