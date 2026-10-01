@@ -82,6 +82,7 @@ def test_certified_reachability_and_action_solver_timeout_are_separate(monkeypat
 def test_observed_stage_b_native_solve_error_is_repaired_without_domain_relaxation():
     import json
     from pathlib import Path
+
     from contracts.inventory import InventorySnapshot
     fixture = json.loads((Path(__file__).parent / 'fixtures'
                           / 'm6p2b_stage_b_solve_error.json').read_text())
