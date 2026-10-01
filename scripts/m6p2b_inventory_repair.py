@@ -386,7 +386,9 @@ def main(argv=None):
                 [[s["seed"], s["source_scenario_hash"]] for s in rows],
                 sort_keys=True).encode()).hexdigest()
             report["scenario_hash_scope"] = "sha256 of ordered seed/source scenario hashes"
-        report.update(validation_run=False, test_run=False, parameter_updates=0)
+        from scenario.inventory_release import semantics_binding
+        report.update(validation_run=False, test_run=False, parameter_updates=0,
+                      candidate_semantics_binding=semantics_binding())
         folder = write_run(args.run_id, config={
                   "phase": args.phase, "origins": list(origins),
                   "environment_training_config": config,
@@ -398,6 +400,14 @@ def main(argv=None):
                   failure_classification=(None if report.get("passed", True)
                                           else "acceptance_failed"),
                   **ledger)
+        if (json.loads((folder / "report.json").read_text()) != report
+                or len(pd.read_parquet(folder / "metrics.parquet")) != len(rows)
+                or not (folder / "config.yaml").is_file()
+                or not (folder / "figures").is_dir()):
+            raise ValueError("diagnostic artifacts differ after read-back")
+        manifest = json.loads((folder / "manifest.json").read_text())
+        if any(manifest[key] != value for key, value in ledger.items()):
+            raise ValueError("diagnostic source ledger differs after read-back")
         if args.phase == "calibrate" and report["passed"]:
             freeze_calibration(config, folder, report)
         if report.get("passed", True) is False:
