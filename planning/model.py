@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, linprog
-from scipy.sparse import csr_matrix, lil_matrix
+from scipy.sparse import coo_matrix, csr_matrix, lil_matrix, vstack
 
 from contracts.inventory import InventorySnapshot, validate_inventory_snapshot
 from contracts.models import SystemSnapshot
@@ -83,6 +83,21 @@ def _monotonic() -> float:
     import time
 
     return time.monotonic()
+
+
+def _sparse_rows(rows: list[dict[int, float]], n_variables: int) -> csr_matrix:
+    """Build the identical constraint matrix without Python sparse assignment."""
+    entries = [(r, c, v) for r, row in enumerate(rows) for c, v in row.items() if v != 0.0]
+    if not entries:
+        return csr_matrix((len(rows), n_variables), dtype=np.float64)
+    row_index, col_index, values = zip(*entries, strict=True)
+    return coo_matrix((values, (row_index, col_index)),
+                      shape=(len(rows), n_variables), dtype=np.float64).tocsr()
+
+
+def _append_sparse_row(matrix: csr_matrix, row: dict[int, float]) -> csr_matrix:
+    """Stage B adds only its offset bound; all Stage A coefficients are reused."""
+    return vstack((matrix, _sparse_rows([row], matrix.shape[1])), format="csr")
 
 
 @dataclass
@@ -1017,12 +1032,14 @@ def solve_time_indexed_mip_raw_projection(
         raw_storage, np.inf, "proj_le_storage",
     )
 
-    A_csr = csr_matrix(lil_matrix((len(rows), n_vars)))
-    row_mat = lil_matrix((len(rows), n_vars))
-    for r, row in enumerate(rows):
-        for col, val in row.items():
-            row_mat[r, col] = val
-    A_csr = csr_matrix(row_mat)
+    if inventory_enabled:
+        A_csr = _sparse_rows(rows, n_vars)
+    else:
+        row_mat = lil_matrix((len(rows), n_vars))
+        for r, row in enumerate(rows):
+            for col, val in row.items():
+                row_mat[r, col] = val
+        A_csr = csr_matrix(row_mat)
     bounds_vec = Bounds(lb=lb, ub=ub)
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
@@ -1186,11 +1203,14 @@ def solve_time_indexed_mip_raw_projection(
     rows_b = list(rows) + [offset_row]
     lbs_b = list(lbs) + [-np.inf]
     ubs_b = list(ubs) + [offset_a + stage_b_tolerance]
-    row_mat_b = lil_matrix((len(rows_b), n_vars))
-    for r, row in enumerate(rows_b):
-        for col, val in row.items():
-            row_mat_b[r, col] = val
-    A_b = csr_matrix(row_mat_b)
+    if inventory_enabled:
+        A_b = _append_sparse_row(A_csr, offset_row)
+    else:
+        row_mat_b = lil_matrix((len(rows_b), n_vars))
+        for r, row in enumerate(rows_b):
+            for col, val in row.items():
+                row_mat_b[r, col] = val
+        A_b = csr_matrix(row_mat_b)
 
     tB0 = time.perf_counter()
     res_b = _milp(
