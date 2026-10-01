@@ -10,8 +10,10 @@ import sys
 import time
 import types
 import warnings
+from unittest.mock import patch
 
 import pandas as pd
+import scipy.optimize
 
 import planning.model as candidate
 from contracts.inventory import InventorySnapshot
@@ -52,9 +54,19 @@ def main():
                 proposal = DispatchProposal(compute_actions=raw[:20], storage_action=raw[-1])
                 arms = (("baseline", baseline), ("candidate", candidate))
                 for arm, module in arms if repetition == 0 else reversed(arms):
+                    solver_calls = []
+                    original_milp = scipy.optimize.milp
+
+                    def measured_milp(_original=original_milp, _calls=solver_calls, **kwargs):
+                        output = _original(**kwargs)
+                        _calls.append({"status": int(output.status),
+                                       "message": str(output.message)})
+                        return output
+
                     start = time.perf_counter()
-                    result = module.solve_time_indexed_mip_raw_projection(
-                        snapshot, proposal, time_limit_s=.25)
+                    with patch.object(scipy.optimize, "milp", measured_milp):
+                        result = module.solve_time_indexed_mip_raw_projection(
+                            snapshot, proposal, time_limit_s=.25)
                     rows.append({
                         "repetition": repetition, "origin": f["origin"], "step": f["step"],
                         "arm": arm, "status": result.solver_status,
@@ -66,6 +78,7 @@ def main():
                         "n_constraints": result.n_constraints,
                         "offset": result.projection_offset,
                         "target_gap_kwh": result.inventory_audit.get("target_gap_kwh"),
+                        "solver_calls": solver_calls,
                     })
     frame = pd.DataFrame(rows)
     result = {
@@ -77,6 +90,7 @@ def main():
         "trace_report_sha256": sha(trace / "report.json"), "rows": rows,
         "summary": {arm: {"optimal": int((group.status == "optimal").sum()),
                            "timeouts": int((group.failure == "timeout").sum()),
+                           "solver_failures": int((group.failure == "solver_failure").sum()),
                            "mean_wall_s": float(group.wall_s.mean()), "calls": len(group)}
                     for arm, group in frame.groupby("arm")},
         "parameters_updated": 0, "validation_run": False, "test_run": False,
