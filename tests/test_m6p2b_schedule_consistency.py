@@ -64,6 +64,54 @@ def test_target_proof_requires_feasible_known_service_not_arbitrary_slack():
     assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
 
 
+def test_current_task_progress_matches_executor_priority_prefix():
+    from safe_rl.corrector_wrapper import CorrectorWrapper
+
+    env = fixture_env()
+    second = Task(2, "A", "lower priority", 0, 1, np.array([.1]),
+                  2., 3, 1., True, False)
+    second.status = "waiting"
+    env.tasks.append(second)
+    before = {str(t.task_id): t.remaining_work for t in env.tasks}
+    _, _, _, _, info = CorrectorWrapper(env, corrector_time_limit_s=.25).step(
+        np.zeros(21, dtype=np.float32))
+    planned = info["inventory_audit"]["planned_step0_task_work"]
+    for task in env.tasks:
+        assert task.remaining_work == pytest.approx(
+            before[str(task.task_id)] - planned[str(task.task_id)], abs=1e-6)
+
+
+def test_overdue_service_is_recorded_without_inventing_a_new_inventory_infeasibility():
+    env = fixture_env()
+    env.tasks[0].deadline = 0
+    plan = solve_time_indexed_mip_raw_projection(
+        build_snapshot(env), DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    assert plan.deadline_shortfall_work == pytest.approx(2.)
+    assert plan.inventory_audit["physical_unreachability_proven"] is False
+
+
+def test_r_a_b_still_share_one_quarter_second_budget(monkeypatch):
+    import scipy.optimize
+
+    real = scipy.optimize.milp
+    limits = []
+
+    def tracked(**kwargs):
+        limits.append(kwargs["options"]["time_limit"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(scipy.optimize, "milp", tracked)
+    plan = solve_time_indexed_mip_raw_projection(
+        build_snapshot(fixture_env()),
+        DispatchProposal(compute_actions=[0.] * 20, storage_action=0.), time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    assert len(limits) in (2, 3)
+    assert all(0 < value <= .25 for value in limits)
+    assert limits == sorted(limits, reverse=True)
+
+
 def test_forecast_arrival_overflow_is_retained_through_terminal():
     env = fixture_env(task=False)
     capacity = float(np.sum(env.model.C_server) * .5 * env.max_task_load_per_server)
@@ -72,6 +120,32 @@ def test_forecast_arrival_overflow_is_retained_through_terminal():
     assert guard.aggregate_backlog_work[2] == pytest.approx(1.)
     assert guard.aggregate_service_work[2] == pytest.approx(1.)
     assert guard.aggregate_backlog_work[-1] == pytest.approx(0.)
+    plan = solve_time_indexed_mip_raw_projection(
+        build_snapshot(env), DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    audit = plan.inventory_audit
+    np.testing.assert_allclose(
+        audit["aggregate_backlog_work"][1:],
+        np.array(audit["aggregate_backlog_work"][:-1]) + guard.aggregate_arrival_work
+        - np.array(audit["aggregate_service_work"]), atol=1e-6)
+
+
+def test_seed0_only_short_gate_cannot_authorize_three_seed_formal_training(tmp_path, monkeypatch):
+    import json
+
+    from safe_rl_v2 import inventory_train as train
+    from scenario.inventory_release import RUN_REVISION
+
+    folder = tmp_path / f"runs/m6p2b_short_gate_{RUN_REVISION}"
+    folder.mkdir(parents=True)
+    binding = {"version": "unit-test"}
+    (folder / "manifest.json").write_text(json.dumps({"status": "success"}))
+    (folder / "report.json").write_text(json.dumps({
+        "passed": True, "inventory_binding": binding, "formal_three_seed_gate": False}))
+    monkeypatch.setattr(train, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="three-seed short-run gate"):
+        train.require_short_gate(binding)
 
 
 def test_registered_power_upper_bound_covers_nonlinear_idc_and_group_mix():
