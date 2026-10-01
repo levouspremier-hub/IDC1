@@ -81,8 +81,56 @@ release SHA-256 `b1f68b52224c0b867871972a2fee69cfa1510ae5e79224fe15193362b2cf4af
 完整 `make check` 通过：ruff、mypy（177 文件）、pytest **3066 passed / 47 deselected**，
 exit 0，耗时 2622.10 秒。原日志与五类门禁产物保存在 `runs/m6p2b_checks_v2/`。
 
-短跑、完整训练与 636 条诊断的结果将在完成后补入；未通过短跑闸门
-不启动长训。validation readiness 不使用训练成本门槛。联合滚动安全 PPO 只有一个
+## 首轮三种子短跑：未通过
+
+三份 `runs/m6p2b_short_seed{0,1,2}_v2/` 均完成 8 批、1536 transitions、128 Adam
+step、8 次乘子更新、32 个完整 episode，并写出和读回最终 checkpoint、报告、
+manifest 及五类产物。`runs/m6p2b_short_gate_v2/` 核验三份回执与原生 checkpoint 后
+返回 exit 1 / acceptance_failed；产物完成不表示研究验收通过。
+
+| seed | 服务合格 | 库存区间 | 共同目标 | 物理违规 | 安全回退步 |
+|---|---:|---:|---:|---:|---:|
+| 0 | 16/32 | 24/32 | 22/32 | 0 | 74 |
+| 1 | 10/32 | 21/32 | 18/32 | 0 | 59 |
+| 2 | 9/32 | 21/32 | 17/32 | 0 | 2 |
+
+合计 4608 transitions，完整 episode 96/96；服务 35/96、库存区间 66/96、
+共同目标 57/96。没有启动长训。储能头梯度非零、raw/exec 有差异，不能据此宣称
+PPO 已学会调度。每批优势、储能头梯度、饱和、修正幅度及奖励分项保留在各 report。
+
+`runs/m6p2b_short_trace_seed0_batch0_v2_r1/` 精确重放首批 observation/raw/log-prob
+摘要。origin 96 按时任务率 0.9361702、按时工作率 0.95、剩余工作 0、不可中断
+中断 1 次；无安全回退。t=7/10 充电挤占实际任务功率，任务执行被压到 0。
+t=10 B6 风电预测 20.95245 kW、实际 4.20879 kW，充电提交 16.81569 kW、执行
+7.31726 kW。该因果预测误差由逐步记录证明，不能从日终库存失败反推。
+
+初版 trace 的读回比较因 tuple/list 类型差异报错；两个初版 run 及 exit 1 保留，
+不能声称初版验签通过。修复后的 r1 读回通过。batch2 的初版重放未精确匹配原摘要，
+只用于提取静态失败状态，不作为原轨迹等价证据。
+
+## 失败后的求解候选：未重新发布
+
+保持原矩阵系数与阶段顺序，直接构建 CSR 并复用 Stage A 矩阵。另构造零目标缺口
+的物理可行 witness，逐项检查完整矩阵、SOC、功率和充放互斥；可行零缺口与缺口
+非负下界共同证明最优。未得到 witness 仍调用原 MIP，不把“未证明”写成不可达，
+也不把 witness 用作执行动作。原始任务工作仍完整留在模型的既有业务/期限 slack 中。
+
+`tests/fixtures/m6p2b_stage_b_solve_error.json` 保存静态 train 失败状态；未改动环境
+step。该状态不限时间时仍返回原生 HiGHS Solve error，已先提交失败测试。
+库存路径将 MIP/primal/dual feasibility 数值容差收紧为 1e-8 后回归转绿，原物理
+1e-6、raw offset 1e-6 与 0.25 秒预算不变；legacy 路径选项不变。
+
+`runs/m6p2b_runtime_budget_verified_v2_r8/` 对 8 个静态失败状态交错重复两轮：
+历史绑定代码 16 次均未完成最优（14 timeout、2 solver failure）；当前候选 16/16
+optimal、0 timeout、0 solver failure，平均返回时间 0.18285 秒。更早的各项选项
+探针 r1–r7 均保留，未用单项成功冒充完整修复。相关投影/库存/确定性选项回归通过。
+
+当前候选规划代码 hash 已变化，因此首轮 release v2 的严格 live 验签应拒绝它。
+首轮 release/config/matrix/checkpoint 均保留；后续需新标定、全新资产、全新短跑与
+完整 make check 后才能重训。完整日奖励 counterfactual 正在测量，未修改奖励。
+
+完整训练与 636 条诊断仍未运行；未通过短跑闸门不启动长训。
+validation readiness 不使用训练成本门槛。联合滚动安全 PPO 只有一个
 方法席位；规则、独立滚动、惩罚 PPO、单步安全 PPO 四个正式席位仍缺。
 
 ## 回滚提交（执行中清单）
@@ -91,4 +139,10 @@ exit 0，耗时 2622.10 秒。原日志与五类门禁产物保存在 `runs/m6p2
 `ec9eec3` 历史诊断；`8bbbc5d` 数值修复尝试；`9799672` 实测缺口与学习诊断；
 `062a195` v2 训练、发布、导出与长训闸门；`48185c1` 标定冻结和写盘验签；
 `01f68de` 列表比对修正；`0addfcf` 发布 v2。
+`ed184bf` 第一轮完整门禁证据；`a42d6b7` 只读短跑 trace；`7d50e4a` trace 读回比较；
+`4bd3b88` 因果预测与裁剪证据；`edded17` 矩阵等价失败测试；`2da75a8` 稀疏构建；
+`8087c57` 预算探针；`bd3abc7` 物理 witness 测试；`97ef512` 可达证明；
+`b91b1e1` 原生求解信息；`1d0a929` 求解设置探针；`555facd` 残差探针；
+`c4b8626` 组合设置探针；`c133476` Stage B 失败测试；`bd8c508` 数值容差收紧；
+`1ced086` 完整日奖励 counterfactual 入口。
 历史试验分支的 `c936f53` 保留，不在当前分支 ancestry，不改写或覆盖冻结资产。

@@ -13,6 +13,13 @@
 
 旧配置/发布/矩阵/运行产物保留。新正式入口须绑定训练语义，不允许旧 checkpoint 跨版本恢复。历史重放只读权重，不进行更新。
 
+本卡暴露失败后的诊断入口还包括 scripts/m6p2b_short_trace.py、
+scripts/m6p2b_budget_probe.py、scripts/m6p2b_reward_counterfactual.py；允许补充
+planning/service_guard.py 与 tests/test_m6p2b_service_guard.py，研究在既有 B6
+信息边界内为当前已到达任务保留服务功率。不得借此改变任务分配优先级、读取未来
+具体任务或把保守规划假设当作实际物理不可达证明。服务保护尚未实现；若采用新
+语义，先建立失败测试，重新标定并写全新 v2_r2 / v4_r2 资产及 run-id，保留首轮资产。
+
 ## 禁止项
 
 不读或运行 validation/test；不改冻结服务标准、refs_v4、日期、批次顺序或种子；不放宽物理/任务约束，不重置 SOC、清空队列或跳过任务。不可达、超时、预测误差分别记录，不伪造成功。不改受保护目录，不把 exec 写入 raw 或 log-prob。原奖励优先；禁止逐步保持 50% SOC 的惩罚。若涉及环境 step，先提交失败测试。
@@ -41,6 +48,15 @@ git diff --check
 git status --short
 ```
 
+失败定位及奖励依据补充命令（train-only，权重更新为零）：
+
+```sh
+uv run python -m scripts.m6p2b_short_trace --seed 0 --batch-index 0 --run-id m6p2b_short_trace_seed0_batch0_v2_r1
+uv run python -m scripts.m6p2b_budget_probe --trace-run m6p2b_short_trace_seed0_batch2_v2 --baseline-revision ed184bf --run-id m6p2b_runtime_budget_verified_v2_r8
+uv run python -m scripts.m6p2b_reward_counterfactual --run-id m6p2b_reward_counterfactual_v2
+uv run pytest tests/test_m6p2b_sparse_assembly.py
+```
+
 ## 证据产物与验收标准
 
 每个 run 必须 config.yaml、metrics.parquet、report.json、figures/、manifest.json，包含 revision、lock/data/scenario hash、种子、真实命令、失败状态。失败产物不得删除或覆盖。
@@ -51,4 +67,8 @@ git status --short
 
 ## 状态
 
-开卡；原奖励未改，长训未启动。
+执行中。首轮三 seed ×8 批已完成最终 checkpoint / 五类产物与读回验签，
+但服务 35/96、库存区间 66/96、共同目标 57/96、物理违规 0、回退 135 次；
+短跑闸门失败，未启动长训、636 条新训练诊断或 validation/test。原奖励未改。
+已修复部分求解预算与 Stage B 原生数值错误；该候选代码尚未重新发布，首轮
+release/checkpoint 绑定保留为历史证据，不能在代码 hash 不一致时用于新正式训练。
