@@ -71,7 +71,8 @@ def main():
                 arms = []
                 for amplitude in (0., .05, .1):
                     result, _steps, service, inventory = evaluate_origin(
-                        config, origin, 0, proposal(amplitude, config["training"]["policy"]["obs_dim"]),
+                        config, origin, 0,
+                        proposal(amplitude, config["training"]["policy"]["obs_dim"]),
                         run_id=args.run_id)
                     result.update(amplitude=amplitude, service_metrics=service.service.model_dump(),
                                   inventory_record=inventory.to_dict())
@@ -81,13 +82,15 @@ def main():
                 baseline = arms[0]
                 for arm in arms[1:]:
                     eligible = all(r["episode_complete"] and r["service_qualified"]
-                                   and r["inventory_qualified"] and r["physical_violation_count"] == 0
+                                   and r["inventory_qualified"]
+                                   and r["physical_violation_count"] == 0
                                    and r["fallbacks"] == 0 for r in (baseline, arm))
                     bi, ai = baseline["inventory_record"], arm["inventory_record"]
                     terminal_difference = abs(bi["final_energy_kwh"] - ai["final_energy_kwh"])
                     eligible = (eligible and terminal_difference <= 1e-6
                                 and bi["capacity_kwh"] == ai["capacity_kwh"]
-                                and abs(bi["initial_energy_kwh"] - ai["initial_energy_kwh"]) <= 1e-6)
+                                and abs(bi["initial_energy_kwh"]
+                                        - ai["initial_energy_kwh"]) <= 1e-6)
                     purchase_gain = baseline["purchase_cost_sgd"] - arm["purchase_cost_sgd"]
                     degradation_extra = (arm["degradation_cost_sgd"]
                                          - baseline["degradation_cost_sgd"])
@@ -96,7 +99,8 @@ def main():
                     pair = {
                         "origin": origin, "amplitude": arm["amplitude"], "eligible": eligible,
                         "terminal_energy_difference_kwh": terminal_difference,
-                        "purchase_gain_sgd": purchase_gain, "degradation_extra_sgd": degradation_extra,
+                        "purchase_gain_sgd": purchase_gain,
+                        "degradation_extra_sgd": degradation_extra,
                         "net_money_gain_sgd": purchase_gain - degradation_extra,
                         "original_reward_gain": arm["measured_reward_sum"]
                         - baseline["measured_reward_sum"],
