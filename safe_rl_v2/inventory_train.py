@@ -62,9 +62,25 @@ def require_short_gate(binding):
     if (manifest["status"] != "success" or report.get("passed") is not True
             or report.get("inventory_binding") != binding):
         raise ValueError("three-seed short-run gate must pass before formal training")
+    from scripts.m6p2b_inventory_repair import short_gate
+    sources, live, _ = short_gate()
+    if live["passed"] is not True or report["short_runs"] != sources:
+        raise ValueError("live short-run artifacts no longer satisfy the recorded gate")
 
 
-def run(args):
+def verify_written_run(folder, binding):
+    folder = Path(folder)
+    receipt = json.loads((folder / "artifact_verification.json").read_text())
+    if (receipt["inventory_binding"] != binding or receipt["passed"] is not True
+            or set(receipt["hashes"]) != {"config.yaml", "metrics.parquet", "report.json",
+                                         "manifest.json", "checkpoint_final.pt"}
+            or any(sha(folder / path) != digest for path, digest in receipt["hashes"].items())
+            or not (folder / "figures").is_dir()):
+        raise ValueError("written run artifact receipt does not match live files")
+    return json.loads((folder / "report.json").read_text())
+
+
+def _run(args):
     config, matrix = load_config(), load_matrix()
     binding = checkpoint_binding()
     apply_frozen_thread_setting(config)
@@ -150,6 +166,9 @@ def run(args):
                     for r in records for e in r["inventory_episodes"]]
         report = {
             "scope": scope, "seed": args.seed, "batches": len(records),
+            "batches_newly_run": len(batches) - next_batch,
+            "resumed_from": args.resume_from,
+            "resume_source_sha256": sha(args.resume_from) if args.resume_from else None,
             "episodes": len(episodes), "transitions": sum(r["transitions"] for r in records),
             "adam_steps": last["optimizer_steps_cumulative"],
             "lagrangian_updates": last["lagrangian_updates_cumulative"],
@@ -180,6 +199,12 @@ def run(args):
                 or reread_manifest["status"] != "success"
                 or any(reread_manifest[k] != v for k, v in ledger.items())):
             raise ValueError("final artifact read-back verification failed")
+        (folder / "artifact_verification.json").write_text(json.dumps({
+            "passed": True, "inventory_binding": binding,
+            "hashes": {path: sha(folder / path) for path in (
+                "config.yaml", "metrics.parquet", "report.json", "manifest.json",
+                "checkpoint_final.pt")}}, indent=2) + "\n")
+        verify_written_run(folder, binding)
         return 0
     except Exception as exc:
         ledger = training_source_ledger(provenance) if provenance else {
@@ -191,6 +216,27 @@ def run(args):
                   base_dir=str(ROOT / "runs"), seed=args.seed, command=command,
                   status="failed", failure_classification=type(exc).__name__, **ledger)
         raise
+
+
+def run(args):
+    folder = ROOT / "runs" / args.run_id
+    if folder.exists():
+        raise FileExistsError("run-id already exists; choose a new run-id")
+    try:
+        return _run(args)
+    except Exception as exc:
+        # Preflight/recovery errors also keep the five required artifacts.
+        # Unknown actual-use hashes stay null; do not invent injected scenarios.
+        if not (folder / "manifest.json").exists():
+            write_run(args.run_id, config={"short": args.short, "seed": args.seed},
+                      metrics=pd.DataFrame(), base_dir=str(ROOT / "runs"), seed=args.seed,
+                      command="python -m safe_rl_v2.inventory_train " + " ".join(sys.argv[1:]),
+                      report={"failure": f"{type(exc).__name__}: {exc}",
+                              "failure_phase": "preflight_or_restore", "rollout_started": False},
+                      status="failed", failure_classification=type(exc).__name__,
+                      dependency_lock_hash=sha(ROOT / "uv.lock"))
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
 
 
 def main(argv=None):

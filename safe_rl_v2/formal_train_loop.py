@@ -579,6 +579,10 @@ def run_training_batch(
                 (raw_action[:, -1] - raw_action[:, -1].mean())
                 * (effective_adv - effective_adv.mean())).mean()),
             "exec_storage_std": float(np.std([t.exec_action[-1] for t in buffer.transitions])),
+            "requested_exec_to_actual_storage_abs_delta_mean": float(np.mean([
+                abs(t.exec_action[-1] - t.correction_info.get(
+                    "inventory_training_diagnostics", {}).get(
+                        "actual_storage_action", t.exec_action[-1])) for t in buffer.transitions])),
             "reward_sum": float(sum(t.reward for t in buffer.transitions)),
             "economic_reward_sum": float(sum(t.correction_info.get(
                 "inventory_training_diagnostics", {}).get("r_cost", 0.0)

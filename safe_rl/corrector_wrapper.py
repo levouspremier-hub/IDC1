@@ -100,5 +100,10 @@ class CorrectorWrapper(gym.Wrapper):
             info["inventory_training_diagnostics"].update(
                 charge_kw=float(info["bess_charge_power_kW"]),
                 discharge_kw=float(info["bess_discharge_power_kW"]),
+                actual_storage_action=(
+                    float(info["bess_discharge_power_kW"])
+                    / float(self.env.bess_discharge_power_max_kW)
+                    - float(info["bess_charge_power_kW"])
+                    / float(self.env.bess_charge_power_max_kW)),
             )
         return obs, reward, terminated, truncated, info

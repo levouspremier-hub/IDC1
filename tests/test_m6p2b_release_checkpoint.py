@@ -147,3 +147,21 @@ def test_matrix_cannot_change_frozen_design_or_asset_hash(tmp_path, monkeypatch)
     path.write_text(json.dumps(matrix))
     with pytest.raises(ValueError, match='live asset mismatch: refs_v4'):
         release.load_matrix()
+
+
+def test_formal_gate_rechecks_source_runs_instead_of_trusting_passed_flag(tmp_path, monkeypatch):
+    import json
+
+    from safe_rl_v2 import inventory_train as train
+    from scripts import m6p2b_inventory_repair as diagnostics
+
+    folder = tmp_path / 'runs/m6p2b_short_gate_v2'
+    folder.mkdir(parents=True)
+    binding = {'version': 'unit-test'}
+    (folder / 'manifest.json').write_text(json.dumps({'status': 'success'}))
+    (folder / 'report.json').write_text(json.dumps({
+        'passed': True, 'inventory_binding': binding, 'short_runs': []}))
+    monkeypatch.setattr(train, 'ROOT', tmp_path)
+    monkeypatch.setattr(diagnostics, 'short_gate', lambda: ([], {'passed': False}, {}))
+    with pytest.raises(ValueError, match='live short-run artifacts'):
+        train.require_short_gate(binding)

@@ -37,6 +37,9 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
     gamma = float(config["training"]["ppo"]["gamma_per_step"])
     raw = np.array([r["raw_action"][-1] for r in rows])
     delta = np.array([abs(r["raw_action"][-1] - r["exec_action"][-1]) for r in rows])
+    actual_storage = np.array([
+        r["bess_discharge_power_kW"] / env.bess_discharge_power_max_kW
+        - r["bess_charge_power_kW"] / env.bess_charge_power_max_kW for r in rows])
     audit = [r.get("inventory_audit", {}) for r in rows]
     result = {
         "origin": int(origin), "seed": int(seed), "steps": record.steps,
@@ -60,6 +63,9 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "storage_raw_std": float(raw.std()) if len(raw) else None,
         "storage_saturation_fraction": float((abs(raw) > 0.98).mean()) if len(raw) else None,
         "storage_abs_delta_mean": float(delta.mean()) if len(delta) else None,
+        "actual_storage_abs_delta_mean": float(np.abs(raw - actual_storage).mean()),
+        "requested_exec_to_actual_storage_abs_delta_mean": float(np.abs(
+            np.array([r["exec_action"][-1] for r in rows]) - actual_storage).mean()),
         "fallbacks": sum(r["correction_reason"] in
                          ("timeout", "solver_failure", "proposal_invalid", "base_shortage")
                          for r in rows),

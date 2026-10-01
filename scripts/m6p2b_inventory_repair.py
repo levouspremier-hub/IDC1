@@ -179,14 +179,20 @@ def freeze_calibration(config, folder, report):
 
 
 def short_gate():
+    from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from safe_rl_v2.inventory_train import verify_written_run
     from scenario.inventory_release import checkpoint_binding
     binding = checkpoint_binding()
     sources, failed = [], []
     provenance = {}
     for seed in (0, 1, 2):
         folder = ROOT / f"runs/m6p2b_short_seed{seed}_v2"
-        report = json.loads((folder / "report.json").read_text())
+        report = verify_written_run(folder, binding)
         manifest = json.loads((folder / "manifest.json").read_text())
+        checkpoint = VersionedCheckpoint.load(
+            folder / "checkpoint_final.pt", expected_action_dim=21, expected_obs_dim=520,
+            expected_schema_hash=SHORT_SCHEMA)
+        state = checkpoint.state
         checks = {
             "successful_manifest": manifest["status"] == "success",
             "controlled_scope": report["scope"] == "controlled_short_run",
@@ -196,6 +202,14 @@ def short_gate():
             "binding": report["inventory_binding"] == binding,
             "checkpoint": report["checkpoint_sha256"] == hashlib.sha256(
                 (folder / "checkpoint_final.pt").read_bytes()).hexdigest(),
+            "checkpoint_state": (
+                checkpoint.extras == {"inventory_binding": binding}
+                and state["next_batch_index"] == 8
+                and state["training_scope"] == "controlled_short_run"
+                and state["artifact_role"] == "controlled_training_resume"
+                and state["source_ledger"]["master_seed"] == seed
+                and {int(s["step"]) for s in state["optimizer"]["state"].values()} == {128}
+                and state["lagrangian"]["updates"] == 8),
             "episodes": len(report["inventory_episodes"]) == 32,
             "service_physics_inventory": all(
                 e["episode_complete"] and e["service_qualified"] is True
@@ -230,6 +244,7 @@ def short_gate():
 def audit(config, run_id):
     from checkpointing.inventory_eval_input import export_policy
     from checkpointing.versioned import read_checkpoint_payload
+    from safe_rl_v2.inventory_train import verify_written_run
     from scenario.inventory_release import checkpoint_binding, load_matrix
     matrix, binding = load_matrix(), checkpoint_binding()
     origins = matrix["training_schedule"]["origin_pool"]
@@ -241,7 +256,7 @@ def audit(config, run_id):
     for seed in (0, 1, 2):
         source_folder = ROOT / f"runs/m6p2b_formal_seed{seed}_v2"
         source = source_folder / "checkpoint_final.pt"
-        report = json.loads((source_folder / "report.json").read_text())
+        report = verify_written_run(source_folder, binding)
         manifest = json.loads((source_folder / "manifest.json").read_text())
         state = read_checkpoint_payload(source)["state"]
         if (manifest["status"] != "success" or report["scope"] != "formal_training"
@@ -249,6 +264,8 @@ def audit(config, run_id):
                 or (report["batches"], report["transitions"], report["adam_steps"],
                     report["lagrangian_updates"]) != (512, 98304, 8192, 512)
                 or state["next_batch_index"] != 512
+                or {int(s["step"]) for s in state["optimizer"]["state"].values()} != {8192}
+                or state["lagrangian"]["updates"] != 512
                 or state["source_ledger"]["master_seed"] != seed
                 or report["checkpoint_sha256"] != hashlib.sha256(source.read_bytes()).hexdigest()):
             raise ValueError(f"seed {seed} formal artifact review failed")
