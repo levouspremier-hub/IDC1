@@ -398,7 +398,8 @@ def build_snapshot(env) -> SystemSnapshot:
             upper_kwh=float((env.bess_soc_target + env.bess_soc_final_tolerance)
                             * env.bess_capacity_kWh),
         ), "service_guard": build_service_guard(
-            env, tasks, work_capacity, temperature=vectors["temperature"][0])}
+            env, tasks, work_capacity, temperature=vectors["temperature"],
+            arrival=vectors["arrival"])}
     snapshot_type = InventorySnapshot if inventory_fields else SystemSnapshot
     return snapshot_type(
         step=t,

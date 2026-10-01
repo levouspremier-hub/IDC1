@@ -34,7 +34,7 @@ def test_storage_proposal_cannot_starve_known_running_noninterruptible_task():
     assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
     guard = snapshot.service_guard
     assert plan.charge_kw[0] <= guard.charge_limit_kw + 1e-6
-    assert guard.renewable_reserve_assumption == 'zero-current-renewables'
+    assert guard.renewable_reserve_assumption == 'zero-renewables-through-real-remainder'
     assert 'planning assumptions' in plan.inventory_audit['reachability_scope']
 
 
@@ -64,11 +64,13 @@ def test_service_reserve_uses_only_arrived_tasks_and_forecast_channels():
     assert build_snapshot(env) == before
 
 
-def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity():
+@pytest.mark.parametrize("soc, reachable", [(.48, True), (.4, False)])
+def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity(soc, reachable):
     env = guarded_env()
-    env.task_arrival_forecast[:] = 0.  # Controlled known-only reachable recovery case.
-    env.bess_soc = .4
-    env.bess_energy_kWh = 40.
+    env.task_arrival_forecast[:] = 0.  # Controlled known-only recovery case.
+    env.access_limit_kw = env._idc_power_kw(np.full(env.model.N, env.base_load), 25.) + 2.
+    env.bess_soc = soc
+    env.bess_energy_kWh = soc * env.bess_capacity_kWh
     snapshot = build_snapshot(env)
     guard = snapshot.service_guard
     assert len(guard.charge_limits_kw) == snapshot.planning_horizon_steps
@@ -78,4 +80,11 @@ def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity()
     assert plan.solver_status == 'optimal'
     assert all(c <= limit + 1e-6 for c, limit in zip(
         plan.charge_kw, guard.charge_limits_kw, strict=True))
-    assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
+    assert plan.inventory_audit['target_reachable'] is reachable
+    if reachable:
+        assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
+    else:
+        best = soc * env.bess_capacity_kWh + sum(guard.charge_limits_kw) * .5 * .95
+        assert plan.soc_kwh[-1] == pytest.approx(best, abs=1e-6)
+        assert plan.inventory_audit['target_gap_kwh'] == pytest.approx(50. - best, abs=1e-6)
+        assert plan.inventory_audit['physical_unreachability_proven'] is False

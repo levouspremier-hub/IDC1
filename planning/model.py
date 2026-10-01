@@ -103,7 +103,8 @@ def _append_sparse_row(matrix: csr_matrix, row: dict[int, float]) -> csr_matrix:
 def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
     """Construct a zero-gap witness in a subset of the existing feasible domain.
 
-    Task allocation is zero and existing business/deadline slacks retain ALL work.
+    Task allocation is zero, or the registered current arrived service reserve.
+    Existing business/deadline slacks retain all unallocated work.
     Signed charge/discharge controls have continuous interval images. Propagate
     those images with SOC bounds, then backtrack a target witness. Failure here
     proves nothing about the full model (tasks can support additional discharge).
@@ -133,7 +134,7 @@ def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
         lower_increment = -max_discharge * dt / eta_d
         upper_increment = (-forced_discharge * dt / eta_d if forced_discharge > 0
                            else min(snapshot.bess_charge_power_max_kw,
-                                    guard.charge_limit_kw if k == 0 and guard is not None
+                                    guard.charge_limits_kw[k] if guard is not None
                                     else snapshot.bess_charge_power_max_kw,
                                     max(supply - base, 0.)) * dt * eta_c)
         lo = max(snapshot.soc_min_kwh, intervals[-1][0] + lower_increment)
@@ -1068,7 +1069,8 @@ def solve_time_indexed_mip_raw_projection(
 
     if inventory_enabled and terminal is not None:
         if guard is not None:
-            ub[off_charge] = min(ub[off_charge], guard.charge_limit_kw)
+            for k, limit in enumerate(guard.charge_limits_kw):
+                ub[off_charge + k] = min(ub[off_charge + k], limit)
             for g, work in enumerate(guard.group_work_floor):
                 add({a(i, g, 0): 1.0 for i in range(n_task)}, work, np.inf,
                     f"arrived_service_floor[{g}]")
@@ -1207,7 +1209,8 @@ def solve_time_indexed_mip_raw_projection(
             from types import SimpleNamespace
             # Feasible objective 0 + global nonnegative gap bound proves optimality.
             res_inventory = SimpleNamespace(status=0, x=certified_x)
-            reachability_method = "base_only_zero_gap_certificate"
+            reachability_method = ("arrived_service_zero_gap_certificate" if guard is not None
+                                   else "base_only_zero_gap_certificate")
         else:
             rem = _remaining()
             if rem is not None and rem <= 0:
@@ -1249,6 +1252,7 @@ def solve_time_indexed_mip_raw_projection(
             "reachability_solve_time_s": elapsed_inventory,
             "reachability_method": reachability_method,
             "reachability_scope": "registered planning assumptions; not realized physical proof",
+            "physical_unreachability_proven": False,
             "service_guard": (guard.model_dump()
                               if guard is not None else None),
             "inventory_numerical_allowance_kwh": 1e-7,
