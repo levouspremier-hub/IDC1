@@ -106,6 +106,8 @@ def main():
         "failure_snapshots": failures, "steps": rows,
         "validation_run": False, "test_run": False,
     }
+    # The service not-computable list is a tuple; compare the serialized form.
+    report = json.loads(json.dumps(report))
     write_run(
         args.run_id, config=config,
         metrics=pd.DataFrame([{k: r[k] for k in (
