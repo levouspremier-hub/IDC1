@@ -20,6 +20,13 @@ planning/service_guard.py 与 tests/test_m6p2b_service_guard.py，研究在既�
 具体任务或把保守规划假设当作实际物理不可达证明。服务保护尚未实现；若采用新
 语义，先建立失败测试，重新标定并写全新 v2_r2 / v4_r2 资产及 run-id，保留首轮资产。
 
+学习信号复查发现基础 520 维观测没有 SOC。允许在 safe_rl/corrector_wrapper.py
+新增 `terminal-state-observation-v1`：在原始观测末尾追加当前 SOC、既定目标 SOC、
+真实剩余步数/episode 步数三个无量纲量；原始观测及环境 step 不改。正式维度为
+523，新配置/checkpoint/导出绑定观测版本，旧权重只进入显式历史诊断。
+evaluation/adapter.py 的观测取值接口需保留 wrapper 的版本化观测，使训练、诊断
+和正式导出一致；该变更不运行 validation/test。后续五方法共享该可见状态定义。
+
 ## 禁止项
 
 不读或运行 validation/test；不改冻结服务标准、refs_v4、日期、批次顺序或种子；不放宽物理/任务约束，不重置 SOC、清空队列或跳过任务。不可达、超时、预测误差分别记录，不伪造成功。不改受保护目录，不把 exec 写入 raw 或 log-prob。原奖励优先；禁止逐步保持 50% SOC 的惩罚。若涉及环境 step，先提交失败测试。
