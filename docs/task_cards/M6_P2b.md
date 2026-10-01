@@ -79,3 +79,33 @@ uv run pytest tests/test_m6p2b_sparse_assembly.py
 短跑闸门失败，未启动长训、636 条新训练诊断或 validation/test。原奖励未改。
 已修复部分求解预算与 Stage B 原生数值错误；该候选代码尚未重新发布，首轮
 release/checkpoint 绑定保留为历史证据，不能在代码 hash 不一致时用于新正式训练。
+
+### 原奖励短跑失败后的 r2 候选
+
+已提交观测接线与当前服务预留。`arrived-service-reserve-v1` 使用当前已到达任务的
+期限、已启动不可中断状态及既有分配顺序，设置当前计算下界；为所有当前可处理
+工作以 B6 可见温度的非线性 IDC 功率预留充电余量，可再生按明确的零供给假设。
+这是收紧的规划假设，不能写成实际物理不可达证明；预算、真实终点、Stage R→A→B、
+原奖励及物理校验不变。环境 step 未修改。
+
+当前预留的一日诊断保留了服务，但暴露日终回充余量过于乐观的问题；已提交全
+剩余时域充电预留的失败测试。修复应只使用已到达任务与 B6 的聚合到达预测，
+不实例化或读取未到达任务的内容。所有预留假设进入快照及审计。
+
+r2 资产尚未冻结。后续正式验收使用全新路径：
+
+```sh
+uv run pytest tests/test_m6p2b_service_guard.py tests/test_m6p2b_inventory_observation.py tests/test_m6p2b_release_checkpoint.py
+uv run python -m scripts.m6p2b_reward_counterfactual --candidate --run-id m6p2b_reward_counterfactual_v2_r3
+uv run python -m scripts.m6p2b_inventory_repair --phase calibrate --run-id m6p2b_calibration_v2_r2
+uv run python -m scripts.m6p2b_inventory_repair --phase release --run-id m6p2b_release_v2_r2
+uv run python -m safe_rl_v2.inventory_train --short --seed 0 --run-id m6p2b_short_seed0_v2_r2
+uv run python -m safe_rl_v2.inventory_train --short --seed 1 --run-id m6p2b_short_seed1_v2_r2
+uv run python -m safe_rl_v2.inventory_train --short --seed 2 --run-id m6p2b_short_seed2_v2_r2
+uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_short_gate_v2_r2
+```
+
+上述 r3 counterfactual 为全 24-origin、零参数更新的未发布候选诊断，尚在运行。
+初版 r2 因零购电费计算奖励斜率时报错，失败产物完整保留，原始逐步数据未成功
+落盘，报告明确标注仅有控制台舍入摘要，不能当作正式测量。斜率现从实际环境
+系数与冻结参考值计算，后续异常会保存已完成 episode 和完整失败状态。
