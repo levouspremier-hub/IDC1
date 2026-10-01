@@ -1,4 +1,7 @@
-# IDC 项目交接：新 ChatGPT 对话当前入口
+> **当前入口已更新：请先读 [`CHATGPT_HANDOFF_2026-10-01.md`](CHATGPT_HANDOFF_2026-10-01.md)。**
+> 下文保留的是 2026-09-23 起的历史交接快照，包含已经过时的训练 readiness 和下一步描述。
+
+# IDC 项目交接：新 ChatGPT 对话当前入口（历史快照）
 
 更新时间：2026-09-23（Asia/Shanghai）\
 代码快照：`8cd2772e9b2c8d1c8d8bdc3f0215a201f79a59f8`\
