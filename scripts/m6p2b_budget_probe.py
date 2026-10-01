@@ -27,6 +27,8 @@ def main():
     parser.add_argument("--trace-run", required=True)
     parser.add_argument("--baseline-revision", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--variant", choices=("default", "no_heuristics", "no_presolve",
+                                             "strict_gap"), default="default")
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("probe run already exists")
@@ -57,7 +59,20 @@ def main():
                     solver_calls = []
                     original_milp = scipy.optimize.milp
 
-                    def measured_milp(_original=original_milp, _calls=solver_calls, **kwargs):
+                    def measured_milp(_original=original_milp, _calls=solver_calls,
+                                      _arm=arm, **kwargs):
+                        if _arm == "candidate":
+                            kwargs["options"] = dict(kwargs["options"])
+                            if args.variant == "no_heuristics":
+                                kwargs["options"].update(
+                                    mip_heuristic_effort=0.,
+                                    mip_heuristic_run_feasibility_jump=False,
+                                    mip_heuristic_run_rens=False, mip_heuristic_run_rins=False,
+                                    mip_heuristic_run_root_reduced_cost=False)
+                            elif args.variant == "no_presolve":
+                                kwargs["options"]["presolve"] = False
+                            elif args.variant == "strict_gap":
+                                kwargs["options"].update(mip_rel_gap=0., mip_abs_gap=1e-9)
                         output = _original(**kwargs)
                         _calls.append({"status": int(output.status),
                                        "message": str(output.message)})
@@ -83,6 +98,7 @@ def main():
     frame = pd.DataFrame(rows)
     result = {
         "scope": "train_only_unreleased_candidate_budget_probe", "global_budget_s": .25,
+        "candidate_solver_variant": args.variant,
         "baseline_revision": args.baseline_revision,
         "baseline_planning_sha256": hashlib.sha256(source).hexdigest(),
         "candidate_planning_sha256": sha(ROOT / "planning/model.py"),
