@@ -54,7 +54,7 @@ def load_config():
     from safe_rl_v2.formal_train_loop import live_asset_hash_check
     from scripts.calibrate_training_config import select_origins
     calibration = config["calibration"]
-    if calibration["split"] != "train" or calibration["origins"] != select_origins():
+    if calibration["split"] != "train" or calibration["origins"] != list(select_origins()):
         raise ValueError("v2 calibration must use the frozen 24 train origins")
     for kind in ("manifest", "report"):
         if sha(ROOT / calibration[f"run_{kind}_path"]) != calibration[f"run_{kind}_sha256"]:

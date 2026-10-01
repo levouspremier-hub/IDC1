@@ -165,3 +165,13 @@ def test_formal_gate_rechecks_source_runs_instead_of_trusting_passed_flag(tmp_pa
     monkeypatch.setattr(diagnostics, 'short_gate', lambda: ([], {'passed': False}, {}))
     with pytest.raises(ValueError, match='live short-run artifacts'):
         train.require_short_gate(binding)
+
+
+def test_frozen_v2_config_accepts_same_ordered_origins_from_json_and_selector():
+    from scenario.inventory_release import CONFIG_PATH, ROOT, load_config, load_matrix
+    if not (ROOT / CONFIG_PATH).exists():
+        pytest.skip('v2 calibration not available on this checkout')
+    config = load_config()
+    assert config['version'] == 'v2'
+    assert len(config['calibration']['origins']) == 24
+    assert load_matrix()['schema'] == 'm9-experiment-matrix-v4'
