@@ -12,6 +12,7 @@ import types
 import warnings
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 import scipy.optimize
 
@@ -28,7 +29,7 @@ def main():
     parser.add_argument("--baseline-revision", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--variant", choices=("default", "no_heuristics", "no_presolve",
-                                             "strict_gap"), default="default")
+                                             "strict_gap", "strict_feasibility"), default="default")
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("probe run already exists")
@@ -73,9 +74,20 @@ def main():
                                 kwargs["options"]["presolve"] = False
                             elif args.variant == "strict_gap":
                                 kwargs["options"].update(mip_rel_gap=0., mip_abs_gap=1e-9)
+                            elif args.variant == "strict_feasibility":
+                                kwargs["options"].update(mip_feasibility_tolerance=1e-8,
+                                                         primal_feasibility_tolerance=1e-8,
+                                                         dual_feasibility_tolerance=1e-8)
                         output = _original(**kwargs)
-                        _calls.append({"status": int(output.status),
-                                       "message": str(output.message)})
+                        native = {"status": int(output.status), "message": str(output.message)}
+                        if output.x is not None:
+                            constraints = kwargs["constraints"][0]
+                            bounds = kwargs["bounds"]
+                            lhs = constraints.A @ output.x
+                            native["max_primal_violation"] = float(max(
+                                np.max(constraints.lb - lhs), np.max(lhs - constraints.ub),
+                                np.max(bounds.lb - output.x), np.max(output.x - bounds.ub), 0.))
+                        _calls.append(native)
                         return output
 
                     start = time.perf_counter()
