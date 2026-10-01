@@ -116,6 +116,7 @@ class Correction:
     projection_offset: float = 0.0
     solve_time_s: float = 0.0
     audit: dict = field(default_factory=dict)
+    inventory_audit: dict = field(default_factory=dict)
 
 
 def _zero_action(
@@ -141,6 +142,7 @@ def _zero_action(
         stage_b_objective=float(stage.get("stage_b_objective", 0.0)),
         projection_offset=float(stage.get("projection_offset", 0.0)),
         solve_time_s=float(stage.get("solve_time_s", 0.0)),
+        inventory_audit=dict(stage.get("inventory_audit", {})),
     )
 
 
@@ -193,6 +195,7 @@ def correct(
         stage_b_objective=res.stage_b_objective,
         projection_offset=res.projection_offset,
         solve_time_s=solve_time,
+        inventory_audit=res.inventory_audit,
     )
 
     if failure not in _EXECUTABLE:
@@ -217,4 +220,5 @@ def correct(
         stage_b_objective=float(res.stage_b_objective),
         projection_offset=float(res.projection_offset),
         solve_time_s=float(solve_time),
+        inventory_audit=dict(res.inventory_audit),
     )

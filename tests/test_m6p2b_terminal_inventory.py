@@ -14,7 +14,7 @@ def _env(horizon=48, soc=0.5):
     horizon = max(horizon, 2)  # demo generator requires at least two steps
     env = IDCPriceEnv20D(
         horizon=horizon, forecast_cutoff=4, delta_t_hours=0.5,
-        bess_soc_init=soc, access_limit_kw=1000.0,
+        bess_soc_init=soc, access_limit_kw=1000.0, base_load=0.3,
         price_t=np.full(horizon, 0.2), pv_t=np.zeros(horizon),
         wt_t=np.zeros(horizon), carbon_factor_t=np.full(horizon, 0.4),
         T_amb=np.full(horizon, 25.0),

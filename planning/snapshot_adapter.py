@@ -39,6 +39,7 @@ from typing import cast
 
 import numpy as np
 
+from contracts.inventory import InventorySnapshot, TerminalInventory
 from contracts.models import (
     BUNDLE_FORECAST_FIELDS,
     ArtifactDigest,
@@ -257,6 +258,8 @@ def _oracle_debug_bundle(
 
 def _planning_horizon(env, cap: int = PLANNING_HORIZON_CAP) -> int:
     remaining = int(env.horizon) - int(env.current_step)
+    if bool(getattr(env, "terminal_inventory_enabled", False)):
+        return max(remaining, 0)
     return max(min(cap, remaining), 0)
 
 
@@ -384,10 +387,22 @@ def build_snapshot(env) -> SystemSnapshot:
     work_capacity = group_capacity_per_step * float(env.max_task_load_per_server)
     coeff = (p_max_kw - p_idle_kw) / np.maximum(group_capacity_per_step, 1e-6)
 
-    return SystemSnapshot(
+    inventory_fields: dict = {}
+    if bool(getattr(env, "terminal_inventory_enabled", False)):
+        inventory_fields = {"terminal_inventory": TerminalInventory(
+            episode_end_step=horizon, remaining_steps=horizon - t,
+            target_kwh=float(env.bess_soc_target * env.bess_capacity_kWh),
+            lower_kwh=float((env.bess_soc_target - env.bess_soc_final_tolerance)
+                            * env.bess_capacity_kWh),
+            upper_kwh=float((env.bess_soc_target + env.bess_soc_final_tolerance)
+                            * env.bess_capacity_kWh),
+        )}
+    snapshot_type = InventorySnapshot if inventory_fields else SystemSnapshot
+    return snapshot_type(
         step=t,
         delta_t_hours=float(env.delta_t_hours),
         planning_horizon_steps=n_steps,
+        **inventory_fields,
         soc_kwh=float(env.bess_energy_kWh),
         soc_min_kwh=float(env.bess_soc_min * env.bess_capacity_kWh),
         soc_max_kwh=float(env.bess_soc_max * env.bess_capacity_kWh),

@@ -3,13 +3,13 @@
 ## 开卡 / 回滚点
 
 - 起点：`55be5e53330636d9f7d21cf26631d47b220dbd91`；开卡工作树为空，diff --check exit 0。
-- 独立分支：`p5-eval-viz-m6-p2b`（已有 p5-eval-viz 保留，不覆盖）。
+- 独立分支：`p5-eval-viz-m6-p2b-runtime`（从失败测试提交 d7ccf56 分出；历史诊断分支 p5-eval-viz-m6-p2b/c936f53 保留，未改写历史）。公共 forecast 契约不修改，避免冻结 B6 revision 失效。
 - 回滚：在独立 worktree 从最终 HEAD newest-first `git revert` 本卡提交，核对起点 tree；不合并 paper-baseline。
 - 授权：用户明确要求实现本卡，包括短跑、版本发布、验收通过后的 3×512 批重训及 636 条 train 诊断。
 
 ## 边界
 
-允许：contracts/models.py、contracts/validators.py；planning/model.py、planning/snapshot_adapter.py、planning/corrector.py；safe_rl/corrector_wrapper.py；safe_rl_v2/rollout.py、formal_train_loop.py，以及新增 inventory 训练/诊断模块；新增 scenario/inventory_release.py 与 checkpointing/inventory_eval_input.py；scripts/m6p2b_inventory_repair.py；Makefile；本卡相关测试、docs 文档、新 v2 配置/发布与 v4 矩阵；全新 runs/m6p2b_* 产物。
+允许：新增 contracts/inventory.py（公共 forecast 契约保持原字节）；planning/model.py、planning/snapshot_adapter.py、planning/corrector.py；safe_rl/corrector_wrapper.py；safe_rl_v2/rollout.py、formal_train_loop.py，以及新增 inventory 训练/诊断模块；新增 scenario/inventory_release.py 与 checkpointing/inventory_eval_input.py；scripts/m6p2b_inventory_repair.py；Makefile；本卡相关测试、docs 文档、新 v2 配置/发布与 v4 矩阵；全新 runs/m6p2b_* 产物。
 
 旧配置/发布/矩阵/运行产物保留。新正式入口须绑定训练语义，不允许旧 checkpoint 跨版本恢复。历史重放只读权重，不进行更新。
 

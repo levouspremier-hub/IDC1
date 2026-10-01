@@ -26,6 +26,7 @@ import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, linprog
 from scipy.sparse import csr_matrix, lil_matrix
 
+from contracts.inventory import InventorySnapshot, validate_inventory_snapshot
 from contracts.models import SystemSnapshot
 
 # --- 单位声明（供调用方与测试断言） ---
@@ -817,6 +818,7 @@ class RawProjectionResult:
     # 只读：阶段 A 自身解在**第 0 步**给每个任务的分配量（work-units）与其 deadline slack
     stage_a_task_step0_work: list[float] = field(default_factory=list)
     stage_a_deadline_slack: list[float] = field(default_factory=list)
+    inventory_audit: dict = field(default_factory=dict)
 
 
 def _projection_empty(
@@ -847,6 +849,10 @@ def _projection_empty(
         soc_kwh=[float(snapshot.soc_kwh)] * (H + 1),
         residuals_by_constraint={}, max_constraint_residual=0.0,
         power_approximation_used=True,
+        inventory_audit=dict(audit.get("inventory_audit", {"target_reachable": None,
+                          "band_reachable": None,
+                          "status": "unproven", "reachability_solve_time_s": 0.0}
+                         if isinstance(snapshot, InventorySnapshot) else {})),
     )
 
 
@@ -884,6 +890,14 @@ def solve_time_indexed_mip_raw_projection(
     """
     import time
 
+    inventory_enabled = isinstance(snapshot, InventorySnapshot)
+    terminal = snapshot.terminal_inventory if isinstance(snapshot, InventorySnapshot) else None
+    if isinstance(snapshot, InventorySnapshot):
+        validate_inventory_snapshot(snapshot)
+    call_deadline = (_monotonic() + float(time_limit_s)
+                     if inventory_enabled and time_limit_s is not None
+                     else None)
+
     H = int(snapshot.planning_horizon_steps)
     n_task = len(snapshot.tasks)
     n_group = len(snapshot.group_work_capacity)
@@ -920,7 +934,8 @@ def solve_time_indexed_mip_raw_projection(
     off_z = off_dls + n_task
     off_d = off_z + H          # 逐组 |u_g - raw_compute_g|
     off_e = off_d + n_group    # |exec_storage - raw_storage|
-    n_vars = off_e + 1
+    off_inventory_gap = off_e + 1
+    n_vars = off_inventory_gap + (1 if inventory_enabled else 0)
 
     # 经济/服务目标（阶段 B 的 tie-break，单位 SGD）
     c_econ = np.zeros(n_vars)
@@ -973,6 +988,12 @@ def solve_time_indexed_mip_raw_projection(
         mutual_exclusion=True,
     )
 
+    if inventory_enabled and terminal is not None:
+        add({off_inventory_gap: 1.0, off_soc + H: -1.0},
+            -terminal.target_kwh, np.inf, "terminal_gap_below")
+        add({off_inventory_gap: 1.0, off_soc + H: 1.0},
+            terminal.target_kwh, np.inf, "terminal_gap_above")
+
     # 投影绝对值线性化：d_g >= |u_g - raw_g|（cap<=0 时 u_g=0）
     for g in range(n_group):
         row_ge = {off_d + g: 1.0}
@@ -1005,7 +1026,8 @@ def solve_time_indexed_mip_raw_projection(
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
     # 全局 deadline：阶段 A 与 B 共享同一次调用的总预算
-    deadline = None if time_limit_s is None else _monotonic() + float(time_limit_s)
+    deadline = (call_deadline if call_deadline is not None else
+                None if time_limit_s is None else _monotonic() + float(time_limit_s))
 
     def _remaining() -> float | None:
         if deadline is None:
@@ -1019,7 +1041,7 @@ def solve_time_indexed_mip_raw_projection(
         return deterministic_mip_options(time_limit_s=_remaining())
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
-    _audit = {
+    _audit: dict = {
         "n_variables": n_vars, "n_integer_variables": H, "n_constraints": len(rows) + 1,
     }
 
@@ -1034,6 +1056,50 @@ def solve_time_indexed_mip_raw_projection(
 
     # --- 阶段 A：最小化原始动作偏移 ---
     from scipy.optimize import milp as _milp
+
+    inventory_audit: dict = {}
+    if inventory_enabled and terminal is not None:
+        rem = _remaining()
+        if rem is not None and rem <= 0:
+            return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
+        c_inventory = np.zeros(n_vars)
+        c_inventory[off_inventory_gap] = 1.0
+        t_inventory = time.perf_counter()
+        res_inventory = _milp(
+            c=c_inventory,
+            constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
+            integrality=integrality, bounds=bounds_vec, options=_options(),
+        )
+        elapsed_inventory = time.perf_counter() - t_inventory
+        inventory_status = _status(res_inventory)
+        if inventory_status != SOLVER_OPTIMAL:
+            failure = (FAILURE_TIMEOUT if inventory_status == SOLVER_TIME_LIMIT
+                       else FAILURE_SOLVER_FAILURE)
+            result = _projection_empty(snapshot, inventory_status, failure, _audit)
+            result.inventory_audit.update(
+                status="unproven", reachability_solve_time_s=elapsed_inventory)
+            return result
+        minimum_gap = max(float(res_inventory.x[off_inventory_gap]), 0.0)
+        # Exact optimum is shared by both subsequent stages; no inventory reset.
+        bounds_vec.ub[off_inventory_gap] = minimum_gap
+        attainable = float(res_inventory.x[off_soc + H])
+        band_gap = max(terminal.lower_kwh - attainable, attainable - terminal.upper_kwh, 0.0)
+        inventory_audit = {
+            "version": terminal.version, "episode_end_step": terminal.episode_end_step,
+            "remaining_steps": terminal.remaining_steps, "target_kwh": terminal.target_kwh,
+            "lower_kwh": terminal.lower_kwh, "upper_kwh": terminal.upper_kwh,
+            "target_reachable": bool(minimum_gap <= 1e-6),
+            "band_reachable": bool(band_gap <= 1e-6),
+            "target_gap_kwh": minimum_gap, "band_gap_kwh": float(band_gap),
+            "reachability_solve_time_s": elapsed_inventory,
+            "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
+        }
+        _audit["inventory_audit"] = inventory_audit
+        rem = _remaining()
+        if rem is not None and rem <= 0:
+            result = _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
+            result.inventory_audit.update(inventory_audit)
+            return result
 
     tA0 = time.perf_counter()
     res_a = _milp(
@@ -1094,6 +1160,8 @@ def solve_time_indexed_mip_raw_projection(
         for i in range(n_task)
     ]
     stage_a_deadline_slack = [float(res_a.x[off_dls + i]) for i in range(n_task)]
+    if inventory_audit:
+        inventory_audit["stage_a_terminal_kwh"] = float(res_a.x[off_soc + H])
 
     # 阶段 A 后预算已耗尽 → 不启动阶段 B，直接 timeout
     rem_b = _remaining()
@@ -1189,4 +1257,6 @@ def solve_time_indexed_mip_raw_projection(
         stage_a_exec_compute_actions=stage_a_exec_compute,
         stage_a_task_step0_work=stage_a_task_step0_work,
         stage_a_deadline_slack=stage_a_deadline_slack,
+        inventory_audit={**inventory_audit, "predicted_terminal_kwh": float(x[off_soc + H])}
+        if inventory_audit else {},
     )

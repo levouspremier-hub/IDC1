@@ -71,4 +71,22 @@ class CorrectorWrapper(gym.Wrapper):
         info["stage_a_objective"] = float(correction.stage_a_objective)
         info["stage_b_objective"] = float(correction.stage_b_objective)
         info["projection_offset"] = float(correction.projection_offset)
+        if bool(getattr(snapshot, "terminal_inventory_enabled", False)):
+            info["inventory_audit"] = {
+                **correction.inventory_audit,
+                "actual_energy_kwh": float(self.env.bess_energy_kWh),
+                "actual_soc": float(self.env.bess_soc),
+                "episode_complete": bool(terminated),
+                "actual_terminal_target_gap_kwh": (
+                    abs(float(self.env.bess_energy_kWh) - float(self.env.bess_soc_target
+                        * self.env.bess_capacity_kWh)) if terminated else None),
+            }
+            info["inventory_training_diagnostics"] = {
+                key: float(info[key]) for key in (
+                    "r_cost", "r_soc_final", "r_bess_degradation", "r_carbon")
+            }
+            info["inventory_training_diagnostics"].update(
+                charge_kw=float(info["bess_charge_power_kW"]),
+                discharge_kw=float(info["bess_discharge_power_kW"]),
+            )
         return obs, reward, terminated, truncated, info
