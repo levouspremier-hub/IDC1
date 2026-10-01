@@ -20,9 +20,20 @@ class TerminalInventory(ContractBase):
     }
 
 
+class ArrivedServiceReserve(ContractBase):
+    version: Literal["arrived-service-reserve-v1"] = "arrived-service-reserve-v1"
+    renewable_reserve_assumption: Literal["zero-current-renewables"] = "zero-current-renewables"
+    charge_limit_kw: float
+    reserved_service_power_kw: float
+    group_work_floor: list[float]
+    current_allocation: list[list[float]]
+    note: str
+
+
 class InventorySnapshot(SystemSnapshot):
     terminal_inventory_enabled: bool = True
     terminal_inventory: TerminalInventory | None
+    service_guard: ArrivedServiceReserve | None = None
 
 
 def validate_inventory_snapshot(snapshot: InventorySnapshot) -> None:
@@ -36,3 +47,16 @@ def validate_inventory_snapshot(snapshot: InventorySnapshot) -> None:
     if not (snapshot.soc_min_kwh <= terminal.lower_kwh <= terminal.target_kwh
             <= terminal.upper_kwh <= snapshot.soc_max_kwh):
         raise ValueError("terminal inventory bounds are invalid")
+    guard = snapshot.service_guard
+    if guard is not None:
+        import numpy as np
+        floor = np.asarray(guard.group_work_floor)
+        allocation = np.asarray(guard.current_allocation).reshape(
+            len(snapshot.tasks), len(snapshot.group_work_capacity))
+        if (len(floor) != len(snapshot.group_work_capacity)
+                or not np.all(np.isfinite(floor)) or np.any(floor < 0)
+                or np.any(floor > np.asarray(snapshot.group_work_capacity) + 1e-8)
+                or not 0 <= guard.charge_limit_kw <= snapshot.bess_charge_power_max_kw
+                or not np.all(np.isfinite(allocation)) or np.any(allocation < 0)
+                or not np.allclose(allocation.sum(axis=0), floor, atol=1e-8, rtol=0)):
+            raise ValueError("invalid arrived service guard")

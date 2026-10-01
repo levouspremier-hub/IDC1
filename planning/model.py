@@ -119,8 +119,12 @@ def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
     intervals = [(snapshot.soc_kwh, snapshot.soc_kwh)]
     increments = []
     pf = snapshot.planning_forecast
+    guard = snapshot.service_guard
     for k in range(snapshot.planning_horizon_steps):
         base = pf.base_idc_power[k]
+        if k == 0 and guard is not None:
+            base += sum(c * w for c, w in zip(snapshot.group_power_coeff_kw_per_work,
+                                            guard.group_work_floor, strict=True))
         supply = snapshot.access_limit_kw + pf.pv[k] + pf.wind[k]
         forced_discharge = max(base - supply, 0.)
         max_discharge = min(snapshot.bess_discharge_power_max_kw, base)
@@ -129,6 +133,8 @@ def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
         lower_increment = -max_discharge * dt / eta_d
         upper_increment = (-forced_discharge * dt / eta_d if forced_discharge > 0
                            else min(snapshot.bess_charge_power_max_kw,
+                                    guard.charge_limit_kw if k == 0 and guard is not None
+                                    else snapshot.bess_charge_power_max_kw,
                                     max(supply - base, 0.)) * dt * eta_c)
         lo = max(snapshot.soc_min_kwh, intervals[-1][0] + lower_increment)
         hi = min(snapshot.soc_max_kwh, intervals[-1][1] + upper_increment)
@@ -962,6 +968,7 @@ def solve_time_indexed_mip_raw_projection(
     import time
 
     inventory_enabled = isinstance(snapshot, InventorySnapshot)
+    guard = snapshot.service_guard if isinstance(snapshot, InventorySnapshot) else None
     terminal = snapshot.terminal_inventory if isinstance(snapshot, InventorySnapshot) else None
     if isinstance(snapshot, InventorySnapshot):
         validate_inventory_snapshot(snapshot)
@@ -1060,6 +1067,11 @@ def solve_time_indexed_mip_raw_projection(
     )
 
     if inventory_enabled and terminal is not None:
+        if guard is not None:
+            ub[off_charge] = min(ub[off_charge], guard.charge_limit_kw)
+            for g, work in enumerate(guard.group_work_floor):
+                add({a(i, g, 0): 1.0 for i in range(n_task)}, work, np.inf,
+                    f"arrived_service_floor[{g}]")
         add({off_inventory_gap: 1.0, off_soc + H: -1.0},
             -terminal.target_kwh, np.inf, "terminal_gap_below")
         add({off_inventory_gap: 1.0, off_soc + H: 1.0},
@@ -1151,22 +1163,35 @@ def solve_time_indexed_mip_raw_projection(
         certified_x = None
         if certificate is not None:
             witness = np.zeros(n_vars)
+            if guard is not None:
+                for i in range(n_task):
+                    for g in range(n_group):
+                        witness[a(i, g, 0)] = guard.current_allocation[i][g]
             witness[off_soc:off_soc + H + 1] = certificate["energy_kwh"]
             witness[off_charge:off_charge + H] = certificate["charge_kw"]
             witness[off_discharge:off_discharge + H] = certificate["discharge_kw"]
             for k in range(H):
-                demand = (pf.base_idc_power[k] + certificate["charge_kw"][k]
+                task_power = sum(snapshot.group_power_coeff_kw_per_work[g]
+                                 * sum(witness[a(i, g, k)] for i in range(n_task))
+                                 for g in range(n_group))
+                idc_power = pf.base_idc_power[k] + task_power
+                demand = (idc_power + certificate["charge_kw"][k]
                           - certificate["discharge_kw"][k])
                 pv_used = min(pf.pv[k], max(demand, 0.))
                 wind_used = min(pf.wind[k], max(demand - pv_used, 0.))
-                witness[off_pidc + k] = pf.base_idc_power[k]
+                witness[off_pidc + k] = idc_power
                 witness[off_pgrid + k] = demand - pv_used - wind_used
                 witness[off_pv + k], witness[off_wind + k] = pv_used, wind_used
                 witness[off_curtail + k] = pf.pv[k] + pf.wind[k] - pv_used - wind_used
                 witness[off_z + k] = int(certificate["charge_kw"][k] > 0)
             for i, task in enumerate(snapshot.tasks):
-                witness[off_bus + i] = witness[off_dls + i] = task.remaining_work
-            witness[off_d:off_d + n_group] = np.abs(raw_compute)
+                witness[off_bus + i] = task.remaining_work - sum(
+                    witness[a(i, g, 0)] for g in range(n_group))
+                witness[off_dls + i] = task.remaining_work
+            witness[off_d:off_d + n_group] = [
+                abs(sum(witness[a(i, g, 0)] for i in range(n_task)) / cap[g]
+                    - raw_compute[g]) if cap[g] > 0 else abs(raw_compute[g])
+                for g in range(n_group)]
             witness[off_e] = abs(witness[off_discharge] / dmax
                                      - witness[off_charge] / cmax - raw_storage)
             lhs = A_csr @ witness
@@ -1223,6 +1248,9 @@ def solve_time_indexed_mip_raw_projection(
             "target_gap_kwh": minimum_gap, "band_gap_kwh": float(band_gap),
             "reachability_solve_time_s": elapsed_inventory,
             "reachability_method": reachability_method,
+            "reachability_scope": "registered planning assumptions; not realized physical proof",
+            "service_guard": (guard.model_dump()
+                              if guard is not None else None),
             "inventory_numerical_allowance_kwh": 1e-7,
             "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
         }

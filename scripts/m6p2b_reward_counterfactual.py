@@ -64,57 +64,68 @@ def main():
             raise ValueError("diagnostic origin prefix must have 1..24 entries")
         origins = origins[:args.origins_limit]
     rows, pairs, provenance = [], [], {}
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        for origin in origins:
-            arms = []
-            for amplitude in (0., .05, .1):
-                result, _steps, service, inventory = evaluate_origin(
-                    config, origin, 0, proposal(amplitude, config["training"]["policy"]["obs_dim"]),
-                    run_id=args.run_id)
-                result.update(amplitude=amplitude, service_metrics=service.service.model_dump(),
-                              inventory_record=inventory.to_dict())
-                rows.append(result)
-                arms.append(result)
-                provenance[origin] = result["injection_provenance"]
-            baseline = arms[0]
-            for arm in arms[1:]:
-                eligible = all(r["episode_complete"] and r["service_qualified"]
-                               and r["inventory_qualified"] and r["physical_violation_count"] == 0
-                               and r["fallbacks"] == 0 for r in (baseline, arm))
-                bi, ai = baseline["inventory_record"], arm["inventory_record"]
-                terminal_difference = abs(bi["final_energy_kwh"] - ai["final_energy_kwh"])
-                eligible = (eligible and terminal_difference <= 1e-6
-                            and bi["capacity_kwh"] == ai["capacity_kwh"]
-                            and abs(bi["initial_energy_kwh"] - ai["initial_energy_kwh"]) <= 1e-6)
-                purchase_gain = baseline["purchase_cost_sgd"] - arm["purchase_cost_sgd"]
-                degradation_extra = (arm["degradation_cost_sgd"]
-                                     - baseline["degradation_cost_sgd"])
-                cost_slope = -arm["r_cost_sum"] / arm["purchase_cost_sgd"]
-                degradation_slope = (-arm["r_bess_degradation_sum"]
-                                     / arm["degradation_cost_sgd"]
-                                     if arm["degradation_cost_sgd"] > 0 else None)
-                pair = {
-                    "origin": origin, "amplitude": arm["amplitude"], "eligible": eligible,
-                    "terminal_energy_difference_kwh": terminal_difference,
-                    "purchase_gain_sgd": purchase_gain, "degradation_extra_sgd": degradation_extra,
-                    "net_money_gain_sgd": purchase_gain - degradation_extra,
-                    "original_reward_gain": arm["measured_reward_sum"]
-                    - baseline["measured_reward_sum"],
-                    "reward_units_per_purchase_sgd": cost_slope,
-                    "reward_units_per_degradation_sgd": degradation_slope,
-                    "reward_component_differences": {
-                        k: arm[k] - baseline[k] for k in arm if k.startswith("r_")
-                        and k.endswith(("_sum", "_discounted"))},
-                }
-                pair["common_sgd_reward_arithmetic_gain"] = (
-                    pair["original_reward_gain"]
-                    - (arm["r_bess_degradation_sum"] - baseline["r_bess_degradation_sum"])
-                    - cost_slope * degradation_extra)
-                pairs.append(pair)
-            print(f"origin={origin} fair_pairs={sum(p['eligible'] for p in pairs[-2:])} "
-                  f"net_money={[round(p['net_money_gain_sgd'], 6) for p in pairs[-2:]]}",
-                  flush=True)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            for origin in origins:
+                arms = []
+                for amplitude in (0., .05, .1):
+                    result, _steps, service, inventory = evaluate_origin(
+                        config, origin, 0, proposal(amplitude, config["training"]["policy"]["obs_dim"]),
+                        run_id=args.run_id)
+                    result.update(amplitude=amplitude, service_metrics=service.service.model_dump(),
+                                  inventory_record=inventory.to_dict())
+                    rows.append(result)
+                    arms.append(result)
+                    provenance[origin] = result["injection_provenance"]
+                baseline = arms[0]
+                for arm in arms[1:]:
+                    eligible = all(r["episode_complete"] and r["service_qualified"]
+                                   and r["inventory_qualified"] and r["physical_violation_count"] == 0
+                                   and r["fallbacks"] == 0 for r in (baseline, arm))
+                    bi, ai = baseline["inventory_record"], arm["inventory_record"]
+                    terminal_difference = abs(bi["final_energy_kwh"] - ai["final_energy_kwh"])
+                    eligible = (eligible and terminal_difference <= 1e-6
+                                and bi["capacity_kwh"] == ai["capacity_kwh"]
+                                and abs(bi["initial_energy_kwh"] - ai["initial_energy_kwh"]) <= 1e-6)
+                    purchase_gain = baseline["purchase_cost_sgd"] - arm["purchase_cost_sgd"]
+                    degradation_extra = (arm["degradation_cost_sgd"]
+                                         - baseline["degradation_cost_sgd"])
+                    cost_slope = arm["reward_units_per_purchase_sgd"]
+                    degradation_slope = arm["reward_units_per_degradation_sgd"]
+                    pair = {
+                        "origin": origin, "amplitude": arm["amplitude"], "eligible": eligible,
+                        "terminal_energy_difference_kwh": terminal_difference,
+                        "purchase_gain_sgd": purchase_gain, "degradation_extra_sgd": degradation_extra,
+                        "net_money_gain_sgd": purchase_gain - degradation_extra,
+                        "original_reward_gain": arm["measured_reward_sum"]
+                        - baseline["measured_reward_sum"],
+                        "reward_units_per_purchase_sgd": cost_slope,
+                        "reward_units_per_degradation_sgd": degradation_slope,
+                        "reward_component_differences": {
+                            k: arm[k] - baseline[k] for k in arm if k.startswith("r_")
+                            and k.endswith(("_sum", "_discounted"))},
+                    }
+                    pair["common_sgd_reward_arithmetic_gain"] = (
+                        pair["original_reward_gain"]
+                        - (arm["r_bess_degradation_sum"] - baseline["r_bess_degradation_sum"])
+                        - cost_slope * degradation_extra)
+                    pairs.append(pair)
+                print(f"origin={origin} fair_pairs={sum(p['eligible'] for p in pairs[-2:])} "
+                      f"net_money={[round(p['net_money_gain_sgd'], 6) for p in pairs[-2:]]}",
+                      flush=True)
+    except Exception as error:
+        failure = {"scope": "train_only_candidate_reward_counterfactual", "status": "failed",
+                   "failure": f"{type(error).__name__}: {error}", "parameter_updates": 0,
+                   "candidate_semantics_binding": semantics_binding(),
+                   "instrumentation_sha256": sha(__file__), "pairs": pairs,
+                   "completed_episodes": len(rows), "formal_acceptance_claimed": False}
+        write_run(args.run_id, config=config, metrics=pd.DataFrame(rows), report=failure,
+                  base_dir=str(ROOT / "runs"), seed=0, status="failed",
+                  failure_classification="candidate_diagnostic_failure",
+                  command="python -m scripts.m6p2b_reward_counterfactual " + " ".join(sys.argv[1:]),
+                  **training_source_ledger(provenance))
+        raise
     report = {
         "scope": "train_only_unreleased_candidate_reward_counterfactual",
         "origins": origins, "full_24_origin_diagnostic": len(origins) == 24,

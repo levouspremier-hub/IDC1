@@ -28,6 +28,7 @@ SOURCE_PATHS = (
     "checkpointing/inventory_eval_input.py", "envs/idc_price_env.py",
     "scripts/m6p2b_inventory_repair.py",
     "evaluation/adapter.py",
+    "planning/service_guard.py", "idc_model/allocation.py",
 )
 ASSET_PATHS = {**ROLE_LOGICAL_PATHS, "training_config": CONFIG_PATH,
                "experiment_matrix": MATRIX_PATH}
@@ -65,7 +66,8 @@ def diagnostic_candidate_config():
                   reward_semantics="original-env-reward-v1")
     config["training"]["corrector"].update(
         inventory_version=SEMANTICS, horizon_policy="real_episode_remainder",
-        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8)
+        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
+        service_guard_version="arrived-service-reserve-v1")
     config["training"]["policy"]["obs_dim"] = observation_spec()["dimension"]
     config["candidate_source"] = {
         "path": "configs/training/idc_training_config_v1.json",
@@ -85,6 +87,8 @@ def load_config():
             or config["training"]["policy"]["obs_dim"] != 523
             or corrector.get("solver_feasibility_tolerance") != 1e-8):
         raise ValueError("r2 requires registered terminal state observation semantics")
+    if corrector.get("service_guard_version") != "arrived-service-reserve-v1":
+        raise ValueError("r2 requires registered causal arrived service reserves")
     if (corrector["inventory_version"] != SEMANTICS or corrector["time_limit_s"] != .25
             or config["reward_semantics"] != "original-env-reward-v1"):
         raise ValueError("unregistered inventory/reward/budget semantics")

@@ -58,6 +58,9 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "target_qualified": abs(inventory.final_energy_kwh - inventory.target_energy_kwh) <= 1e-6,
         "purchase_cost_sgd": record.purchase_cost_sgd,
         "degradation_cost_sgd": record.bess_degradation_cost_sgd,
+        "reward_units_per_purchase_sgd": float(env.reward_cost_weight / env.cost_ref),
+        "reward_units_per_degradation_sgd": float(
+            env.reward_bess_degradation_weight / env.bess_degradation_cost_ref),
         "carbon_kg": record.carbon_kg_co2e,
         "charge_kwh": float(env.total_bess_charge_kWh),
         "discharge_kwh": float(env.total_bess_discharge_kWh),

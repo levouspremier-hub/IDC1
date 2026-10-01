@@ -242,6 +242,12 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
             if observation_version != INVENTORY_OBSERVATION_VERSION:
                 raise FormalTrainLoopError("unknown inventory observation version")
             env.terminal_inventory_observation_version = observation_version
+        service_guard_version = config["training"]["corrector"].get("service_guard_version")
+        if service_guard_version is not None:
+            from planning.service_guard import SERVICE_GUARD_VERSION
+            if service_guard_version != SERVICE_GUARD_VERSION:
+                raise FormalTrainLoopError("unregistered arrived service guard version")
+            env.terminal_service_guard_version = service_guard_version
     return env, injection
 
 

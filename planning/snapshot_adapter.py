@@ -389,6 +389,7 @@ def build_snapshot(env) -> SystemSnapshot:
 
     inventory_fields: dict = {}
     if bool(getattr(env, "terminal_inventory_enabled", False)):
+        from planning.service_guard import build_service_guard
         inventory_fields = {"terminal_inventory": TerminalInventory(
             episode_end_step=horizon, remaining_steps=horizon - t,
             target_kwh=float(env.bess_soc_target * env.bess_capacity_kWh),
@@ -396,7 +397,8 @@ def build_snapshot(env) -> SystemSnapshot:
                             * env.bess_capacity_kWh),
             upper_kwh=float((env.bess_soc_target + env.bess_soc_final_tolerance)
                             * env.bess_capacity_kWh),
-        )}
+        ), "service_guard": build_service_guard(
+            env, tasks, work_capacity, temperature=vectors["temperature"][0])}
     snapshot_type = InventorySnapshot if inventory_fields else SystemSnapshot
     return snapshot_type(
         step=t,

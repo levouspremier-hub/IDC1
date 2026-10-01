@@ -159,7 +159,8 @@ def freeze_calibration(config, folder, report):
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
     frozen["training"]["corrector"].update(
-        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8)
+        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
+        service_guard_version="arrived-service-reserve-v1")
     frozen["training"]["backend"]["note"] = (
         "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False")
     frozen["frozen_decision"]["card"] = "M6-P2b"
