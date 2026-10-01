@@ -62,3 +62,19 @@ def test_service_reserve_uses_only_arrived_tasks_and_forecast_channels():
             task.workload *= 1000
             task.remaining_work *= 1000
     assert build_snapshot(env) == before
+
+
+def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity():
+    env = guarded_env()
+    env.bess_soc = .4
+    env.bess_energy_kWh = 40.
+    snapshot = build_snapshot(env)
+    guard = snapshot.service_guard
+    assert len(guard.charge_limits_kw) == snapshot.planning_horizon_steps
+    assert guard.charge_limits_kw[0] == guard.charge_limit_kw
+    plan = solve_time_indexed_mip_raw_projection(
+        snapshot, DispatchProposal(compute_actions=[1.] * 20, storage_action=1.))
+    assert plan.solver_status == 'optimal'
+    assert all(c <= limit + 1e-6 for c, limit in zip(
+        plan.charge_kw, guard.charge_limits_kw, strict=True))
+    assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
