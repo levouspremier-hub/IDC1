@@ -125,3 +125,12 @@ uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_shor
 返回旧场景；每个环境得到独立 deepcopy 注入、数组、任务及 SOC，新旧环境状态
 不能共享。先提交 `tests/test_m6p2b_verified_input_reuse.py` 的失败测试，完成后重新
 核对恢复、泄漏与逐位输入一致性。当前 reward/service 诊断结束前不修改其运行代码。
+
+服务失败定位允许新增 `scripts/m6p2b_service_trace.py`：仅 train origin 4416/6624，
+同一既定因果提案、零参数更新，记录每步已到达任务、计划/执行动作、服务预留及
+物理削减。当前步真实物理量仅作执行后诊断，绝不进入规划输入或改变求解调用。
+保存五类产物、来源 hash、失败日期与完整事件，重新读取核对；该入口不是正式验收。
+验收命令：`uv run python -m scripts.m6p2b_service_trace --run-id m6p2b_service_trace_v2_r1`。
+改前证据：`runs/m6p2b_reward_counterfactual_v2_r4/metrics.parquet` 的两条 amplitude=.1
+服务失败，72 日中服务 70、库存区间 72、物理违规及回退 0。输入复用提交 43fac23
+为本定位批次的独立回滚点，定位后必须先提交对应失败测试再修改执行语义。
