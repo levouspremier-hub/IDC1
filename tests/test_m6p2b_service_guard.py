@@ -88,3 +88,47 @@ def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity(s
         assert plan.soc_kwh[-1] == pytest.approx(best, abs=1e-6)
         assert plan.inventory_audit['target_gap_kwh'] == pytest.approx(50. - best, abs=1e-6)
         assert plan.inventory_audit['physical_unreachability_proven'] is False
+
+
+def test_temperature_reserve_retains_service_when_signed_forecast_underestimates_cooling():
+    from safe_rl.corrector_wrapper import CorrectorWrapper
+
+    env = guarded_env()
+    env.T_amb[:] = 27.
+    env.wt_t[:] = 0.
+    env.terminal_service_temperature_margin_c = 2.
+    # Zero renewable reserve plus an explicit forecast-temperature upper scenario.
+    # Legacy fixture channel is realized; declare a separate causal input channel.
+    from unittest.mock import patch
+
+    import planning.snapshot_adapter as adapter
+
+    original = adapter._planning_extension
+
+    def extension(*a, **kw):
+        vectors, visible, assumed = original(*a, **kw)
+        vectors['temperature'] = [25.] * len(vectors['temperature'])
+        vectors['base_idc_power'] = [env._idc_power_kw(
+            np.full(env.model.N, env.base_load), 25.)] * len(vectors['temperature'])
+        return vectors, visible, assumed
+
+    full_work = 4.
+    rates = np.asarray(env.model.C_server) * env.delta_t_hours
+    capacity = rates * env.max_task_load_per_server
+    group = np.zeros(env.model.N)
+    remaining = full_work
+    for g, cap in enumerate(capacity):
+        group[g] = min(cap, remaining)
+        remaining -= group[g]
+    full_load = env.base_load + group / rates
+    env.access_limit_kw = env._idc_power_kw(full_load, 27.) + 1.
+    with patch.object(adapter, '_planning_extension', extension):
+        snapshot = build_snapshot(env)
+        guard = snapshot.service_guard
+        assert guard.reserved_service_power_kw == pytest.approx(
+            env._idc_power_kw(full_load, 27.))
+        _, _, _, _, info = CorrectorWrapper(env, corrector_time_limit_s=.25).step(
+            np.asarray([1.] * 20 + [-1.], dtype=np.float32))
+    assert info['access_curtailment_work'] <= 1e-6
+    assert env.tasks[0].remaining_work == pytest.approx(4., abs=1e-6)
+    assert snapshot.planning_forecast.temperature == [25.] * 8
