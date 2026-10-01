@@ -100,6 +100,60 @@ def _append_sparse_row(matrix: csr_matrix, row: dict[int, float]) -> csr_matrix:
     return vstack((matrix, _sparse_rows([row], matrix.shape[1])), format="csr")
 
 
+def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
+    """Construct a zero-gap witness in a subset of the existing feasible domain.
+
+    Task allocation is zero and existing business/deadline slacks retain ALL work.
+    Signed charge/discharge controls have continuous interval images. Propagate
+    those images with SOC bounds, then backtrack a target witness. Failure here
+    proves nothing about the full model (tasks can support additional discharge).
+    The caller must validate the witness against its complete actual matrix.
+    """
+    terminal = snapshot.terminal_inventory
+    if terminal is None:
+        return None
+    dt, eta_c, eta_d = (snapshot.delta_t_hours, snapshot.bess_charge_efficiency,
+                       snapshot.bess_discharge_efficiency)
+    if min(dt, eta_c, eta_d) <= 0:
+        return None
+    intervals = [(snapshot.soc_kwh, snapshot.soc_kwh)]
+    increments = []
+    pf = snapshot.planning_forecast
+    for k in range(snapshot.planning_horizon_steps):
+        base = pf.base_idc_power[k]
+        supply = snapshot.access_limit_kw + pf.pv[k] + pf.wind[k]
+        forced_discharge = max(base - supply, 0.)
+        max_discharge = min(snapshot.bess_discharge_power_max_kw, base)
+        if forced_discharge > max_discharge:
+            return None
+        lower_increment = -max_discharge * dt / eta_d
+        upper_increment = (-forced_discharge * dt / eta_d if forced_discharge > 0
+                           else min(snapshot.bess_charge_power_max_kw,
+                                    max(supply - base, 0.)) * dt * eta_c)
+        lo = max(snapshot.soc_min_kwh, intervals[-1][0] + lower_increment)
+        hi = min(snapshot.soc_max_kwh, intervals[-1][1] + upper_increment)
+        if lo > hi:
+            return None
+        increments.append((lower_increment, upper_increment))
+        intervals.append((lo, hi))
+    if not intervals[-1][0] <= terminal.target_kwh <= intervals[-1][1]:
+        return None
+    energy = [terminal.target_kwh]
+    for k in reversed(range(snapshot.planning_horizon_steps)):
+        lo = max(intervals[k][0], energy[-1] - increments[k][1])
+        hi = min(intervals[k][1], energy[-1] - increments[k][0])
+        if lo > hi + 1e-10:
+            return None
+        energy.append(min(max(energy[-1], lo), hi))
+    energy.reverse()
+    charge, discharge = [], []
+    for before, after in zip(energy[:-1], energy[1:], strict=True):
+        change = after - before
+        charge.append(max(change, 0.) / (dt * eta_c))
+        discharge.append(max(-change, 0.) * eta_d / dt)
+    return {"energy_kwh": energy, "charge_kw": charge, "discharge_kw": discharge}
+
+
 @dataclass
 class LPPlanResult:
     """LP 规划结果（全部单位显式）。"""
@@ -864,11 +918,12 @@ def _projection_empty(
         soc_kwh=[float(snapshot.soc_kwh)] * (H + 1),
         residuals_by_constraint={}, max_constraint_residual=0.0,
         power_approximation_used=True,
-        inventory_audit=dict(audit.get("inventory_audit", {"target_reachable": None,
-                          "band_reachable": None, "target_gap_kwh": None,
-                          "band_gap_kwh": None, "predicted_terminal_kwh": None,
-                          "status": "unproven", "reachability_solve_time_s": 0.0}
-                         if isinstance(snapshot, InventorySnapshot) else {})),
+        inventory_audit=({"target_reachable": None, "band_reachable": None,
+                         "target_gap_kwh": None, "band_gap_kwh": None,
+                         "predicted_terminal_kwh": None, "status": "unproven",
+                         "reachability_solve_time_s": 0.0,
+                         **audit.get("inventory_audit", {})}
+                        if isinstance(snapshot, InventorySnapshot) else {}),
     )
 
 
@@ -1083,11 +1138,52 @@ def solve_time_indexed_mip_raw_projection(
         c_inventory = np.zeros(n_vars)
         c_inventory[off_inventory_gap] = 1.0
         t_inventory = time.perf_counter()
-        res_inventory = _milp(
-            c=c_inventory,
-            constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
-            integrality=integrality, bounds=bounds_vec, options=_options(),
-        )
+        certificate = (_base_only_terminal_certificate(snapshot)
+                       if isinstance(snapshot, InventorySnapshot) else None)
+        certified_x = None
+        if certificate is not None:
+            witness = np.zeros(n_vars)
+            witness[off_soc:off_soc + H + 1] = certificate["energy_kwh"]
+            witness[off_charge:off_charge + H] = certificate["charge_kw"]
+            witness[off_discharge:off_discharge + H] = certificate["discharge_kw"]
+            for k in range(H):
+                demand = (pf.base_idc_power[k] + certificate["charge_kw"][k]
+                          - certificate["discharge_kw"][k])
+                pv_used = min(pf.pv[k], max(demand, 0.))
+                wind_used = min(pf.wind[k], max(demand - pv_used, 0.))
+                witness[off_pidc + k] = pf.base_idc_power[k]
+                witness[off_pgrid + k] = demand - pv_used - wind_used
+                witness[off_pv + k], witness[off_wind + k] = pv_used, wind_used
+                witness[off_curtail + k] = pf.pv[k] + pf.wind[k] - pv_used - wind_used
+                witness[off_z + k] = int(certificate["charge_kw"][k] > 0)
+            for i, task in enumerate(snapshot.tasks):
+                witness[off_bus + i] = witness[off_dls + i] = task.remaining_work
+            witness[off_d:off_d + n_group] = np.abs(raw_compute)
+            witness[off_e] = abs(witness[off_discharge] / dmax
+                                     - witness[off_charge] / cmax - raw_storage)
+            lhs = A_csr @ witness
+            # Check ALL actual constraints/bounds, rather than trusting a relaxed
+            # interval model. 1e-8 covers floating arithmetic, below physics 1e-6.
+            if (np.all(lhs >= np.array(lbs) - 1e-8)
+                    and np.all(lhs <= np.array(ubs) + 1e-8)
+                    and np.all(witness >= lb - 1e-8)
+                    and np.all(witness <= ub + 1e-8)):
+                certified_x = witness
+        reachability_method = "mip"
+        if certified_x is not None:
+            from types import SimpleNamespace
+            # Feasible objective 0 + global nonnegative gap bound proves optimality.
+            res_inventory = SimpleNamespace(status=0, x=certified_x)
+            reachability_method = "base_only_zero_gap_certificate"
+        else:
+            rem = _remaining()
+            if rem is not None and rem <= 0:
+                return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
+            res_inventory = _milp(
+                c=c_inventory,
+                constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
+                integrality=integrality, bounds=bounds_vec, options=_options(),
+            )
         elapsed_inventory = time.perf_counter() - t_inventory
         inventory_status = _status(res_inventory)
         if inventory_status != SOLVER_OPTIMAL:
@@ -1118,6 +1214,7 @@ def solve_time_indexed_mip_raw_projection(
             "band_reachable": bool(band_gap <= 1e-6),
             "target_gap_kwh": minimum_gap, "band_gap_kwh": float(band_gap),
             "reachability_solve_time_s": elapsed_inventory,
+            "reachability_method": reachability_method,
             "inventory_numerical_allowance_kwh": 1e-7,
             "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
         }

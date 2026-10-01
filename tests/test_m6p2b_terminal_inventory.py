@@ -102,6 +102,7 @@ def test_outside_visible_window_truth_does_not_change_terminal_plan_input():
 
 
 def test_timeout_is_not_a_proof_of_inventory_unreachability(monkeypatch):
+    monkeypatch.setattr('planning.model._base_only_terminal_certificate', lambda snapshot: None)
     snap = build_snapshot(_env(horizon=1))
     class Timeout:
         status = 1
@@ -125,6 +126,7 @@ def test_wrapper_keeps_raw_and_records_actual_inventory():
 
 
 def test_final_step_timeout_records_unknown_prediction_and_actual_inventory(monkeypatch):
+    monkeypatch.setattr('planning.model._base_only_terminal_certificate', lambda snapshot: None)
     from safe_rl.corrector_wrapper import CorrectorWrapper
     class Timeout:
         status = 1
