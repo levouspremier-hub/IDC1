@@ -16,6 +16,9 @@ from contracts.models import DispatchProposal
 from planning.corrector import correct
 from planning.snapshot_adapter import build_snapshot
 
+INVENTORY_OBSERVATION_VERSION = "terminal-state-observation-v1"
+INVENTORY_OBSERVATION_FIELDS = ("current_soc", "target_soc", "episode_remaining_fraction")
+
 
 class CorrectorWrapper(gym.Wrapper):
     def __init__(self, env, *, corrector_time_limit_s: float):
@@ -29,6 +32,43 @@ class CorrectorWrapper(gym.Wrapper):
                 f"corrector_time_limit_s 必须为显式正数，实际 {corrector_time_limit_s!r}"
             )
         self.corrector_time_limit_s = float(corrector_time_limit_s)
+        self.inventory_observation_version = getattr(
+            env.unwrapped, "terminal_inventory_observation_version", None)
+        if self.inventory_observation_version is not None:
+            if self.inventory_observation_version != INVENTORY_OBSERVATION_VERSION:
+                raise ValueError("unknown terminal inventory observation version")
+            if not bool(getattr(env.unwrapped, "terminal_inventory_enabled", False)):
+                raise ValueError(
+                    "inventory observation version requires terminal inventory contract")
+            self.observation_space = gym.spaces.Box(
+                low=np.concatenate((env.observation_space.low, np.zeros(3, dtype=np.float32))),
+                high=np.concatenate((env.observation_space.high, np.ones(3, dtype=np.float32))),
+                dtype=np.float32)
+
+    def _inventory_observation(self, observation):
+        if self.inventory_observation_version is None:
+            return observation
+        base = self.env.unwrapped
+        remaining = (int(base.horizon) - int(base.current_step)) / int(base.horizon)
+        state = np.asarray([base.bess_soc, base.bess_soc_target, remaining], dtype=np.float32)
+        if not np.all(np.isfinite(state)) or np.any(state < 0) or np.any(state > 1):
+            raise ValueError("terminal policy observation state is invalid")
+        return np.concatenate((np.asarray(observation, dtype=np.float32), state))
+
+    def policy_observation(self):
+        """Read current state with the same transformation used by reset/step."""
+        base = self.env.unwrapped
+        observation = (np.zeros(self.env.observation_space.shape, dtype=np.float32)
+                       if int(base.current_step) >= int(base.horizon)
+                       else base._get_obs())
+        return self._inventory_observation(observation)
+
+    def reset(self, *, seed=None, options=None):
+        observation, info = self.env.reset(seed=seed, options=options)
+        if self.inventory_observation_version is not None:
+            info["policy_observation_version"] = self.inventory_observation_version
+            info["inventory_observation_fields"] = INVENTORY_OBSERVATION_FIELDS
+        return self._inventory_observation(observation), info
 
     def step(self, action):
         raw_action = np.asarray(action, dtype=np.float32).reshape(-1).copy()
@@ -106,4 +146,6 @@ class CorrectorWrapper(gym.Wrapper):
                     - float(info["bess_charge_power_kW"])
                     / float(self.env.bess_charge_power_max_kW)),
             )
-        return obs, reward, terminated, truncated, info
+        if self.inventory_observation_version is not None:
+            info["policy_observation_version"] = self.inventory_observation_version
+        return self._inventory_observation(obs), reward, terminated, truncated, info

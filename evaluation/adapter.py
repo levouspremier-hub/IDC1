@@ -75,6 +75,13 @@ def _episode_horizon(env) -> int:
 
 
 def _observation(env) -> np.ndarray:
+    if hasattr(env, "get_wrapper_attr"):
+        try:
+            provider = env.get_wrapper_attr("policy_observation")
+        except AttributeError:
+            provider = None
+        if provider is not None:
+            return np.asarray(provider(), dtype=np.float32)
     unwrapped = getattr(env, "unwrapped", env)
     return np.asarray(unwrapped._get_obs(), dtype=np.float32)
 
