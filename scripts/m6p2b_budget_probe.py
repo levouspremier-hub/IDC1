@@ -29,7 +29,9 @@ def main():
     parser.add_argument("--baseline-revision", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--variant", choices=("default", "no_heuristics", "no_presolve",
-                                             "strict_gap", "strict_feasibility"), default="default")
+                                             "strict_gap", "strict_feasibility",
+                                             "no_presolve_heuristics"),
+                        default="default")
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("probe run already exists")
@@ -64,12 +66,14 @@ def main():
                                       _arm=arm, **kwargs):
                         if _arm == "candidate":
                             kwargs["options"] = dict(kwargs["options"])
-                            if args.variant == "no_heuristics":
+                            if args.variant in ("no_heuristics", "no_presolve_heuristics"):
                                 kwargs["options"].update(
                                     mip_heuristic_effort=0.,
                                     mip_heuristic_run_feasibility_jump=False,
                                     mip_heuristic_run_rens=False, mip_heuristic_run_rins=False,
                                     mip_heuristic_run_root_reduced_cost=False)
+                                if args.variant == "no_presolve_heuristics":
+                                    kwargs["options"]["presolve"] = False
                             elif args.variant == "no_presolve":
                                 kwargs["options"]["presolve"] = False
                             elif args.variant == "strict_gap":
