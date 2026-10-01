@@ -12,11 +12,50 @@ import pandas as pd
 import planning.corrector as planner
 import safe_rl.corrector_wrapper as wrapper
 from runs.writer import write_run
-from safe_rl_v2.formal_train_loop import training_source_ledger
+from safe_rl_v2.formal_train_loop import build_train_env, training_source_ledger
 from safe_rl_v2.inventory_diagnostics import evaluate_origin
 from safe_rl_v2.rollout import _json_safe
 from scenario.inventory_release import ROOT, diagnostic_candidate_config, semantics_binding, sha
+from scripts.calibrate_training_config import select_origins
 from scripts.m6p2b_reward_counterfactual import proposal
+
+
+def calibrate_temperature(run_id, config):
+    import math
+
+    import numpy as np
+    rows, provenance = [], {}
+    for origin in select_origins():
+        env, injection = build_train_env(origin, master_seed=0, config=config)
+        for step in range(48):
+            forecast = float(env.temperature_forecast_t[step])
+            realized = float(env.T_amb[step])
+            rows.append(dict(origin=origin, step=step, forecast_c=forecast,
+                             realized_c=realized, underestimation_c=max(realized-forecast, 0.)))
+        provenance[origin] = injection.provenance_hash
+        print(f"temperature origin={origin}", flush=True)
+    maximum = max(row["underestimation_c"] for row in rows)
+    report = dict(scope="train_only_temperature_reserve_calibration",
+                  origins=list(select_origins()), samples=len(rows),
+                  maximum_underestimation_c=maximum,
+                  margin_c=math.ceil(maximum*10)/10,
+                  formula="ceil(max(train_realized_c - signed_B6_forecast_c, 0) * 10) / 10",
+                  parameter_updates=0, validation_run=False, test_run=False,
+                  physical_error_bound_proven=False,
+                  forecast_arrays_modified=False,
+                  instrumentation_sha256=sha(__file__),
+                  maximum_event=[r for r in rows if np.isclose(r["underestimation_c"],maximum)],
+                  candidate_semantics_binding=semantics_binding())
+    folder = write_run(run_id, config=config, metrics=pd.DataFrame(rows), report=report,
+                       base_dir=str(ROOT/"runs"), seed=0,
+                       command="python -m scripts.m6p2b_service_trace --temperature-calibration "
+                       + "--run-id " + run_id, **training_source_ledger(provenance))
+    if json.loads((folder/"report.json").read_text()) != report:
+        raise ValueError("temperature calibration read-back differs")
+    if len(pd.read_parquet(folder/"metrics.parquet")) != 1152:
+        raise ValueError("temperature calibration row count differs")
+    print(json.dumps(report), flush=True)
+
 
 
 def tasks_now(env):
@@ -30,10 +69,14 @@ def tasks_now(env):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--temperature-calibration", action="store_true")
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError(args.run_id)
     config = diagnostic_candidate_config()
+    if args.temperature_calibration:
+        calibrate_temperature(args.run_id, config)
+        return
     rows, episodes, provenance = [], [], {}
     active = {}
     original_snapshot = wrapper.build_snapshot
