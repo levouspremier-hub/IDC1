@@ -13,11 +13,18 @@ import pandas as pd
 from runs.writer import write_run
 from safe_rl_v2.formal_train_loop import training_source_ledger
 from safe_rl_v2.inventory_diagnostics import evaluate_origin
-from scenario.inventory_release import CONFIG_PATH, ROOT, load_config, semantics_binding, sha
+from scenario.inventory_release import (
+    CONFIG_PATH,
+    ROOT,
+    diagnostic_candidate_config,
+    load_config,
+    semantics_binding,
+    sha,
+)
 from scripts.calibrate_training_config import select_origins
 
 
-def proposal(amplitude):
+def proposal(amplitude, obs_dim):
     thresholds = None
 
     def act(observation):
@@ -25,16 +32,18 @@ def proposal(amplitude):
         # 136 current features, then the 48-point causal price forecast channel.
         # The action reads only the same bounded observation available to PPO.
         prices = np.asarray(observation[136:184], dtype=np.float64)
-        if len(observation) != 520:
-            raise ValueError("counterfactual requires the frozen 520-dimensional observation")
+        if len(observation) != obs_dim or obs_dim != 523:
+            raise ValueError("counterfactual requires versioned terminal state observation")
         if thresholds is None:
             visible = prices[prices > 0.]
             thresholds = np.quantile(visible, [.25, .75]) if len(visible) else (0., 0.)
         storage = 0.
         if thresholds[0] < thresholds[1]:
-            if prices[0] <= thresholds[0]:
+            current_price = observation[1]  # Existing current price observable, no future truth.
+            soc, target = observation[-3:-1]
+            if current_price <= thresholds[0] and soc < target + .1:
                 storage = -amplitude
-            elif prices[0] >= thresholds[1]:
+            elif current_price >= thresholds[1] and soc > target - .1:
                 storage = amplitude
         return np.asarray([1.] * 20 + [storage], dtype=np.float32)
     return act
@@ -44,10 +53,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--origins-limit", type=int)
+    parser.add_argument("--candidate", action="store_true")
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("counterfactual run already exists")
-    config = load_config()
+    config = diagnostic_candidate_config() if args.candidate else load_config()
     origins = list(select_origins())
     if args.origins_limit is not None:
         if not 1 <= args.origins_limit <= 24:
@@ -60,7 +70,8 @@ def main():
             arms = []
             for amplitude in (0., .05, .1):
                 result, _steps, service, inventory = evaluate_origin(
-                    config, origin, 0, proposal(amplitude), run_id=args.run_id)
+                    config, origin, 0, proposal(amplitude, config["training"]["policy"]["obs_dim"]),
+                    run_id=args.run_id)
                 result.update(amplitude=amplitude, service_metrics=service.service.model_dump(),
                               inventory_record=inventory.to_dict())
                 rows.append(result)
@@ -107,11 +118,13 @@ def main():
     report = {
         "scope": "train_only_unreleased_candidate_reward_counterfactual",
         "origins": origins, "full_24_origin_diagnostic": len(origins) == 24,
-        "proposal_rule": "compute=1; visible B6 price bottom/top quartiles -> signed storage",
+        "proposal_rule": "compute=1; current price against initial visible B6 price quartiles; "
+        "charge/discharge only with current SOC below/above target +/- .1",
+        "proposal_version": "inventory-aware-causal-price-probe-v2",
         "amplitudes": [0., .05, .1], "parameter_updates": 0,
         "original_reward_retained": True, "reward_arithmetic_only": True,
         "candidate_semantics_binding": semantics_binding(), "instrumentation_sha256": sha(__file__),
-        "training_config_sha256": sha(ROOT / CONFIG_PATH),
+        "training_config_sha256": sha(ROOT / CONFIG_PATH) if not args.candidate else None,
         "pairs": pairs,
         "fair_profitable_pairs": sum(p["eligible"] and p["net_money_gain_sgd"] > 1e-6
                                      for p in pairs),

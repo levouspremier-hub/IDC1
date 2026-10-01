@@ -49,14 +49,15 @@ def save_bound(path, *, binding, **kwargs):
     os.replace(temporary, target)
     # Read the complete written artifact; never infer successful save from counters.
     read = VersionedCheckpoint.load(
-        target, expected_action_dim=21, expected_obs_dim=520,
+        target, expected_action_dim=21, expected_obs_dim=kwargs["obs_dim"],
         expected_schema_hash=kwargs["schema"])
     if read.extras != {"inventory_binding": binding}:
         raise ValueError("checkpoint binding failed after writing")
 
 
 def require_short_gate(binding):
-    gate = ROOT / "runs/m6p2b_short_gate_v2"
+    from scenario.inventory_release import RUN_REVISION
+    gate = ROOT / f"runs/m6p2b_short_gate_{RUN_REVISION}"
     manifest = json.loads((gate / "manifest.json").read_text())
     report = json.loads((gate / "report.json").read_text())
     if (manifest["status"] != "success" or report.get("passed") is not True
@@ -96,7 +97,8 @@ def _run(args):
     if folder.exists():
         raise FileExistsError("run-id already exists; choose a new run-id")
     folder.mkdir(parents=True)
-    policy = build_seeded_policy(config, obs_dim=520, seed=args.seed)
+    obs_dim = int(config["training"]["policy"]["obs_dim"])
+    policy = build_seeded_policy(config, obs_dim=obs_dim, seed=args.seed)
     optimizer = build_optimizer(config, policy)
     lagrangian = build_lagrangian(config)
     sampling, shuffle = _generators(args.seed)
@@ -114,7 +116,7 @@ def _run(args):
         restored = load_resume_checkpoint(
             args.resume_from, policy=policy, optimizer=optimizer, lagrangian=lagrangian,
             sampling_generator=sampling, shuffle_generator=shuffle, config=config,
-            expected_obs_dim=520, expected_schema=schema, expected_scope=scope,
+            expected_obs_dim=obs_dim, expected_schema=schema, expected_scope=scope,
             expected_role=role)
         next_batch = restored["next_batch_index"]
         provenance = restored["origin_provenance"]
@@ -128,7 +130,7 @@ def _run(args):
     checkpoint_kwargs = {
         "policy": policy, "optimizer": optimizer, "lagrangian": lagrangian,
         "sampling_generator": sampling, "shuffle_generator": shuffle, "config": config,
-        "origins": [o for group in batches for o in group], "obs_dim": 520,
+        "origins": [o for group in batches for o in group], "obs_dim": obs_dim,
         "master_seed": args.seed, "code_revision": git_revision(),
         "training_scope": scope, "artifact_role": role, "schema": schema,
     }

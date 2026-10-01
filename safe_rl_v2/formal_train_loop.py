@@ -236,6 +236,12 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
         if config["training"]["corrector"].get("inventory_version") != "terminal-inventory-v1":
             raise FormalTrainLoopError("v2 requires explicit terminal inventory semantics")
         env.terminal_inventory_enabled = True
+        observation_version = config["training"]["corrector"].get("observation_version")
+        if observation_version is not None:
+            from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION
+            if observation_version != INVENTORY_OBSERVATION_VERSION:
+                raise FormalTrainLoopError("unknown inventory observation version")
+            env.terminal_inventory_observation_version = observation_version
     return env, injection
 
 

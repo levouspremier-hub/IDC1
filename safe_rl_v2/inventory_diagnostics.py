@@ -43,6 +43,8 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
     audit = [r.get("inventory_audit", {}) for r in rows]
     result = {
         "origin": int(origin), "seed": int(seed), "steps": record.steps,
+        "policy_observation_dimension": int(wrapped.observation_space.shape[0]),
+        "policy_observation_version": wrapped.env.inventory_observation_version,
         "episode_complete": inventory.episode_complete,
         "service_qualified": record.service_qualified is True,
         "on_time_task_rate": record.service.on_time_task_rate,

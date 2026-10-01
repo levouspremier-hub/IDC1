@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import subprocess
@@ -11,9 +12,10 @@ from evaluation.sources import ROLE_LOGICAL_PATHS
 from scenario.env_release import load_verified_env_release
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = "configs/training/idc_training_config_v2.json"
-MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4.json"
-RELEASE_PATH = "configs/release/idc_formal_train_release_v2.json"
+RUN_REVISION = "v2_r2"
+CONFIG_PATH = "configs/training/idc_training_config_v2_r2.json"
+MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r2.json"
+RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r2.json"
 SEMANTICS = "terminal-inventory-v1"
 SOURCE_PATHS = (
     "contracts/inventory.py", "planning/model.py", "planning/snapshot_adapter.py",
@@ -25,6 +27,7 @@ SOURCE_PATHS = (
     "safe_rl_v2/inventory_diagnostics.py", "scenario/inventory_release.py",
     "checkpointing/inventory_eval_input.py", "envs/idc_price_env.py",
     "scripts/m6p2b_inventory_repair.py",
+    "evaluation/adapter.py",
 )
 ASSET_PATHS = {**ROLE_LOGICAL_PATHS, "training_config": CONFIG_PATH,
                "experiment_matrix": MATRIX_PATH}
@@ -42,12 +45,46 @@ def semantics_binding():
     return {path: sha(ROOT / path) for path in SOURCE_PATHS}
 
 
+def observation_spec():
+    from safe_rl.corrector_wrapper import (
+        INVENTORY_OBSERVATION_FIELDS,
+        INVENTORY_OBSERVATION_VERSION,
+    )
+    return {"version": INVENTORY_OBSERVATION_VERSION, "base_dimension": 520,
+            "appended_fields": list(INVENTORY_OBSERVATION_FIELDS), "dimension": 523,
+            "normalization": "declared physical fractions; refs_v4 unchanged",
+            "shared_by_all_methods": True}
+
+
+def diagnostic_candidate_config():
+    """Explicit unreleased semantics for calibration/probes, never formal restore."""
+    from safe_rl_v2.formal_train_loop import load_frozen_training_config
+    config = copy.deepcopy(load_frozen_training_config())
+    config.update(schema="idc-training-config-v2", version="v2",
+                  configuration_revision="r2", status="candidate_diagnostic_only",
+                  reward_semantics="original-env-reward-v1")
+    config["training"]["corrector"].update(
+        inventory_version=SEMANTICS, horizon_policy="real_episode_remainder",
+        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8)
+    config["training"]["policy"]["obs_dim"] = observation_spec()["dimension"]
+    config["candidate_source"] = {
+        "path": "configs/training/idc_training_config_v1.json",
+        "sha256": sha(ROOT / "configs/training/idc_training_config_v1.json")}
+    return config
+
+
 def load_config():
     config = json.loads((ROOT / CONFIG_PATH).read_text())
     if (config.get("schema") != "idc-training-config-v2"
             or config.get("status") != "frozen" or config.get("version") != "v2"):
         raise ValueError("frozen inventory training config v2 is required")
     corrector = config["training"]["corrector"]
+    from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION
+    if (config.get("configuration_revision") != "r2"
+            or corrector.get("observation_version") != INVENTORY_OBSERVATION_VERSION
+            or config["training"]["policy"]["obs_dim"] != 523
+            or corrector.get("solver_feasibility_tolerance") != 1e-8):
+        raise ValueError("r2 requires registered terminal state observation semantics")
     if (corrector["inventory_version"] != SEMANTICS or corrector["time_limit_s"] != .25
             or config["reward_semantics"] != "original-env-reward-v1"):
         raise ValueError("unregistered inventory/reward/budget semantics")
@@ -77,6 +114,8 @@ def load_matrix():
     old = json.loads((ROOT / "configs/experiments/m9_experiment_matrix_v3.json").read_text())
     if matrix.get("schema") != "m9-experiment-matrix-v4":
         raise ValueError("inventory experiment matrix v4 is required")
+    if matrix.get("policy_observation") != observation_spec():
+        raise ValueError("v4 r2 requires the shared versioned terminal state observation")
     # All substantive preregistered experimental design remains unchanged.
     for key in ("split_freeze", "scenario_freeze", "training_schedule", "evaluation_schedule",
                 "pairing", "statistics", "methods", "fair_cost_carbon_pairing"):
@@ -100,8 +139,9 @@ def build_release():
     return {
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
         "reward_semantics": "original-env-reward-v1", "approved_decision_id": "M6-P2b",
-        "supersedes": {"path": "configs/release/idc_formal_train_release_v1.json",
-                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v1.json")},
+        "release_iteration": "r2",
+        "supersedes": {"path": "configs/release/idc_formal_train_release_v2.json",
+                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2.json")},
         "readiness": {"formal_env_ready": True, "formal_training_ready": True},
         "assets": {role: {"path": path, "sha256": sha(ROOT / path)}
                    for role, path in ASSET_PATHS.items()},
@@ -119,8 +159,11 @@ def verify_release():
 
 def checkpoint_binding():
     release = verify_release()
+    config = load_config()
     return {"release_path": RELEASE_PATH, "release_sha256": sha(ROOT / RELEASE_PATH),
             "inventory_version": SEMANTICS, "reward_semantics": release["reward_semantics"],
+            "observation_version": config["training"]["corrector"]["observation_version"],
+            "observation_dimension": config["training"]["policy"]["obs_dim"],
             "training_config_sha256": sha(ROOT / CONFIG_PATH),
             "experiment_matrix_sha256": sha(ROOT / MATRIX_PATH),
             "semantics_binding": release["semantics_binding"]}

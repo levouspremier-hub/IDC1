@@ -132,14 +132,17 @@ def calibrate(config, origins, run_id):
                  and r["fallbacks"] == 0 for r in rows)
     budgets = calibrate_budgets(summaries)
     multipliers = multiplier_scaling(summaries, budgets)
-    candidate = training_config_candidate(budgets, multipliers, 520)
+    observation_dims = {r["policy_observation_dimension"] for r in rows}
+    if len(observation_dims) != 1:
+        raise ValueError("calibration observation dimensions differ")
+    candidate = training_config_candidate(budgets, multipliers, observation_dims.pop())
     return rows, {"passed": passed, "scope": "train_only_calibration", "origins": list(origins),
                   "proposal_summaries": summaries, "candidate": candidate,
                   "asset_hashes": asset_hashes(), "reward_changed": False}, provenance
 
 
 def freeze_calibration(config, folder, report):
-    from scenario.inventory_release import CONFIG_PATH, MATRIX_PATH, SEMANTICS
+    from scenario.inventory_release import CONFIG_PATH, MATRIX_PATH, SEMANTICS, observation_spec
     if report["passed"] is not True or len(report["origins"]) != 24:
         raise ValueError("cannot freeze unqualified or incomplete calibration")
     output = ROOT / CONFIG_PATH
@@ -149,11 +152,16 @@ def freeze_calibration(config, folder, report):
     candidate = report["candidate"]
     training = {k: v for k, v in candidate.items() if k not in ("schema", "status", "note")}
     frozen = copy.deepcopy(config)
-    frozen.update(schema="idc-training-config-v2", version="v2",
+    frozen.update(schema="idc-training-config-v2", version="v2", status="frozen",
+                  configuration_revision="r2",
                   note="M6-P2b train-only re-calibration; original environment reward retained",
                   training=training, reward_semantics="original-env-reward-v1")
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
+    frozen["training"]["corrector"].update(
+        observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8)
+    frozen["training"]["backend"]["note"] = (
+        "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False")
     frozen["frozen_decision"]["card"] = "M6-P2b"
     frozen["calibration"] = {
         "run_id": folder.name,
@@ -175,22 +183,24 @@ def freeze_calibration(config, folder, report):
     matrix["sources"].pop("training_config_v1")
     matrix["sources"]["training_config_v2"] = {
         "logical_path": CONFIG_PATH, "sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
+    matrix["policy_observation"] = observation_spec()
     matrix_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n")
 
 
 def short_gate():
     from checkpointing.inventory_eval_input import SHORT_SCHEMA
     from safe_rl_v2.inventory_train import verify_written_run
-    from scenario.inventory_release import checkpoint_binding
+    from scenario.inventory_release import RUN_REVISION, checkpoint_binding, load_config
     binding = checkpoint_binding()
+    obs_dim = int(load_config()["training"]["policy"]["obs_dim"])
     sources, failed = [], []
     provenance = {}
     for seed in (0, 1, 2):
-        folder = ROOT / f"runs/m6p2b_short_seed{seed}_v2"
+        folder = ROOT / f"runs/m6p2b_short_seed{seed}_{RUN_REVISION}"
         report = verify_written_run(folder, binding)
         manifest = json.loads((folder / "manifest.json").read_text())
         checkpoint = VersionedCheckpoint.load(
-            folder / "checkpoint_final.pt", expected_action_dim=21, expected_obs_dim=520,
+            folder / "checkpoint_final.pt", expected_action_dim=21, expected_obs_dim=obs_dim,
             expected_schema_hash=SHORT_SCHEMA)
         state = checkpoint.state
         checks = {
@@ -245,7 +255,7 @@ def audit(config, run_id):
     from checkpointing.inventory_eval_input import export_policy
     from checkpointing.versioned import read_checkpoint_payload
     from safe_rl_v2.inventory_train import verify_written_run
-    from scenario.inventory_release import checkpoint_binding, load_matrix
+    from scenario.inventory_release import RUN_REVISION, checkpoint_binding, load_matrix
     matrix, binding = load_matrix(), checkpoint_binding()
     origins = matrix["training_schedule"]["origin_pool"]
     if len(origins) != 212:
@@ -254,7 +264,7 @@ def audit(config, run_id):
     folder.mkdir(parents=True)
     rows, provenance, sources = [], {}, []
     for seed in (0, 1, 2):
-        source_folder = ROOT / f"runs/m6p2b_formal_seed{seed}_v2"
+        source_folder = ROOT / f"runs/m6p2b_formal_seed{seed}_{RUN_REVISION}"
         source = source_folder / "checkpoint_final.pt"
         report = verify_written_run(source_folder, binding)
         manifest = json.loads((source_folder / "manifest.json").read_text())
@@ -317,6 +327,9 @@ def main(argv=None):
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("run-id exists; historical and failed runs are never overwritten")
     config = load_frozen_training_config()
+    if args.phase == "calibrate":
+        from scenario.inventory_release import diagnostic_candidate_config
+        config = diagnostic_candidate_config()
     origins = select_origins()
     if args.origins_limit is not None:
         if args.phase != "replay" or not 1 <= args.origins_limit <= len(origins):

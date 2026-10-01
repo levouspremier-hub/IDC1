@@ -8,9 +8,10 @@ from checkpointing import inventory_eval_input as inv
 from safe_rl_v2.formal_train_loop import build_seeded_policy, load_frozen_training_config
 
 
-@pytest.fixture
-def config_and_binding(monkeypatch):
+@pytest.fixture(params=[520, 523])
+def config_and_binding(monkeypatch, request):
     config = load_frozen_training_config()
+    config["training"]["policy"]["obs_dim"] = request.param
     binding = {'inventory_version': 'terminal-inventory-v1', 'release_sha256': 'a' * 64}
     monkeypatch.setattr(inv, 'load_config', lambda: config)
     monkeypatch.setattr(inv, 'checkpoint_binding', lambda: binding)
@@ -21,21 +22,22 @@ def test_old_formal_checkpoint_is_rejected_by_new_export(tmp_path, config_and_bi
     source = tmp_path / 'old.pt'
     VersionedCheckpoint('contract-v9', 21, 520, 'm13gfck-formal-train-resume-v1',
                         'a' * 40, {}).save(source)
-    with pytest.raises(ValueError, match='schema'):
+    with pytest.raises(ValueError, match='schema|obs_dim'):
         inv.export_policy(source, tmp_path / 'new.pt')
 
 
 def test_export_preserves_weights_and_enforces_semantic_binding(tmp_path, config_and_binding):
     config, binding = config_and_binding
-    policy = build_seeded_policy(config, obs_dim=520, seed=2)
+    obs_dim = config["training"]["policy"]["obs_dim"]
+    policy = build_seeded_policy(config, obs_dim=obs_dim, seed=2)
     source, exported = tmp_path / 'source.pt', tmp_path / 'eval.pt'
     VersionedCheckpoint(
-        'contract-v9', 21, 520, inv.FORMAL_SCHEMA, 'a' * 40,
+        'contract-v9', 21, config['training']['policy']['obs_dim'], inv.FORMAL_SCHEMA, 'a' * 40,
         {'policy': policy.state_dict(), 'frozen_config': config,
          'training_scope': 'formal_training', 'artifact_role': 'formal_training_resume',
          'code_revision': 'a' * 40}, extras={'inventory_binding': binding}).save(source)
     loaded = inv.export_policy(source, exported)
-    obs = torch.linspace(-1, 1, 520)
+    obs = torch.linspace(-1, 1, obs_dim)
     assert torch.equal(policy.act_mean(obs), loaded.act_mean(obs))
     with pytest.raises(ValueError, match='semantics/role'):
         inv.load_policy(exported, formal=False)
@@ -48,10 +50,10 @@ def test_export_preserves_weights_and_enforces_semantic_binding(tmp_path, config
 
 def test_wrong_scope_cannot_masquerade_as_formal(tmp_path, config_and_binding):
     config, binding = config_and_binding
-    policy = build_seeded_policy(config, obs_dim=520, seed=0)
+    policy = build_seeded_policy(config, obs_dim=config["training"]["policy"]["obs_dim"], seed=0)
     source = tmp_path / 'source.pt'
     VersionedCheckpoint(
-        'contract-v9', 21, 520, inv.FORMAL_SCHEMA, 'a' * 40,
+        'contract-v9', 21, config['training']['policy']['obs_dim'], inv.FORMAL_SCHEMA, 'a' * 40,
         {'policy': policy.state_dict(), 'frozen_config': config,
          'training_scope': 'controlled_short_run', 'artifact_role': 'controlled_training_resume',
          'code_revision': 'a' * 40}, extras={'inventory_binding': binding}).save(source)
@@ -60,7 +62,8 @@ def test_wrong_scope_cannot_masquerade_as_formal(tmp_path, config_and_binding):
 
 
 @pytest.mark.resume
-def test_bound_checkpoint_restores_adam_multipliers_and_both_rngs(tmp_path):
+@pytest.mark.parametrize("obs_dim", [520, 523])
+def test_bound_checkpoint_restores_adam_multipliers_and_both_rngs(tmp_path, obs_dim):
     import numpy as np
 
     from safe_rl_v2.controlled_formal_train import _generators
@@ -74,11 +77,12 @@ def test_bound_checkpoint_restores_adam_multipliers_and_both_rngs(tmp_path):
     from safe_rl_v2.ppo_update import minibatch_ppo_step
 
     config = load_frozen_training_config()
+    config["training"]["policy"]["obs_dim"] = obs_dim
     def setup():
-        policy = build_seeded_policy(config, obs_dim=520, seed=0)
+        policy = build_seeded_policy(config, obs_dim=obs_dim, seed=0)
         return policy, build_optimizer(config, policy), build_lagrangian(config), *_generators(0)
     def update(policy, opt, lag, sampling, shuffle):
-        obs = torch.linspace(-1, 1, 2080).reshape(4, 520)
+        obs = torch.linspace(-1, 1, 4 * obs_dim).reshape(4, obs_dim)
         raw, logp, _ = policy.act(obs, generator=sampling)
         order = torch.randperm(4, generator=shuffle)
         adv = torch.tensor([1., -1., .5, -.5])[order]
@@ -94,7 +98,7 @@ def test_bound_checkpoint_restores_adam_multipliers_and_both_rngs(tmp_path):
     path = tmp_path / 'resume.pt'
     save_bound(path, binding={'version': 'unit-test'}, policy=live[0], optimizer=live[1],
                lagrangian=live[2], sampling_generator=live[3], shuffle_generator=live[4],
-               config=config, origins=[48, 96, 144, 192], next_batch_index=1, obs_dim=520,
+               config=config, origins=[48, 96, 144, 192], next_batch_index=1, obs_dim=obs_dim,
                origin_provenance={48: 'a' * 64}, master_seed=0, code_revision='a' * 40,
                training_scope='controlled_short_run', artifact_role='controlled_training_resume',
                schema=inv.SHORT_SCHEMA)
@@ -103,7 +107,7 @@ def test_bound_checkpoint_restores_adam_multipliers_and_both_rngs(tmp_path):
     load_resume_checkpoint(
         path, policy=restored[0], optimizer=restored[1], lagrangian=restored[2],
         sampling_generator=restored[3], shuffle_generator=restored[4], config=config,
-        expected_obs_dim=520, expected_schema=inv.SHORT_SCHEMA,
+        expected_obs_dim=obs_dim, expected_schema=inv.SHORT_SCHEMA,
         expected_scope='controlled_short_run', expected_role='controlled_training_resume')
     update(*restored)
     assert all(torch.equal(v, restored[0].state_dict()[k])
@@ -128,6 +132,7 @@ def test_matrix_cannot_change_frozen_design_or_asset_hash(tmp_path, monkeypatch)
     old_path.write_text(json.dumps(original))
     matrix = copy.deepcopy(original)
     matrix['schema'] = 'm9-experiment-matrix-v4'
+    matrix['policy_observation'] = release.observation_spec()
     matrix['sources'].pop('training_config_v1')
     matrix['sources']['training_config_v2'] = {
         'logical_path': release.CONFIG_PATH, 'sha256': 'a' * 64}
@@ -153,9 +158,10 @@ def test_formal_gate_rechecks_source_runs_instead_of_trusting_passed_flag(tmp_pa
     import json
 
     from safe_rl_v2 import inventory_train as train
+    from scenario.inventory_release import RUN_REVISION
     from scripts import m6p2b_inventory_repair as diagnostics
 
-    folder = tmp_path / 'runs/m6p2b_short_gate_v2'
+    folder = tmp_path / f'runs/m6p2b_short_gate_{RUN_REVISION}'
     folder.mkdir(parents=True)
     binding = {'version': 'unit-test'}
     (folder / 'manifest.json').write_text(json.dumps({'status': 'success'}))
@@ -175,3 +181,14 @@ def test_frozen_v2_config_accepts_same_ordered_origins_from_json_and_selector():
     assert config['version'] == 'v2'
     assert len(config['calibration']['origins']) == 24
     assert load_matrix()['schema'] == 'm9-experiment-matrix-v4'
+
+
+def test_old_520_checkpoint_cannot_enter_versioned_523_path(tmp_path, config_and_binding):
+    config, binding = config_and_binding
+    config["training"]["policy"]["obs_dim"] = 523
+    path = tmp_path / "old-v2.pt"
+    VersionedCheckpoint(
+        "contract-v9", 21, 520, inv.FORMAL_SCHEMA, "a" * 40, {},
+        extras={"inventory_binding": binding}).save(path)
+    with pytest.raises(ValueError, match="obs_dim 520"):
+        inv.export_policy(path, tmp_path / "new.pt")

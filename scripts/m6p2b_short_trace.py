@@ -19,7 +19,14 @@ from safe_rl_v2.controlled_formal_train import _generators, apply_frozen_thread_
 from safe_rl_v2.formal_train import preregistered_batches
 from safe_rl_v2.inventory_train import verify_written_run
 from safe_rl_v2.rollout import _json_safe
-from scenario.inventory_release import ROOT, checkpoint_binding, load_config, load_matrix, sha
+from scenario.inventory_release import (
+    ROOT,
+    RUN_REVISION,
+    checkpoint_binding,
+    load_config,
+    load_matrix,
+    sha,
+)
 
 
 def main():
@@ -33,9 +40,10 @@ def main():
         raise FileExistsError("trace run already exists")
     config, matrix, binding = load_config(), load_matrix(), checkpoint_binding()
     apply_frozen_thread_setting(config)
-    source = ROOT / f"runs/m6p2b_short_seed{args.seed}_v2"
+    source = ROOT / f"runs/m6p2b_short_seed{args.seed}_{RUN_REVISION}"
     reference = verify_written_run(source, binding)["batch_records"][args.batch_index]
-    policy = loop.build_seeded_policy(config, obs_dim=520, seed=args.seed)
+    obs_dim = int(config["training"]["policy"]["obs_dim"])
+    policy = loop.build_seeded_policy(config, obs_dim=obs_dim, seed=args.seed)
     sampling, shuffle = _generators(args.seed)
     checkpoint = None
     if args.batch_index == 2:
@@ -45,7 +53,7 @@ def main():
         restored = loop.load_resume_checkpoint(
             checkpoint, policy=policy, optimizer=loop.build_optimizer(config, policy),
             lagrangian=loop.build_lagrangian(config), sampling_generator=sampling,
-            shuffle_generator=shuffle, config=config, expected_obs_dim=520,
+            shuffle_generator=shuffle, config=config, expected_obs_dim=obs_dim,
             expected_schema=SHORT_SCHEMA, expected_scope="controlled_short_run",
             expected_role="controlled_training_resume")
         if restored["next_batch_index"] != 2:
