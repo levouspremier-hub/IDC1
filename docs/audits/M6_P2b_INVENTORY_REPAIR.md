@@ -325,3 +325,21 @@ seed0 新初始化8批受控短跑已启动；seed1/2、三种子闸门、新完
 `00225e7` 只在 Makefile 指定 `--explicit-package-bases`，不排除文件或错误。
 独立完整mypy 183文件通过。新完整门禁 `m6p2b_checks_v2_r2_retry1` 已重新启动，
 ruff/mypy通过，pytest进行中；本节仍不声明完整门禁或长训完成。
+
+## 一次性串行后续流程（仍在执行）
+
+`runs/m6p2b_pipeline_v2_r2/runner.py` 是本卡已授权步骤的一次性进程，当前等待
+`m6p2b_checks_v2_r2_retry1`。没有创建定时自动化，也没有并行训练或 heldout 调用。
+门禁失败即停止；成功后依次生成：
+
+- `m6p2b_historical_replay_v2_r2`：三旧权重只读，固定24-origin修复前后144日。
+- `m6p2b_reward_counterfactual_v2_r5`：最终语义72日及72同状态储能探针。
+- 新奖励的实测/算术一致、72日服务/库存/物理/无回退及24探针组非全坍缩通过后，
+  新初始化 `m6p2b_formal_seed0/1/2_v2_r2` 各512批，严格按seed顺序运行。
+- `m6p2b_train_audit_v2_r2`：先核对三个训练产物，然后完整636个train episode。
+
+每个子任务保存原生命令、五类产物和来源hash，父流程另保存各子manifest/report
+hash及完整console。失败不自动跳过或重试，不删除任何产物；完成也仅标记
+`train_pipeline_completed_pending_final_review`，不宣称本卡或validation readiness
+已通过。该流程不更改任何已发布代码、配置、旧权重或物理参数。最终复审、
+缺口解释、四席位清单及最终SHA/回滚清单仍须依据实际结果完成。
