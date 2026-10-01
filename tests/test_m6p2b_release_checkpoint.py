@@ -192,3 +192,24 @@ def test_old_520_checkpoint_cannot_enter_versioned_523_path(tmp_path, config_and
         extras={"inventory_binding": binding}).save(path)
     with pytest.raises(ValueError, match="obs_dim 520"):
         inv.export_policy(path, tmp_path / "new.pt")
+
+
+def test_calibration_backend_note_is_not_a_runtime_parameter_but_thread_count_is(
+        tmp_path, monkeypatch):
+    import json
+
+    from scenario import inventory_release as release
+
+    path = release.ROOT / release.CONFIG_PATH
+    if not path.exists():
+        pytest.skip('v2 calibration not available on this checkout')
+    config = json.loads(path.read_text())
+    local = tmp_path / 'config.json'
+    local.write_text(json.dumps(config))
+    monkeypatch.setattr(release, 'CONFIG_PATH', str(local))
+    # The measured candidate and frozen config carry different explanatory notes.
+    assert release.load_config()['training']['backend']['torch_num_threads'] == 1
+    config['training']['backend']['torch_num_threads'] = 2
+    local.write_text(json.dumps(config))
+    with pytest.raises(ValueError, match='measured calibration: backend'):
+        release.load_config()
