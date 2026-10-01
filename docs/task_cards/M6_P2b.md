@@ -109,3 +109,11 @@ uv run python -m scripts.m6p2b_inventory_repair --phase gate --run-id m6p2b_shor
 初版 r2 因零购电费计算奖励斜率时报错，失败产物完整保留，原始逐步数据未成功
 落盘，报告明确标注仅有控制台舍入摘要，不能当作正式测量。斜率现从实际环境
 系数与冻结参考值计算，后续异常会保存已完成 episode 和完整失败状态。
+
+具体奖励返修依据与公式已写入 `docs/audits/M6_P2b_INVENTORY_REPAIR.md` 的 r2 节：
+完整 24-origin 原奖励对照出现 4 个公平且有净现金收益、原奖励却下降的配对，
+退化费单位奖励尺度比购电费高 600 倍。允许在既有 wrapper 中实施
+`common-sgd-degradation-v1`，只替换退化奖励为
+`-(reward_cost_weight/cost_ref)*实际退化SGD`，其他分项、refs_v4 与环境 step 不变。
+先提交 `tests/test_m6p2b_reward_semantics.py` 的失败测试；落实后重新短跑，不能
+把算术正向信号称为 PPO 已学会，也不能凭此放行未解决的服务/库存问题。

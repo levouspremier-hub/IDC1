@@ -66,6 +66,7 @@ def test_service_reserve_uses_only_arrived_tasks_and_forecast_channels():
 
 def test_plan_does_not_defer_recovery_into_unreserved_future_charging_capacity():
     env = guarded_env()
+    env.task_arrival_forecast[:] = 0.  # Controlled known-only reachable recovery case.
     env.bess_soc = .4
     env.bess_energy_kWh = 40.
     snapshot = build_snapshot(env)
