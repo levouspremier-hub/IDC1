@@ -33,7 +33,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
@@ -232,6 +232,10 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
     env = env_cls(horizon=horizon, forecast_cutoff=forecast_cutoff,
                   delta_t_hours=float(DELTA_T_HOURS), formal_injection=injection,
                   **seeds)
+    if config.get("version") == "v2":
+        if config["training"]["corrector"].get("inventory_version") != "terminal-inventory-v1":
+            raise FormalTrainLoopError("v2 requires explicit terminal inventory semantics")
+        env.terminal_inventory_enabled = True
     return env, injection
 
 
@@ -482,6 +486,8 @@ def run_training_batch(
                 "loss_total": float(out["loss_total"]),
                 "clip_fraction": float(out["clip_fraction"]),
                 "param_delta_norm": float(out["param_delta_norm"]),
+                "storage_head_grad_norm": float(torch.linalg.vector_norm(
+                    cast(Any, policy.actor[-1]).weight.grad[-1]).item()),
             })
 
     ppo_update_s = time.perf_counter() - _ppo_t0
@@ -555,6 +561,26 @@ def run_training_batch(
              _stack(buffer, "raw_action").numpy(),
              frozen["old_raw_log_prob"].numpy()]),
         "step_records": step_records,
+        "inventory_episodes": collect_timing.get("inventory_episodes", []),
+        "storage_signal": {
+            "raw_mean": float(raw_action[:, -1].mean()),
+            "raw_std": float(raw_action[:, -1].std()),
+            "saturation_fraction": float((raw_action[:, -1].abs() > 0.98).float().mean()),
+            "abs_delta_mean": float(np.mean([abs(t.raw_action[-1] - t.exec_action[-1])
+                                             for t in buffer.transitions])),
+            "head_grad_norm_mean": float(np.mean([s["storage_head_grad_norm"]
+                                                  for s in step_records])),
+            "effective_advantage_mean": float((frozen["adv_reward"]
+                - multipliers_pre["business"] * frozen["adv_business"]
+                - multipliers_pre["carbon"] * frozen["adv_carbon"]).mean()),
+            "reward_sum": float(sum(t.reward for t in buffer.transitions)),
+            "economic_reward_sum": float(sum(t.correction_info.get(
+                "inventory_training_diagnostics", {}).get("r_cost", 0.0)
+                                             for t in buffer.transitions)),
+            "terminal_reward_sum": float(sum(t.correction_info.get(
+                "inventory_training_diagnostics", {}).get("r_soc_final", 0.0)
+                                             for t in buffer.transitions)),
+        },
         "claims": dict(CLAIMS),
     }
 
@@ -594,6 +620,7 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
     provenance: dict[int, str] = {}
     env_build_s = 0.0
     collect_s = 0.0
+    inventory_episodes = []
     for origin in origins:
         _t0 = time.perf_counter()
         env, injection = build_train_env(int(origin), master_seed=master_seed,
@@ -613,7 +640,10 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
                 f"origin {origin} 只采到 {stats['transitions']} 条 transition，"
                 f"期望 {horizon}")
         collect_s += time.perf_counter() - _c0
-    return buffer, provenance, {"env_build_s": env_build_s, "collect_s": collect_s}
+        if "inventory_episode" in stats:
+            inventory_episodes.append({"origin": int(origin), **stats["inventory_episode"]})
+    return buffer, provenance, {"env_build_s": env_build_s, "collect_s": collect_s,
+                               "inventory_episodes": inventory_episodes}
 
 
 def _stack(buffer: RolloutBuffer, field: str) -> torch.Tensor:

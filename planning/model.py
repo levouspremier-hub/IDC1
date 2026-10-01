@@ -1080,11 +1080,16 @@ def solve_time_indexed_mip_raw_projection(
                 status="unproven", reachability_solve_time_s=elapsed_inventory)
             return result
         minimum_gap = max(float(res_inventory.x[off_inventory_gap]), 0.0)
-        # HiGHS may report a sub-micro-kWh positive gap at a feasible target.
-        # Use a 1e-7 kWh numerical allowance (below the existing 1e-6 pairing
-        # tolerance), rather than an ill-conditioned exact bound on that noise.
-        minimum_gap = 0.0 if minimum_gap <= 1e-6 else minimum_gap
-        bounds_vec.ub[off_inventory_gap] = minimum_gap + 1e-7
+        # Preserve the measured gap, including sub-micro-kWh positive deficits.
+        # Rounding it to zero can make A infeasible at an attained capacity bound.
+        # Bind the terminal energy directly; constraining a tiny auxiliary gap
+        # upper bound causes an observed HiGHS presolve infeasibility at t=43.
+        bounds_vec.lb[off_soc + H] = max(
+            float(snapshot.soc_min_kwh), terminal.target_kwh - minimum_gap
+            - (1e-7 if minimum_gap > 0 else 0))
+        bounds_vec.ub[off_soc + H] = min(
+            float(snapshot.soc_max_kwh), terminal.target_kwh + minimum_gap
+            + (1e-7 if minimum_gap > 0 else 0))
         attainable = float(res_inventory.x[off_soc + H])
         band_gap = max(terminal.lower_kwh - attainable, attainable - terminal.upper_kwh, 0.0)
         inventory_audit = {

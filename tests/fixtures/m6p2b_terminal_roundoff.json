@@ -1,0 +1,1466 @@
+{
+  "snapshot": {
+    "schema_version": "contract-v9",
+    "step": 43,
+    "delta_t_hours": 0.5,
+    "planning_horizon_steps": 5,
+    "soc_kwh": 33.329717062923734,
+    "soc_min_kwh": 10.0,
+    "soc_max_kwh": 90.0,
+    "soc_capacity_kwh": 100.0,
+    "bess_charge_power_max_kw": 20.0,
+    "bess_discharge_power_max_kw": 20.0,
+    "bess_charge_efficiency": 0.95,
+    "bess_discharge_efficiency": 0.95,
+    "bess_degradation_cost_per_kwh": 0.02,
+    "access_limit_kw": 18.0,
+    "base_idc_power_forecast_kw": [
+      14.89153603547046,
+      14.897193865753787,
+      14.897193865753787,
+      14.88589758131824,
+      14.88589758131824
+    ],
+    "tasks": [
+      {
+        "schema_version": "contract-v9",
+        "task_id": "0",
+        "remaining_work": 0.0,
+        "deadline": 24,
+        "priority": 1.0,
+        "status": "finished",
+        "max_rate_work_per_step": 50.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "473965406011283739",
+        "remaining_work": 0.0,
+        "deadline": 2,
+        "priority": 2.76513710410012,
+        "status": "finished",
+        "max_rate_work_per_step": 38.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "4227328120679301816",
+        "remaining_work": 0.0,
+        "deadline": 3,
+        "priority": 3.3142005095658087,
+        "status": "finished",
+        "max_rate_work_per_step": 36.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "2515224290600144462",
+        "remaining_work": 0.0,
+        "deadline": 4,
+        "priority": 2.68817052831518,
+        "status": "finished",
+        "max_rate_work_per_step": 32.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1986739619252678150",
+        "remaining_work": 0.0,
+        "deadline": 5,
+        "priority": 3.172345088802542,
+        "status": "finished",
+        "max_rate_work_per_step": 25.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6831594578069039248",
+        "remaining_work": 0.0,
+        "deadline": 6,
+        "priority": 2.8833135070231863,
+        "status": "finished",
+        "max_rate_work_per_step": 32.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3450079646763065887",
+        "remaining_work": 0.0,
+        "deadline": 7,
+        "priority": 2.8057560732039786,
+        "status": "finished",
+        "max_rate_work_per_step": 33.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3212935559860568058",
+        "remaining_work": 0.0,
+        "deadline": 8,
+        "priority": 3.390398634624455,
+        "status": "finished",
+        "max_rate_work_per_step": 24.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6706223071578896552",
+        "remaining_work": 0.0,
+        "deadline": 9,
+        "priority": 2.6025040506262256,
+        "status": "finished",
+        "max_rate_work_per_step": 30.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3514110138058025046",
+        "remaining_work": 0.0,
+        "deadline": 10,
+        "priority": 2.8322719202786963,
+        "status": "finished",
+        "max_rate_work_per_step": 26.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "402069394775787897",
+        "remaining_work": 0.0,
+        "deadline": 11,
+        "priority": 2.7462274547998793,
+        "status": "finished",
+        "max_rate_work_per_step": 30.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1497560921230981389",
+        "remaining_work": 0.0,
+        "deadline": 12,
+        "priority": 2.6220868013830234,
+        "status": "finished",
+        "max_rate_work_per_step": 30.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "8495920655628666347",
+        "remaining_work": 0.0,
+        "deadline": 13,
+        "priority": 2.6859673164953146,
+        "status": "finished",
+        "max_rate_work_per_step": 27.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6653759460999355280",
+        "remaining_work": 0.0,
+        "deadline": 14,
+        "priority": 3.115216268355479,
+        "status": "finished",
+        "max_rate_work_per_step": 31.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3848330729652665451",
+        "remaining_work": 0.0,
+        "deadline": 15,
+        "priority": 3.2639254429239206,
+        "status": "finished",
+        "max_rate_work_per_step": 33.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1359532362080768276",
+        "remaining_work": 0.0,
+        "deadline": 16,
+        "priority": 2.7172751993772315,
+        "status": "finished",
+        "max_rate_work_per_step": 31.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "308724941850395000",
+        "remaining_work": 0.0,
+        "deadline": 17,
+        "priority": 3.228525890542914,
+        "status": "finished",
+        "max_rate_work_per_step": 28.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "5097987498050578944",
+        "remaining_work": 0.0,
+        "deadline": 18,
+        "priority": 3.199711992606469,
+        "status": "finished",
+        "max_rate_work_per_step": 36.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "7207583426439209405",
+        "remaining_work": 0.0,
+        "deadline": 19,
+        "priority": 3.059781087116436,
+        "status": "finished",
+        "max_rate_work_per_step": 26.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "5348805502409529421",
+        "remaining_work": 0.0,
+        "deadline": 20,
+        "priority": 3.3776982757699847,
+        "status": "finished",
+        "max_rate_work_per_step": 26.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3904622204872290483",
+        "remaining_work": 0.0,
+        "deadline": 21,
+        "priority": 3.398598677312086,
+        "status": "finished",
+        "max_rate_work_per_step": 33.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3311323968778194450",
+        "remaining_work": 0.0,
+        "deadline": 22,
+        "priority": 2.659127838167504,
+        "status": "finished",
+        "max_rate_work_per_step": 23.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "8509459684634338275",
+        "remaining_work": 0.0,
+        "deadline": 23,
+        "priority": 2.669681750612419,
+        "status": "finished",
+        "max_rate_work_per_step": 30.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "180011823636503326",
+        "remaining_work": 0.0,
+        "deadline": 24,
+        "priority": 2.9184411181210965,
+        "status": "finished",
+        "max_rate_work_per_step": 35.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1438170380930331225",
+        "remaining_work": 0.0,
+        "deadline": 25,
+        "priority": 3.3833653192755264,
+        "status": "finished",
+        "max_rate_work_per_step": 29.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "8698736149241194905",
+        "remaining_work": 0.0,
+        "deadline": 26,
+        "priority": 3.057335048478309,
+        "status": "finished",
+        "max_rate_work_per_step": 38.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6610650692018009654",
+        "remaining_work": 0.0,
+        "deadline": 27,
+        "priority": 3.240661126754366,
+        "status": "finished",
+        "max_rate_work_per_step": 39.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3278239856715315264",
+        "remaining_work": 0.0,
+        "deadline": 28,
+        "priority": 2.9362683946385,
+        "status": "finished",
+        "max_rate_work_per_step": 40.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1108960962166236295",
+        "remaining_work": 0.0,
+        "deadline": 29,
+        "priority": 3.1519969475505696,
+        "status": "finished",
+        "max_rate_work_per_step": 41.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "3175433515392887620",
+        "remaining_work": 0.0,
+        "deadline": 30,
+        "priority": 2.679849611027558,
+        "status": "finished",
+        "max_rate_work_per_step": 33.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6803921676186377550",
+        "remaining_work": 0.0,
+        "deadline": 31,
+        "priority": 3.037395762661373,
+        "status": "finished",
+        "max_rate_work_per_step": 34.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "9139124037839550642",
+        "remaining_work": 0.0,
+        "deadline": 32,
+        "priority": 2.8759486723550656,
+        "status": "finished",
+        "max_rate_work_per_step": 22.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "6406506389603286922",
+        "remaining_work": 0.0,
+        "deadline": 33,
+        "priority": 2.6424792202185916,
+        "status": "finished",
+        "max_rate_work_per_step": 39.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "7394310637630299653",
+        "remaining_work": 0.0,
+        "deadline": 34,
+        "priority": 3.3997831746449942,
+        "status": "finished",
+        "max_rate_work_per_step": 16.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "732704069371666526",
+        "remaining_work": 0.0,
+        "deadline": 35,
+        "priority": 3.0997913359874363,
+        "status": "finished",
+        "max_rate_work_per_step": 27.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "2627465516609604524",
+        "remaining_work": 0.0,
+        "deadline": 36,
+        "priority": 3.263275413310161,
+        "status": "finished",
+        "max_rate_work_per_step": 43.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "2046191403243386292",
+        "remaining_work": 0.0,
+        "deadline": 37,
+        "priority": 2.652937848276832,
+        "status": "finished",
+        "max_rate_work_per_step": 38.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1685842104445319192",
+        "remaining_work": 0.0,
+        "deadline": 38,
+        "priority": 3.071719677584045,
+        "status": "finished",
+        "max_rate_work_per_step": 42.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "1471223603291623194",
+        "remaining_work": 0.0,
+        "deadline": 39,
+        "priority": 3.3842953558805053,
+        "status": "finished",
+        "max_rate_work_per_step": 40.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "8055195648146750885",
+        "remaining_work": 0.0,
+        "deadline": 40,
+        "priority": 3.1202895509838204,
+        "status": "finished",
+        "max_rate_work_per_step": 38.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "5196292714087155449",
+        "remaining_work": 0.0,
+        "deadline": 41,
+        "priority": 3.0556209381333526,
+        "status": "finished",
+        "max_rate_work_per_step": 32.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "5656016767614975625",
+        "remaining_work": 0.0,
+        "deadline": 42,
+        "priority": 2.7407342402147306,
+        "status": "finished",
+        "max_rate_work_per_step": 39.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "5867260562142949036",
+        "remaining_work": 0.0,
+        "deadline": 43,
+        "priority": 2.964944504355316,
+        "status": "finished",
+        "max_rate_work_per_step": 25.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "727048416472720447",
+        "remaining_work": 30.0,
+        "deadline": 44,
+        "priority": 2.8934676206567214,
+        "status": "waiting",
+        "max_rate_work_per_step": 30.0
+      },
+      {
+        "schema_version": "contract-v9",
+        "task_id": "7366654977222379937",
+        "remaining_work": 27.0,
+        "deadline": 45,
+        "priority": 3.3535112634850925,
+        "status": "waiting",
+        "max_rate_work_per_step": 27.0
+      }
+    ],
+    "forecast": {
+      "schema_version": "contract-v9",
+      "split": "train",
+      "start": "48",
+      "horizon": 48,
+      "forecast_cutoff": 48,
+      "price_forecast": [
+        0.10778,
+        0.10798,
+        0.10789,
+        0.10796,
+        0.10796,
+        0.10787000000000001,
+        0.10786,
+        0.1046,
+        0.09778,
+        0.09698999999999999,
+        0.09708,
+        0.09777,
+        0.09781000000000001,
+        0.09781999999999999,
+        0.09834000000000001,
+        0.09834999999999999,
+        0.09904,
+        0.09168000000000001,
+        0.09051000000000001,
+        0.10155,
+        0.09911,
+        0.10026,
+        0.10048,
+        0.10078000000000001,
+        0.10048,
+        0.10124,
+        0.1018,
+        0.10178000000000001,
+        0.10319,
+        0.10467,
+        0.10467,
+        0.10696,
+        0.10394,
+        0.10468000000000001,
+        0.10801000000000001,
+        0.1083,
+        0.10833,
+        0.11220999999999999,
+        0.11184999999999999,
+        0.11212000000000001,
+        0.11212000000000001,
+        0.11212000000000001,
+        0.10834,
+        0.10793000000000001,
+        0.1083,
+        0.108,
+        0.10259,
+        0.10784
+      ],
+      "load_forecast": [
+        5698.883784243433,
+        5646.001008062339,
+        5637.397610735138,
+        5621.582804895029,
+        5567.445632873812,
+        5489.954503901367,
+        5403.097440797795,
+        5327.762892928055,
+        5273.844946098092,
+        5252.098980905489,
+        5254.31062700765,
+        5282.914966654735,
+        5321.843610761714,
+        5407.016003146702,
+        5471.2048010191465,
+        5536.643992540156,
+        5591.642593411459,
+        5697.759072900929,
+        5807.539256277403,
+        5907.6304793123445,
+        6001.315536341688,
+        6104.753518999575,
+        6146.856999860566,
+        6166.566974694554,
+        6160.993903133952,
+        6131.037734254554,
+        6109.691315362958,
+        6145.999472768548,
+        6168.527964981561,
+        6147.643241724177,
+        6124.98919112007,
+        6086.555702380643,
+        6095.83287074843,
+        6114.008042677688,
+        6124.68969638591,
+        6133.1714965424235,
+        6143.8915558314275,
+        6169.897972496463,
+        6241.755599681002,
+        6290.003715761711,
+        6312.334920660274,
+        6319.135474620758,
+        6319.475745061041,
+        6283.98571204399,
+        6195.9276110327155,
+        6049.3261643600845,
+        5930.305419169095,
+        5811.166119414339
+      ],
+      "pv_forecast": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        10.068121429427203,
+        10.041033079039797,
+        51.533399255934356,
+        51.46992269525708,
+        106.54792053818075,
+        106.24002025701995,
+        156.1954227602948,
+        155.75037743256718,
+        191.79148271660853,
+        191.48043383962,
+        195.5882401645409,
+        195.62274056191734,
+        180.02535484869367,
+        180.339771806165,
+        145.5647831827115,
+        145.99155776068156,
+        122.90677540372695,
+        123.84670760775488,
+        88.97956046412023,
+        91.16750352321745,
+        66.83877646364138,
+        87.99358578158218,
+        16.600329767245658,
+        16.600329767245658,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wind_forecast": [
+        17.85235049391811,
+        17.85235049391811,
+        7.518683757192139,
+        7.518683757192139,
+        3.6921084261619153,
+        3.6921084261619153,
+        1.4316188275031094,
+        1.4316188275031094,
+        1.6253750788167198,
+        1.6253750788167198,
+        4.919231351148126,
+        4.919231351148126,
+        1.7545459130257957,
+        1.7545459130257957,
+        3.6921084261619153,
+        3.6921084261619153,
+        7.518683757192139,
+        7.518683757192139,
+        6.485317083519542,
+        6.485317083519542,
+        15.268933809736627,
+        15.268933809736627,
+        23.535867199117398,
+        23.535867199117398,
+        11.135467115046236,
+        11.135467115046236,
+        2.917083420907467,
+        2.917083420907467,
+        5.193608741428797,
+        5.193608741428797,
+        2.917083420907467,
+        2.917083420907467,
+        1.6253750788167198,
+        1.6253750788167198,
+        2.1420584156530187,
+        2.1420584156530187,
+        4.2733771801027505,
+        4.2733771801027505,
+        22.502500525444802,
+        22.502500525444802,
+        28.767138474700104,
+        28.767138474700104,
+        11.135467115046236,
+        11.135467115046236,
+        4.208791762998214,
+        4.208791762998214,
+        0.0,
+        0.0
+      ],
+      "temperature_forecast": [
+        25.5,
+        25.5,
+        25.4,
+        25.4,
+        25.5,
+        25.5,
+        25.4,
+        25.4,
+        25.3,
+        25.3,
+        25.1,
+        25.1,
+        25.0,
+        25.0,
+        24.8,
+        24.8,
+        25.1,
+        25.1,
+        26.1,
+        26.1,
+        27.1,
+        27.1,
+        28.3,
+        28.3,
+        28.9,
+        28.9,
+        27.9,
+        27.9,
+        27.8,
+        27.8,
+        27.3,
+        27.3,
+        27.7,
+        27.7,
+        27.3,
+        27.3,
+        26.9,
+        26.9,
+        26.1,
+        26.1,
+        25.9,
+        25.9,
+        25.6,
+        25.6,
+        25.7,
+        25.7,
+        25.5,
+        25.5
+      ],
+      "carbon_forecast": [
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402
+      ],
+      "arrival_forecast": [
+        31.13943699730168,
+        28.744807894033322,
+        29.844282247543234,
+        28.94443971150874,
+        29.975793711326798,
+        28.758123662479772,
+        29.808107792422966,
+        28.67392724795668,
+        28.90955015651683,
+        29.50254514600068,
+        30.958370665525997,
+        29.606970595543217,
+        31.545567566224022,
+        30.703725581751335,
+        32.74910027251096,
+        31.6747314296009,
+        32.68081658718156,
+        31.34533600579056,
+        32.89832344856607,
+        31.464502596490085,
+        32.89398071963869,
+        31.56622699055475,
+        32.85808634939575,
+        31.79973015187301,
+        33.843611998839314,
+        32.99645171994723,
+        35.13634282844169,
+        34.468279930109944,
+        35.6979149738682,
+        33.90367736217124,
+        35.0451350746242,
+        33.50302583844474,
+        34.21218219023608,
+        32.96036145005776,
+        33.90985532912987,
+        34.62408331875929,
+        35.54925848116955,
+        33.50810153192167,
+        34.0417572403269,
+        32.19258415685784,
+        33.18810953694169,
+        31.528339581059626,
+        32.72067393107721,
+        31.193872642309362,
+        31.9155174122206,
+        30.373392567976456,
+        30.87629117158741,
+        29.27669620418452
+      ],
+      "mode": "formal",
+      "generated_at": "2024-01-02T00:00:00+08:00",
+      "forecast_provenance": {
+        "price_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "price_forecast",
+          "source_kind": "seasonal_naive",
+          "method": "trailing_seasonal_naive",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "load_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "load_forecast",
+          "source_kind": "seasonal_naive",
+          "method": "trailing_seasonal_naive",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "pv_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "pv_forecast",
+          "source_kind": "modeled_scenario",
+          "method": "pvlib_v0.15.2_chain_from_causal_driver_forecasts",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "wind_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "wind_forecast",
+          "source_kind": "modeled_scenario",
+          "method": "shear_law_and_frozen_power_curve_from_causal_wind_forecast",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "temperature_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "temperature_forecast",
+          "source_kind": "seasonal_naive",
+          "method": "trailing_seasonal_naive",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "carbon_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "carbon_forecast",
+          "source_kind": "human_approved_external_low_resolution",
+          "method": "annual_constant_from_verified_v2_manifest",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        },
+        "arrival_forecast": {
+          "schema_version": "contract-v9",
+          "series_name": "arrival_forecast",
+          "source_kind": "modeled_scenario",
+          "method": "b6_expected_rate_template_times_declared_capacity",
+          "generated_at": "2024-01-02T00:00:00+08:00",
+          "information_cutoff_exclusive": "2024-01-02T00:00:00+08:00",
+          "target_start": "2024-01-02T00:00:00+08:00",
+          "target_end_exclusive": "2024-01-03T00:00:00+08:00",
+          "lookback_start": "2024-01-01T00:00:00+08:00",
+          "lookback_end_exclusive": "2024-01-02T00:00:00+08:00",
+          "model_name": "formal_scenario_b6_candidate",
+          "model_version": "v1",
+          "code_revision": "626f97f3cbd13082e14197028dd62d356b8e54e4",
+          "seed": null,
+          "sources": [
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_parquet",
+              "logical_path": "data/processed/singapore_2024/half_hour.parquet",
+              "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "canonical_manifest",
+              "logical_path": "data/manifest/singapore_2024_half_hour.json",
+              "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "split_manifest",
+              "logical_path": "data/manifest/singapore_2024_splits.json",
+              "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "forecast_policy_manifest",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+              "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "seasonal_rule_source_policy",
+              "logical_path": "data/manifest/singapore_2024_forecast_policy_v2.json",
+              "sha256": "fa1019f0fad905a9edcf663d947a46f741cecc91ace71bbac85f0d0874e4e72e"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "b6_intensity_policy",
+              "logical_path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+              "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_manifest",
+              "logical_path": "data/manifest/singapore_2024_exogenous_v3.json",
+              "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_source_manifest",
+              "logical_path": "data/manifest/m13f_materialization_sources_v4.json",
+              "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+            },
+            {
+              "schema_version": "contract-v9",
+              "role": "exogenous_drivers_parquet",
+              "logical_path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+              "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+            }
+          ]
+        }
+      }
+    },
+    "planning_forecast": {
+      "schema_version": "contract-v9",
+      "horizon_steps": 5,
+      "price": [
+        0.10793000000000001,
+        0.1083,
+        0.108,
+        0.10259,
+        0.10784
+      ],
+      "pv": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "wind": [
+        11.135467115046236,
+        4.208791762998214,
+        4.208791762998214,
+        0.0,
+        0.0
+      ],
+      "temperature": [
+        25.6,
+        25.7,
+        25.7,
+        25.5,
+        25.5
+      ],
+      "carbon": [
+        0.402,
+        0.402,
+        0.402,
+        0.402,
+        0.402
+      ],
+      "arrival": [
+        31.193872642309362,
+        31.9155174122206,
+        30.373392567976456,
+        30.87629117158741,
+        29.27669620418452
+      ],
+      "base_idc_power": [
+        14.89153603547046,
+        14.897193865753787,
+        14.897193865753787,
+        14.88589758131824,
+        14.88589758131824
+      ],
+      "visible_mask": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "assumed_mask": [
+        false,
+        false,
+        false,
+        false,
+        false
+      ],
+      "extension_policy": "\u7a97\u53e3\u5916\u89c4\u5212\u5047\u8bbe\uff08[t, t+forecast_cutoff) \u4e4b\u5916\uff0c\u4e0d\u8bfb\u672a\u6765\u771f\u503c\uff09\uff1apv/wind -> 0\uff08\u4fdd\u5b88\uff09\uff1bprice/carbon/temperature -> \u6700\u540e\u53ef\u89c1\u503c\u6301\u4e45\u5316\uff1barrival -> 0\uff08\u672a\u6765\u5177\u4f53\u4efb\u52a1\u4e0d\u8fdb\u5165\u89c4\u5212\uff09\uff1bbase_idc_power -> \u6309\u6301\u4e45\u5316\u6e29\u5ea6\u91cd\u7b97\u3002"
+    },
+    "group_work_capacity": [
+      10.706640845696876,
+      11.763164192403284,
+      10.46470509052142,
+      8.800487238686117,
+      11.699407605157045,
+      10.047479407607547,
+      10.054444422332665,
+      11.265151038510892,
+      8.239610178924783,
+      11.598133595596385,
+      10.916434530016287,
+      11.435484707774007,
+      8.458081295100676,
+      11.51182080567265,
+      8.456619630286003,
+      7.907763086817564,
+      11.776134871435351,
+      11.806417480888342,
+      11.882685482082904,
+      9.859548596793951
+    ],
+    "group_power_coeff_kw_per_work": [
+      0.034307065909638806,
+      0.02116852242267187,
+      0.03248351950067996,
+      0.04358712959196593,
+      0.03595745891179497,
+      0.036632747474514685,
+      0.03052805081689311,
+      0.02511944717667012,
+      0.030544065096364793,
+      0.03797696348808889,
+      0.028109940899315525,
+      0.021320042987125153,
+      0.04192525359299438,
+      0.030808655461309533,
+      0.04189524658986423,
+      0.05097488252588962,
+      0.021655930955266363,
+      0.028094035125407982,
+      0.027870076558878444,
+      0.025476122252714027
+    ],
+    "group_power_upper_kw": [
+      0.6600875214312126,
+      0.5472981019166495,
+      0.5964458338635924,
+      0.7153769279522972,
+      0.7107977264793088,
+      0.6539495857856481,
+      0.6098944453313841,
+      0.546453888970889,
+      0.5185564821060304,
+      0.7127820991718717,
+      0.6038564605314909,
+      0.5078077469929849,
+      0.6296375413290001,
+      0.6664039474421516,
+      0.6271207922527298,
+      0.7001514491498166,
+      0.48950229039940873,
+      0.6068614231824052,
+      0.5902406118924969,
+      0.49496389899597015
+    ],
+    "power_approximation_note": "\u89c4\u5212\u8fd1\u4f3c\uff1a\u9010\u7ec4\u529f\u7387\u7531\u57fa\u7840\u8d1f\u8f7d\u529f\u8017\u4e0e\u9010\u7ec4 work capacity \u7ebf\u6027\u5316\u5f97\u5230\uff1b\u6267\u884c\u524d\u540e\u5fc5\u987b\u7531\u73af\u5883\u7269\u7406\u94fe\u590d\u6838\u3002",
+    "budget_remaining_sgd": 1000000000.0,
+    "terminal_inventory_enabled": true,
+    "terminal_inventory": {
+      "schema_version": "contract-v9",
+      "version": "terminal-inventory-v1",
+      "episode_end_step": 48,
+      "remaining_steps": 5,
+      "target_kwh": 50.0,
+      "lower_kwh": 45.0,
+      "upper_kwh": 55.00000000000001
+    }
+  },
+  "raw_action": [
+    0.9389118552207947,
+    0.9359923601150513,
+    0.21930783987045288,
+    0.4816128611564636,
+    0.03798434138298035,
+    0.9639089107513428,
+    0.8256938457489014,
+    0.9992684125900269,
+    0.9799685478210449,
+    0.7455470561981201,
+    0.8401896953582764,
+    0.7612890005111694,
+    0.7820549607276917,
+    0.8277601003646851,
+    0.8358491659164429,
+    0.01370769739151001,
+    0.986061692237854,
+    0.3948075771331787,
+    0.6182346940040588,
+    0.9680585861206055,
+    0.9968588352203369
+  ]
+}

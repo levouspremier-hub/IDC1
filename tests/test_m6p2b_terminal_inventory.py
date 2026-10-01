@@ -122,3 +122,19 @@ def test_wrapper_keeps_raw_and_records_actual_inventory():
     np.testing.assert_array_equal(info['raw_action'], raw)
     assert info['exec_action'][-1] == pytest.approx(0.0, abs=1e-6)
     assert info['inventory_audit']['actual_energy_kwh'] == pytest.approx(50.0)
+
+
+def test_observed_half_hour_roundoff_does_not_trigger_zero_fallback():
+    import json
+    from pathlib import Path
+
+    from contracts.inventory import InventorySnapshot
+    fixture = json.loads((Path(__file__).parent / 'fixtures'
+                          / 'm6p2b_terminal_roundoff.json').read_text())
+    snap = InventorySnapshot.model_validate(fixture['snapshot'])
+    raw = fixture['raw_action']
+    result = solve_time_indexed_mip_raw_projection(
+        snap, DispatchProposal(compute_actions=raw[:20], storage_action=raw[-1]))
+    assert result.solver_status == 'optimal'
+    assert result.inventory_audit['target_reachable'] is True
+    assert result.soc_kwh[-1] == pytest.approx(50.0, abs=1e-6)

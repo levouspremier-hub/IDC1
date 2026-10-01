@@ -163,6 +163,9 @@ def collect_rollout(
             "explicit_generator" if generator is not None else "global_torch_rng"
         ),
     }
+    inventory_enabled = bool(getattr(env.unwrapped, "terminal_inventory_enabled", False))
+    inventory_physical_rows: list[dict] = []
+    inventory_base_unserved_steps = 0
 
     for _ in range(steps):
         obs_arr = np.asarray(obs, dtype=np.float32)
@@ -199,6 +202,9 @@ def collect_rollout(
             correction_info = {"corrector_on": True}
             for key in CORRECTION_AUDIT_INFO_KEYS:
                 correction_info[key] = _json_safe(_require_info(info, key))
+            if inventory_enabled:
+                for key in ("inventory_audit", "inventory_training_diagnostics"):
+                    correction_info[key] = _json_safe(_require_info(info, key))
             exec_action = np.asarray(
                 _require_info(info, "exec_action"), dtype=np.float32
             ).reshape(-1).copy()
@@ -226,6 +232,15 @@ def collect_rollout(
         )
 
         stats["transitions"] += 1
+        if inventory_enabled:
+            from evaluation.metrics import check_physical_step, step_power_from_info
+            unwrapped = env.unwrapped
+            inventory_base_unserved_steps += int(info["unserved_base_load_kW"] > 1e-6)
+            inventory_physical_rows.append(check_physical_step(
+                step_power_from_info(info), access_limit_kw=unwrapped.access_limit_kw,
+                soc_kwh=info["bess_energy_kWh"],
+                soc_min_kwh=unwrapped.bess_soc_min * unwrapped.bess_capacity_kWh,
+                soc_max_kwh=unwrapped.bess_soc_max * unwrapped.bess_capacity_kWh))
         if not np.array_equal(raw_action, exec_action):
             stats["raw_exec_difference_count"] += 1
         if terminated:
@@ -237,4 +252,28 @@ def collect_rollout(
         if terminated or truncated:
             break
 
+    if inventory_enabled:
+        from evaluation.adapter import qualify_service, violations_in
+        from evaluation.metrics import aggregate_physical, classify_tasks
+        from evaluation.service_standard import FROZEN_PROJECT_SERVICE_STANDARD
+        unwrapped = env.unwrapped
+        service, _ = classify_tasks(
+            unwrapped.tasks, horizon=unwrapped.horizon,
+            non_interruptible_interruptions=unwrapped.total_non_interruptible_interruption_count)
+        physical = aggregate_physical(
+            inventory_physical_rows, base_load_unserved_steps=inventory_base_unserved_steps)
+        qualified, note = qualify_service(service, FROZEN_PROJECT_SERVICE_STANDARD, physical)
+        gap = abs(unwrapped.bess_energy_kWh - unwrapped.bess_soc_target
+                  * unwrapped.bess_capacity_kWh)
+        stats["inventory_episode"] = {
+            "service_qualified": qualified, "service_note": note,
+            "physical_violation_count": len(violations_in(physical)),
+            "episode_complete": bool(stats["terminated_count"] == 1),
+            "final_soc": unwrapped.bess_soc, "target_gap_kwh": gap,
+            "target_qualified": gap <= 1e-6,
+            "inventory_qualified": abs(unwrapped.bess_soc - unwrapped.bess_soc_target)
+                <= unwrapped.bess_soc_final_tolerance,
+            "charge_kwh": unwrapped.total_bess_charge_kWh,
+            "discharge_kwh": unwrapped.total_bess_discharge_kWh,
+        }
     return stats
