@@ -86,13 +86,18 @@ def main():
             non_interruptible_interruptions=env.total_non_interruptible_interruption_count)
         service.append({"origin": origin, "metrics": metrics.model_dump(),
                         "missing": missing})
-    rows = [{"origin": origins[i // 48], "step": i % 48, **_json_safe(info)}
+    rows = [{"origin": origins[i // 48], "step": i % 48, **_json_safe(info),
+             "causal_current_input": {name: getattr(snapshots[i].planning_forecast, name)[0]
+                                      for name in ("pv", "wind", "temperature",
+                                                   "base_idc_power")}}
             for i, info in enumerate(infos)]
     failures = [{"origin": origins[i // 48], "step": i % 48,
                  "snapshot": snap.model_dump(), "info": rows[i]}
                 for i, snap in enumerate(snapshots)
-                if infos[i]["correction_reason"] in (
-                    "timeout", "solver_failure", "proposal_invalid", "base_shortage")]
+                if (infos[i]["correction_reason"] in (
+                    "timeout", "solver_failure", "proposal_invalid", "base_shortage")
+                    or infos[i]["access_curtailment_work"] > 1e-6
+                    or infos[i]["invalid_bess_action"] > 1e-6)]
     report = {
         "scope": "train_only_read_only_short_trace", "parameter_updates": 0,
         "seed": args.seed, "batch_index": args.batch_index, "origins": origins,
