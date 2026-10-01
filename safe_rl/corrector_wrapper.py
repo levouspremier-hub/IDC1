@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 import gymnasium as gym
 import numpy as np
 
@@ -34,6 +37,8 @@ class CorrectorWrapper(gym.Wrapper):
                 f"corrector_time_limit_s 必须为显式正数，实际 {corrector_time_limit_s!r}"
             )
         self.corrector_time_limit_s = float(corrector_time_limit_s)
+        self._inventory_previous_context: dict | None = None
+        self._inventory_audits: list[dict] = []
         self.reward_version = getattr(
             env.unwrapped, "terminal_inventory_reward_version", ORIGINAL_REWARD_VERSION)
         if self.reward_version not in (ORIGINAL_REWARD_VERSION, COMMON_SGD_REWARD_VERSION):
@@ -75,6 +80,8 @@ class CorrectorWrapper(gym.Wrapper):
         return self._inventory_observation(observation)
 
     def reset(self, *, seed=None, options=None):
+        self._inventory_previous_context = None
+        self._inventory_audits = []
         observation, info = self.env.reset(seed=seed, options=options)
         if self.inventory_observation_version is not None:
             info["policy_observation_version"] = self.inventory_observation_version
@@ -162,6 +169,7 @@ class CorrectorWrapper(gym.Wrapper):
                     is not None
                     else None),
             }
+            self._record_inventory_progress(snapshot, correction.inventory_audit, info, terminated)
             info["inventory_training_diagnostics"] = {
                 key: float(value) for key, value in info.items() if key.startswith("r_")
             }
@@ -177,3 +185,59 @@ class CorrectorWrapper(gym.Wrapper):
         if self.inventory_observation_version is not None:
             info["policy_observation_version"] = self.inventory_observation_version
         return self._inventory_observation(obs), reward, terminated, truncated, info
+
+    def _record_inventory_progress(self, snapshot, planned, info, terminated):
+        from contracts.inventory import summarize_inventory_audits
+
+        def forecast_signature(start):
+            forecast = snapshot.planning_forecast
+            vectors = {key: list(getattr(forecast, key))[start:] for key in (
+                "temperature", "base_idc_power", "pv", "wind", "arrival")}
+            if vectors["arrival"]:
+                vectors["arrival"][0] = 0.  # Current arrived work is represented by real tasks.
+            return hashlib.sha256(json.dumps(vectors, sort_keys=True).encode()).hexdigest()
+
+        current_known = {str(t.task_id): t.remaining_work for t in snapshot.tasks}
+        previous = self._inventory_previous_context
+        gap = planned.get("target_gap_kwh")
+        review = {"step": snapshot.step, "gap_increase_kwh": 0., "classification": "initial",
+                  "input_revision": False, "known_progress_error_work": 0.,
+                  "new_arrived_work": 0., "energy_progress_error_kwh": 0.,
+                  "prediction_error_proven": False}
+        if previous is not None:
+            input_revision = forecast_signature(0) != previous["forecast_tail_sha256"]
+            progress = max((abs(current_known.get(task, 0.) - value)
+                            for task, value in previous["expected_remaining_work"].items()),
+                           default=0.)
+            new_work = sum(value for task, value in current_known.items()
+                           if task not in previous["expected_remaining_work"])
+            energy_error = (abs(snapshot.soc_kwh - previous["expected_energy_kwh"])
+                            if previous["expected_energy_kwh"] is not None else None)
+            increase = (max(float(gap) - previous["planning_gap_kwh"], 0.)
+                        if gap is not None and previous["planning_gap_kwh"] is not None else 0.)
+            classification = "unchanged_recovery"
+            if increase > 1e-6:
+                if progress > 1e-6 or energy_error is None or energy_error > 1e-6:
+                    classification = "execution_progress_revision"
+                elif new_work > 1e-6 or input_revision:
+                    classification = "observed_planning_input_revision"
+                else:
+                    classification = "planner_consistency_loss"
+            review.update(gap_increase_kwh=increase, classification=classification,
+                          input_revision=input_revision, known_progress_error_work=progress,
+                          new_arrived_work=new_work, energy_progress_error_kwh=energy_error,
+                          previous_expected_forecast_sha256=previous["forecast_tail_sha256"],
+                          actual_planning_forecast_sha256=forecast_signature(0))
+        audit = info["inventory_audit"]
+        audit["transition_review"] = review
+        self._inventory_audits.append(audit)
+        task_work = planned.get("planned_step0_task_work", {})
+        self._inventory_previous_context = {
+            "forecast_tail_sha256": forecast_signature(1),
+            "expected_remaining_work": {task: max(value - task_work.get(task, 0.), 0.)
+                                        for task, value in current_known.items()},
+            "expected_energy_kwh": planned.get("planned_next_energy_kwh"),
+            "planning_gap_kwh": gap}
+        if terminated:
+            audit["terminal_gap_assessment"] = summarize_inventory_audits(
+                self._inventory_audits, audit["actual_terminal_target_gap_kwh"])

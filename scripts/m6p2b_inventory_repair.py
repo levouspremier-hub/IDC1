@@ -117,6 +117,7 @@ def replay(config, origins, run_id):
 
 
 def calibrate(config, origins, run_id):
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
     rows, summaries, provenance = [], [], {}
     for compute in (1.0, .5, .25):
         business_sum, carbon_sum, transitions = 0.0, 0.0, 0
@@ -138,15 +139,14 @@ def calibrate(config, origins, run_id):
                           "business_mean": business_sum / transitions,
                           "carbon_mean": carbon_sum / transitions,
                           "transitions": transitions})
-    passed = all(r["episode_complete"] and r["service_qualified"]
-                 and r["inventory_qualified"] and r["physical_violation_count"] == 0
-                 and r["fallbacks"] == 0 for r in rows)
+    passed = all(all(inventory_episode_acceptance(r).values()) for r in rows)
     budgets = calibrate_budgets(summaries)
     multipliers = multiplier_scaling(summaries, budgets)
     observation_dims = {r["policy_observation_dimension"] for r in rows}
     if len(observation_dims) != 1:
         raise ValueError("calibration observation dimensions differ")
     candidate = training_config_candidate(budgets, multipliers, observation_dims.pop())
+    candidate["corrector"] = copy.deepcopy(config["training"]["corrector"])
     return rows, {"passed": passed, "scope": "train_only_calibration", "origins": list(origins),
                   "proposal_summaries": summaries, "candidate": candidate,
                   "asset_hashes": asset_hashes(),
@@ -156,7 +156,13 @@ def calibrate(config, origins, run_id):
 
 
 def freeze_calibration(config, folder, report):
-    from scenario.inventory_release import CONFIG_PATH, MATRIX_PATH, SEMANTICS, observation_spec
+    from scenario.inventory_release import (
+        CONFIG_PATH,
+        MATRIX_PATH,
+        SEMANTICS,
+        observation_spec,
+        refresh_method_readiness,
+    )
     if report["passed"] is not True or len(report["origins"]) != 24:
         raise ValueError("cannot freeze unqualified or incomplete calibration")
     output = ROOT / CONFIG_PATH
@@ -167,14 +173,14 @@ def freeze_calibration(config, folder, report):
     training = {k: v for k, v in candidate.items() if k not in ("schema", "status", "note")}
     frozen = copy.deepcopy(config)
     frozen.update(schema="idc-training-config-v2", version="v2", status="frozen",
-                  configuration_revision="r2",
+                  configuration_revision="r3",
                   note="M6-P2b train-only re-calibration; common SGD degradation reward",
                   training=training)
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
     frozen["training"]["corrector"].update(
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
-        service_guard_version="arrived-service-reserve-v1",
+        service_guard_version="arrived-service-reserve-v2",
         service_temperature_margin_c=config["service_temperature_reserve"]["margin_c"])
     frozen["training"]["backend"]["note"] = (
         "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False")
@@ -200,18 +206,20 @@ def freeze_calibration(config, folder, report):
     matrix["sources"]["training_config_v2"] = {
         "logical_path": CONFIG_PATH, "sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
     matrix["policy_observation"] = observation_spec()
+    refresh_method_readiness(matrix)
     matrix_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2) + "\n")
 
 
-def short_gate():
+def short_gate(seeds=(0, 1, 2)):
     from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
     from safe_rl_v2.inventory_train import verify_written_run
     from scenario.inventory_release import RUN_REVISION, checkpoint_binding, load_config
     binding = checkpoint_binding()
     obs_dim = int(load_config()["training"]["policy"]["obs_dim"])
     sources, failed = [], []
     provenance = {}
-    for seed in (0, 1, 2):
+    for seed in seeds:
         folder = ROOT / f"runs/m6p2b_short_seed{seed}_{RUN_REVISION}"
         report = verify_written_run(folder, binding)
         manifest = json.loads((folder / "manifest.json").read_text())
@@ -245,9 +253,8 @@ def short_gate():
                                for r in report["batch_records"]),
             "storage_gradient": all(r["storage_signal"]["head_grad_norm_mean"] > 0
                                     for r in report["batch_records"]),
-            "feasible_terminal_target": all(
-                e["final_planning_audit"].get("target_reachable") is not True
-                or e["target_qualified"] for e in report["inventory_episodes"]),
+            "inventory_progress_review": all(all(inventory_episode_acceptance(e).values())
+                                             for e in report["inventory_episodes"]),
         }
         failed.extend([f"seed{seed}:{k}" for k, value in checks.items() if not value])
         sources.append({"seed": seed, "checks": checks, "run_id": folder.name,
@@ -262,6 +269,7 @@ def short_gate():
         for batch in report["batch_records"]:
             provenance.update({int(k): v for k, v in batch["origin_provenance"].items()})
     return sources, {"passed": not failed, "failed_checks": failed, "short_runs": sources,
+                     "seeds": list(seeds), "formal_three_seed_gate": list(seeds) == [0, 1, 2],
                      "inventory_binding": binding,
                      "reward_decision": load_config()["reward_semantics"] if not failed
                      else "short-run failures require repair before formal training"}, provenance
@@ -270,6 +278,7 @@ def short_gate():
 def audit(config, run_id):
     from checkpointing.inventory_eval_input import export_policy
     from checkpointing.versioned import read_checkpoint_payload
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance, validation_ready
     from safe_rl_v2.inventory_train import verify_written_run
     from scenario.inventory_release import RUN_REVISION, checkpoint_binding, load_matrix
     matrix, binding = load_matrix(), checkpoint_binding()
@@ -320,8 +329,10 @@ def audit(config, run_id):
     missing = [m["method_id"] for m in matrix["methods"]
                if m["method_id"] != "safe_ppo_joint_rolling_corrector"]
     # Cost is deliberately absent from readiness. Unresolved failures keep this gate closed.
-    ready = all(counts[k] == 636 for k in (
-        "episode_complete", "simultaneously_qualified", "physics_qualified"))
+    from evaluation.metrics import PHYSICS_ABS_TOL
+    pairing_verified = (PHYSICS_ABS_TOL == 1e-6
+                        and bool(matrix.get("fair_cost_carbon_pairing")))
+    ready = validation_ready(rows, expected_episodes=636, pairing_verified=pairing_verified)
     return rows, {"scope": "train_only_212x3_artifact_review", "formal_sources": sources,
                   "inventory_binding": binding, "episodes": len(rows),
                   "qualification_counts": counts,
@@ -329,8 +340,10 @@ def audit(config, run_id):
                   "validation_readiness": ready, "cost_threshold_used": False,
                   "missing_method_seats": missing, "five_method_comparison_ready": False,
                   "fair_pairing_terminal_difference_kwh_max": 1e-6,
-                  "failure_rows": [r for r in rows if not r["simultaneously_qualified"]
-                                   or r["physical_violation_count"]]}, provenance
+                  "failure_rows": [{**r, "acceptance_checks": inventory_episode_acceptance(r)}
+                                   for r in rows
+                                   if not all(inventory_episode_acceptance(r).values())]
+                  }, provenance
 
 
 def main(argv=None):
@@ -339,7 +352,11 @@ def main(argv=None):
                         required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--origins-limit", type=int)
+    parser.add_argument("--seed0-gate", action="store_true",
+                        help="controlled seed0 review only; never releases the three-seed gate")
     args = parser.parse_args(argv)
+    if args.seed0_gate and args.phase != "gate":
+        raise ValueError("--seed0-gate is only valid for controlled gate review")
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("run-id exists; historical and failed runs are never overwritten")
     config = load_frozen_training_config()
@@ -374,7 +391,7 @@ def main(argv=None):
             _, injection = build_train_env(origins[0], master_seed=0, config=config)
             provenance = {origins[0]: injection.provenance_hash}
         elif args.phase == "gate":
-            rows, report, provenance = short_gate()
+            rows, report, provenance = short_gate((0,) if args.seed0_gate else (0, 1, 2))
         else:
             from scenario.inventory_release import load_config
             with warnings.catch_warnings():

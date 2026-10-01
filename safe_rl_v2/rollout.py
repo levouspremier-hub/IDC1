@@ -199,7 +199,7 @@ def collect_rollout(
         electricity_cost = _require_info(info, ELECTRICITY_COST_INFO_KEY)
 
         if corrector_on:
-            correction_info = {"corrector_on": True}
+            correction_info: dict[str, Any] = {"corrector_on": True}
             for key in CORRECTION_AUDIT_INFO_KEYS:
                 correction_info[key] = _json_safe(_require_info(info, key))
             if inventory_enabled:
@@ -276,6 +276,11 @@ def collect_rollout(
             "charge_kwh": unwrapped.total_bess_charge_kWh,
             "discharge_kwh": unwrapped.total_bess_discharge_kWh,
             "final_planning_audit": correction_info["inventory_audit"],
+            "terminal_gap_assessment": correction_info["inventory_audit"].get(
+                "terminal_gap_assessment", {}),
+            "fallbacks": sum(t.correction_info["correction_reason"] in (
+                "timeout", "solver_failure", "proposal_invalid", "base_shortage")
+                for t in buffer.transitions[-stats["transitions"]:]),
             "inventory_unreachable_steps": sum(
                 t.correction_info["inventory_audit"].get("target_reachable") is False
                 for t in buffer.transitions[-stats["transitions"]:]),

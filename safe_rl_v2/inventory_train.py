@@ -61,7 +61,8 @@ def require_short_gate(binding):
     manifest = json.loads((gate / "manifest.json").read_text())
     report = json.loads((gate / "report.json").read_text())
     if (manifest["status"] != "success" or report.get("passed") is not True
-            or report.get("inventory_binding") != binding):
+            or report.get("inventory_binding") != binding
+            or report.get("formal_three_seed_gate") is not True):
         raise ValueError("three-seed short-run gate must pass before formal training")
     from scripts.m6p2b_inventory_repair import short_gate
     sources, live, _ = short_gate()

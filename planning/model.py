@@ -121,9 +121,14 @@ def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
     increments = []
     pf = snapshot.planning_forecast
     guard = snapshot.service_guard
+    coupled = guard is not None and guard.version == "arrived-service-reserve-v2"
     for k in range(snapshot.planning_horizon_steps):
         base = pf.base_idc_power[k]
-        if k == 0 and guard is not None:
+        if coupled and guard is not None:
+            group_work = np.asarray(guard.known_service_allocation[k]).reshape(
+                len(snapshot.tasks), len(snapshot.group_work_capacity)).sum(axis=0)
+            base += float(np.dot(snapshot.group_power_coeff_kw_per_work, group_work))
+        elif k == 0 and guard is not None:
             base += sum(c * w for c, w in zip(snapshot.group_power_coeff_kw_per_work,
                                             guard.group_work_floor, strict=True))
         supply = snapshot.access_limit_kw + pf.pv[k] + pf.wind[k]
@@ -970,6 +975,7 @@ def solve_time_indexed_mip_raw_projection(
 
     inventory_enabled = isinstance(snapshot, InventorySnapshot)
     guard = snapshot.service_guard if isinstance(snapshot, InventorySnapshot) else None
+    coupled = guard is not None and guard.version == "arrived-service-reserve-v2"
     terminal = snapshot.terminal_inventory if isinstance(snapshot, InventorySnapshot) else None
     if isinstance(snapshot, InventorySnapshot):
         validate_inventory_snapshot(snapshot)
@@ -1014,7 +1020,10 @@ def solve_time_indexed_mip_raw_projection(
     off_d = off_z + H          # 逐组 |u_g - raw_compute_g|
     off_e = off_d + n_group    # |exec_storage - raw_storage|
     off_inventory_gap = off_e + 1
-    n_vars = off_inventory_gap + (1 if inventory_enabled else 0)
+    off_aggregate_work = off_inventory_gap + (1 if inventory_enabled else 0)
+    off_aggregate_backlog = off_aggregate_work + (H if coupled else 0)
+    off_prefix = off_aggregate_backlog + (H + 1 if coupled else 0)
+    n_vars = off_prefix + (n_task if coupled else 0)
 
     # 经济/服务目标（阶段 B 的 tie-break，单位 SGD）
     c_econ = np.zeros(n_vars)
@@ -1045,6 +1054,19 @@ def solve_time_indexed_mip_raw_projection(
     ub[off_soc:off_soc + H + 1] = float(snapshot.soc_max_kwh)
     lb[off_z:off_z + H] = 0.0
     ub[off_z:off_z + H] = 1.0
+    if coupled and guard is not None:
+        ub[off_aggregate_work:off_aggregate_work + H] = sum(cap)
+        ub[off_aggregate_work] = 0.
+        ub[off_aggregate_backlog:off_aggregate_backlog + H + 1] = sum(
+            guard.aggregate_arrival_work)
+        ub[off_aggregate_backlog] = 0.
+        ub[off_aggregate_backlog + H] = guard.aggregate_backlog_work[-1]
+        ub[off_prefix:off_prefix + n_task] = 1.
+        for i, task in enumerate(snapshot.tasks):
+            ub[off_bus + i] = max(
+                task.remaining_work - guard.known_service_required_end_work[i], 0.)
+            ub[off_dls + i] = max(
+                task.remaining_work - guard.known_service_required_due_work[i], 0.)
 
     rows: list[dict[int, float]] = []
     lbs: list[float] = []
@@ -1069,11 +1091,57 @@ def solve_time_indexed_mip_raw_projection(
 
     if inventory_enabled and terminal is not None:
         if guard is not None:
-            for k, limit in enumerate(guard.charge_limits_kw):
-                ub[off_charge + k] = min(ub[off_charge + k], limit)
-            for g, work in enumerate(guard.group_work_floor):
-                add({a(i, g, 0): 1.0 for i in range(n_task)}, work, np.inf,
-                    f"arrived_service_floor[{g}]")
+            if not coupled:
+                for k, limit in enumerate(guard.charge_limits_kw):
+                    ub[off_charge + k] = min(ub[off_charge + k], limit)
+            else:
+                for k in range(H):
+                    coefficient = guard.reserve_power_coefficients_kw_per_work[k]
+                    aggregate_coefficient = max(coefficient)
+                    # Forecast work is a reservation only: conserve its queue,
+                    # share physical compute capacity, retain unavoidable backlog.
+                    add({off_aggregate_backlog + k + 1: 1.,
+                         off_aggregate_backlog + k: -1., off_aggregate_work + k: 1.},
+                        guard.aggregate_arrival_work[k], guard.aggregate_arrival_work[k],
+                        f"aggregate_backlog_balance[{k}]")
+                    capacity_row = {off_aggregate_work + k: 1.}
+                    reserve_row = {off_charge + k: 1.,
+                                   off_aggregate_work + k: aggregate_coefficient}
+                    for g in range(n_group):
+                        for i in range(n_task):
+                            capacity_row[a(i, g, k)] = 1.
+                            reserve_row[a(i, g, k)] = coefficient[g]
+                    add(capacity_row, -np.inf, sum(cap), f"aggregate_shared_capacity[{k}]")
+                    headroom = max(snapshot.access_limit_kw - guard.reserve_base_power_kw[k], 0.)
+                    big_m = cmax + sum(c * w for c, w in zip(coefficient, cap, strict=True))
+                    big_m += aggregate_coefficient * sum(cap)
+                    # Only charging invokes the zero-renewable reserve. Storage
+                    # exclusion and the original physical constraints stay intact.
+                    reserve_row[off_z + k] = big_m
+                    add(reserve_row, -np.inf, headroom + big_m,
+                        f"schedule_coupled_charging_reserve[{k}]")
+                previous = None
+                for i in guard.known_service_order:
+                    demand = min(snapshot.tasks[i].remaining_work,
+                                 snapshot.tasks[i].max_rate_work_per_step)
+                    if demand <= 1e-8:
+                        continue
+                    row = {a(i, g, 0): 1. for g in range(n_group)}
+                    row[off_prefix + i] = -demand
+                    add(row, -np.inf, 0., f"executor_prefix_active[{i}]")
+                    if previous is not None:
+                        j, preceding = previous
+                        row = {a(j, g, 0): 1. for g in range(n_group)}
+                        row[off_prefix + i] = -preceding
+                        add(row, 0., np.inf, f"executor_prefix_preceding[{i}]")
+                    previous = (i, demand)
+            if coupled and guard is not None:
+                add({a(i, g, 0): 1. for i in range(n_task) for g in range(n_group)},
+                    sum(guard.group_work_floor), np.inf, "arrived_service_prefix_floor")
+            else:
+                for g, work in enumerate(guard.group_work_floor):
+                    add({a(i, g, 0): 1.0 for i in range(n_task)}, work, np.inf,
+                        f"arrived_service_floor[{g}]")
         add({off_inventory_gap: 1.0, off_soc + H: -1.0},
             -terminal.target_kwh, np.inf, "terminal_gap_below")
         add({off_inventory_gap: 1.0, off_soc + H: 1.0},
@@ -1112,6 +1180,8 @@ def solve_time_indexed_mip_raw_projection(
     bounds_vec = Bounds(lb=lb, ub=ub)
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
+    if coupled and guard is not None:
+        integrality[off_prefix:off_prefix + n_task] = 1
     # 全局 deadline：阶段 A 与 B 共享同一次调用的总预算
     deadline = (call_deadline if call_deadline is not None else
                 None if time_limit_s is None else _monotonic() + float(time_limit_s))
@@ -1137,7 +1207,8 @@ def solve_time_indexed_mip_raw_projection(
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
     _audit: dict = {
-        "n_variables": n_vars, "n_integer_variables": H, "n_constraints": len(rows) + 1,
+        "n_variables": n_vars, "n_integer_variables": H + (n_task if coupled else 0),
+        "n_constraints": len(rows) + 1,
     }
 
     def _status(res) -> str:
@@ -1168,7 +1239,18 @@ def solve_time_indexed_mip_raw_projection(
             if guard is not None:
                 for i in range(n_task):
                     for g in range(n_group):
-                        witness[a(i, g, 0)] = guard.current_allocation[i][g]
+                        if coupled and guard is not None:
+                            for k in range(H):
+                                witness[a(i, g, k)] = guard.known_service_allocation[k][i][g]
+                        else:
+                            witness[a(i, g, 0)] = guard.current_allocation[i][g]
+            if coupled and guard is not None:
+                witness[off_aggregate_work:off_aggregate_work + H] = guard.aggregate_service_work
+                witness[off_aggregate_backlog:off_aggregate_backlog + H + 1] = (
+                    guard.aggregate_backlog_work)
+                for i in range(n_task):
+                    witness[off_prefix + i] = int(sum(
+                        guard.known_service_allocation[0][i]) > 1e-8)
             witness[off_soc:off_soc + H + 1] = certificate["energy_kwh"]
             witness[off_charge:off_charge + H] = certificate["charge_kw"]
             witness[off_discharge:off_discharge + H] = certificate["discharge_kw"]
@@ -1188,8 +1270,10 @@ def solve_time_indexed_mip_raw_projection(
                 witness[off_z + k] = int(certificate["charge_kw"][k] > 0)
             for i, task in enumerate(snapshot.tasks):
                 witness[off_bus + i] = task.remaining_work - sum(
-                    witness[a(i, g, 0)] for g in range(n_group))
-                witness[off_dls + i] = task.remaining_work
+                    witness[a(i, g, k)] for g in range(n_group) for k in range(H))
+                due = max(0, min(H, task.deadline - snapshot.step))
+                witness[off_dls + i] = max(task.remaining_work - sum(
+                    witness[a(i, g, k)] for g in range(n_group) for k in range(due)), 0.)
             witness[off_d:off_d + n_group] = [
                 abs(sum(witness[a(i, g, 0)] for i in range(n_task)) / cap[g]
                     - raw_compute[g]) if cap[g] > 0 else abs(raw_compute[g])
@@ -1209,7 +1293,8 @@ def solve_time_indexed_mip_raw_projection(
             from types import SimpleNamespace
             # Feasible objective 0 + global nonnegative gap bound proves optimality.
             res_inventory = SimpleNamespace(status=0, x=certified_x)
-            reachability_method = ("arrived_service_zero_gap_certificate" if guard is not None
+            reachability_method = ("complete_service_zero_gap_certificate" if coupled else
+                                   "arrived_service_zero_gap_certificate" if guard is not None
                                    else "base_only_zero_gap_certificate")
         else:
             rem = _remaining()
@@ -1255,6 +1340,8 @@ def solve_time_indexed_mip_raw_projection(
             "physical_unreachability_proven": False,
             "service_guard": (guard.model_dump()
                               if guard is not None else None),
+            "known_service_compatible": (guard.known_service_shortfall_work <= 1e-6
+                                         if coupled and guard is not None else None),
             "inventory_numerical_allowance_kwh": 1e-7,
             "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
         }
@@ -1407,9 +1494,30 @@ def solve_time_indexed_mip_raw_projection(
     total_deadline = float(sum(deadline_slack))
     failure = FAILURE_DEADLINE_SHORTFALL if total_deadline > _TOL else FAILURE_NONE
 
+    if coupled and guard is not None:
+        planned_reserve_power, planned_limits = [], []
+        for k in range(H):
+            power_coefficients = np.asarray(guard.reserve_power_coefficients_kw_per_work[k])
+            power = (guard.reserve_base_power_kw[k]
+                     + float(power_coefficients @ allocation[:, :, k].sum(axis=0))
+                     + float(power_coefficients.max()) * float(x[off_aggregate_work + k]))
+            planned_reserve_power.append(power)
+            planned_limits.append(min(cmax, max(snapshot.access_limit_kw - power, 0.)))
+        inventory_audit.update(
+            planned_reserved_power_kw=planned_reserve_power,
+            planned_charge_limits_kw=planned_limits,
+            aggregate_service_work=x[off_aggregate_work:off_aggregate_work + H].tolist(),
+            aggregate_backlog_work=x[off_aggregate_backlog:off_aggregate_backlog + H + 1].tolist())
+    if inventory_audit:
+        inventory_audit.update(
+            planned_next_energy_kwh=float(x[off_soc + 1]),
+            planned_step0_task_work={str(task.task_id): float(allocation[i, :, 0].sum())
+                                     for i, task in enumerate(snapshot.tasks)})
+
     return RawProjectionResult(
         backend="mip", solver_status=SOLVER_OPTIMAL, failure_class=failure,
-        horizon_steps=H, n_variables=n_vars, n_integer_variables=H, n_constraints=len(rows_b),
+        horizon_steps=H, n_variables=n_vars,
+        n_integer_variables=H + (n_task if coupled else 0), n_constraints=len(rows_b),
         stage_a_status=status_a, stage_b_status=status_b,
         stage_a_solve_time_s=tA, stage_b_solve_time_s=tB,
         stage_a_objective=offset_a, stage_b_objective=float(c_econ @ x),

@@ -26,6 +26,33 @@ class RecordingWrapper(gym.Wrapper):
         return result
 
 
+def inventory_episode_acceptance(episode):
+    """Unknown/missing evidence and avoidable losses never bypass terminal review."""
+    final = episode.get("final_planning_audit", {})
+    assessment = episode.get("terminal_gap_assessment", final.get("terminal_gap_assessment", {}))
+    terminal_ok = episode.get("target_qualified") is True
+    if terminal_ok and assessment.get("classification") == "planner_consistency_loss":
+        terminal_ok = False
+    if not terminal_ok:
+        terminal_ok = (assessment.get("classification") == "registered_initial_gap"
+                       and assessment.get("explanation_complete") is True
+                       and final.get("target_reachable") is False)
+    return {
+        "complete_episode": episode.get("episode_complete") is True,
+        "frozen_service": episode.get("service_qualified") is True,
+        "physical_constraints": episode.get("physical_violation_count") == 0,
+        "inventory_band": episode.get("inventory_qualified") is True,
+        "no_fallback": episode.get("fallbacks") == 0,
+        "all_reachability_proven": episode.get("inventory_unproven_steps") == 0,
+        "terminal_gap_explained": terminal_ok,
+    }
+
+
+def validation_ready(rows, *, expected_episodes, pairing_verified):
+    return (pairing_verified is True and len(rows) == expected_episodes
+            and all(all(inventory_episode_acceptance(row).values()) for row in rows))
+
+
 def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="diagnostic"):
     env, injection = build_train_env(origin, master_seed=seed, config=config)
     env.terminal_inventory_enabled = terminal
@@ -86,6 +113,8 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         if terminal else None,
         "failure": record.failure_classification,
         "final_planning_audit": audit[-1] if terminal and audit else {},
+        "terminal_gap_assessment": audit[-1].get("terminal_gap_assessment", {})
+        if terminal and audit else {},
         "injection_provenance": injection.provenance_hash,
     }
     reward_keys = sorted({key for r in rows for key in r if key.startswith("r_")})

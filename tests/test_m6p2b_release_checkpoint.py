@@ -166,7 +166,8 @@ def test_formal_gate_rechecks_source_runs_instead_of_trusting_passed_flag(tmp_pa
     binding = {'version': 'unit-test'}
     (folder / 'manifest.json').write_text(json.dumps({'status': 'success'}))
     (folder / 'report.json').write_text(json.dumps({
-        'passed': True, 'inventory_binding': binding, 'short_runs': []}))
+        'passed': True, 'inventory_binding': binding, 'short_runs': [],
+        'formal_three_seed_gate': True}))
     monkeypatch.setattr(train, 'ROOT', tmp_path)
     monkeypatch.setattr(diagnostics, 'short_gate', lambda: ([], {'passed': False}, {}))
     with pytest.raises(ValueError, match='live short-run artifacts'):
