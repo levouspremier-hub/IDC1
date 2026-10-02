@@ -1,0 +1,101 @@
+{
+  "schema": "idc-formal-train-release-v2",
+  "inventory_version": "terminal-inventory-v1",
+  "reward_semantics": "common-sgd-degradation-v1",
+  "approved_decision_id": "M6-P2b",
+  "release_iteration": "r4",
+  "supersedes": {
+    "path": "configs/release/idc_formal_train_release_v2_r2.json",
+    "sha256": "3e6c30081841a382643c291fdebf6a8803128358f97f394e377a0faec097efc8"
+  },
+  "readiness": {
+    "formal_env_ready": true,
+    "formal_training_ready": true
+  },
+  "assets": {
+    "canonical_parquet": {
+      "path": "data/processed/singapore_2024/half_hour.parquet",
+      "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+    },
+    "canonical_manifest": {
+      "path": "data/manifest/singapore_2024_half_hour.json",
+      "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+    },
+    "truth_split_manifest": {
+      "path": "data/manifest/singapore_2024_splits.json",
+      "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+    },
+    "forecast_policy_v3": {
+      "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+      "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+    },
+    "b6_arrival_policy": {
+      "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+      "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+    },
+    "exogenous_v3_manifest": {
+      "path": "data/manifest/singapore_2024_exogenous_v3.json",
+      "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+    },
+    "exogenous_v3_source_manifest": {
+      "path": "data/manifest/m13f_materialization_sources_v4.json",
+      "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+    },
+    "exogenous_v3_parquet": {
+      "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+      "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "refs_v4": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8"
+    },
+    "formal_split_manifest_train": {
+      "path": "data/manifest/formal_splits_v5/train.json",
+      "sha256": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865"
+    },
+    "arrival_mapper_policy": {
+      "path": "data/manifest/m13g_arrival_mapper_v1.json",
+      "sha256": "ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371"
+    },
+    "env_release": {
+      "path": "configs/release/idc_formal_env_release_v1.json",
+      "sha256": "f86e6f0f163f86655c747b245960e38efd744b9a69f30283831f89e1416f556f"
+    },
+    "training_config": {
+      "path": "configs/training/idc_training_config_v2_r4.json",
+      "sha256": "67590af00a19069892413ca0fa6feaae417a9df54a1d858c7ddac8a6b0f5142f"
+    },
+    "experiment_matrix": {
+      "path": "configs/experiments/m9_experiment_matrix_v4_r4.json",
+      "sha256": "f03e494fc240de299b9864303ae3e99e8deda01be0d7ff3258b9a76b7db82691"
+    }
+  },
+  "semantics_binding": {
+    "contracts/inventory.py": "d5f7f238a95b07fb1005f5215a8ee28fe7bd80fca7f104c2adfcfa20fa1e76c3",
+    "planning/model.py": "fb541da36954f03a5f23e778ceb3ee137fc9064255cfc6b2d7552f5abbf4feb2",
+    "planning/snapshot_adapter.py": "29b09436e84d670b7d32e9a41404729408d3906820b79e47e00def4e2d1a282e",
+    "planning/corrector.py": "5b53bfde843dd9031390c6106d62f7e5b703f42aa176a397e702ecf3ea42779d",
+    "safe_rl/corrector_wrapper.py": "293ba532be961d0787cfae1d030942ab640d30599e8e3906537c1ac037f2311f",
+    "safe_rl_v2/inventory_train.py": "1f991e5ee1fb5c2809da805e9b442d9ab34614aa948fc5493a6ccdec7dfc5f3a",
+    "safe_rl_v2/formal_train_loop.py": "9a030583585a8d6d5484de24378959dabf60a55479f21f3e1b0406ea703de962",
+    "safe_rl_v2/rollout.py": "d89805ce0516d6dfb0a7f08681e4ad4af19272f50487bf5a9f2179b169ac8f02",
+    "safe_rl_v2/policy.py": "6e05953b00fd5364aa52672815592807bffad6e4806ac1d6ba97c1e72fa47c03",
+    "safe_rl_v2/buffer.py": "0028a2ab827f36e536a85fe03792b483fef2b154e6892ea0565073543a7a07e8",
+    "safe_rl_v2/ppo_update.py": "a5b7b2b63573869e6d3b6e8268cbae441e4a2d540a71db3d2b899010fac4d92b",
+    "safe_rl_v2/ppo_objective.py": "fd27262a2d41c70667d2b7bc0aee3b87658729b7928f7e30540e3059d2cd2978",
+    "safe_rl_v2/lagrangian.py": "67aaca0e2d7b2527bf3ac3c02025a678420d32c1829f56e9aef1abe6ac10d9be",
+    "safe_rl_v2/models.py": "697143a4d0e1a5a7f860b2444543728acd839219630da6cfd4da271bbea5ba64",
+    "checkpointing/versioned.py": "1dfe2d1f1c3e3ab3f2a5ed8b6cefd1a64d99eb040836c8a224864bcc92a0077c",
+    "safe_rl_v2/inventory_diagnostics.py": "48345276bfa8d6710fcd9526946b95ed7672166b657535e4e29c266f94f4ac88",
+    "scenario/inventory_release.py": "903b913282eb2181f6e848b13bf2e72ee888b0f0126f0bbcb1c43f36684e7e99",
+    "checkpointing/inventory_eval_input.py": "a54e534f3e8614b01df45fa25cbe9d5f86edefb6830fc43155c6763e62cc6944",
+    "envs/idc_price_env.py": "76c11490094b8b276a990b6f2d42ffacbdfb54c2d770d33b0039d1cc735afe57",
+    "scripts/m6p2b_inventory_repair.py": "4e1b5e12a8e92f3f50d4c7088bed344513c09f21ee9654ab7f18598161aa1057",
+    "evaluation/adapter.py": "7b69c4e1642b044d95dc6189e4d2e799895ae01ba9dcc05ee27567ec451010bb",
+    "planning/service_guard.py": "1408466d2b533f6c0f605667b5ad10c1a78bfdd5b8a1b2f80442266f2fccb14a",
+    "idc_model/allocation.py": "9a6ccdfb5260f8b6954c5ba11f03ee5b5fbe40fdb6192a3d7eb5a9b198abbf8f",
+    "evaluation/inventory.py": "8e19d31ee01ad1c980d13321241231254c1a2ec4c7ab6b757eaf8c42084a56ab",
+    "evaluation/metrics.py": "d1f9450f28dddf043a1a0d622c19953345fcb2dd7e39d3a7906c176f79143a2b"
+  },
+  "release_revision": "6447eee140ded2e48a8983403197dfacb464bcc6"
+}
