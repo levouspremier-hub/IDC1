@@ -149,6 +149,8 @@ def main():
         raise ValueError("trace row count differs")
     if error:
         raise RuntimeError(error)
+    if not qualified:
+        raise RuntimeError("trace episodes failed acceptance; evidence retained")
 
 
 if __name__ == "__main__":
