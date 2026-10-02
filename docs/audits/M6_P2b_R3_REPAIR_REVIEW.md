@@ -1,4 +1,4 @@
-# M6-P2b 复审返修记录（尚未最终验收）
+# M6-P2b 复审返修记录（受控单seed验收通过）
 
 本轮从519d01a继续；任务卡初始起点c3e37fb，分支p5-eval-viz-m6-p2b-runtime。
 用户已将后续范围改为先修复并只观察一个seed，本轮不启动三种子长训、validation/test。
@@ -61,16 +61,16 @@ Phi(s)=-0.05*mean(abs(prev_loads-base_load))-0.03*mean(abs(prev_exec_action))，
 新奖励8项直接回归通过；r5标定首次72例服务/目标均通过，折扣塑形和范围
 [0.014999999999999987,0.015000000000000012]；6624/compute=1一次超时，
 因此passed=false、未冻结。随后相同代码/预算的retry1与实测收益对照已通过，
-详见下方r5证据；完整make check和seed0短跑仍待验收，不宣称全部问题解决。
+详见下方r5证据；完整make check及seed0短跑随后均通过，详见最终受控验收；不宣称覆盖全部未来情况。
 
 ## 后续闸门
 
-先完成r5标定、发布验签、原生收益对照与真实折扣塑形核对、完整make check，
-再从新初始化运行seed0×8批（1536 transitions、32完整episode）并重读最终
-checkpoint/report/manifest。需报告raw/exec差距、头饱和、梯度和有效优势。
+r5标定、发布验签、原生收益对照与真实折扣塑形核对、完整make check及
+新初始化seed0×8批（1536 transitions、32完整episode）已经完成；最终
+checkpoint/report/manifest已重读验签。下文报告raw/exec差距、头饱和、梯度和有效优势。
 不以训练成本是否漂亮决定是否值得验证，也不把物理合格的回退隐去。
 
-目前validation readiness=false：新版训练产物与短跑未完成，也没有三种子正式
+目前validation readiness=false：单seed受控短跑已通过，但未运行新版三种子正式
 重训及636条新训练诊断。四个方法席位仍缺：rule_baseline、
 independent_rolling_optimization、penalty_ppo、safe_ppo_single_step_corrector。
 单方法修复不能宣称五方法公平比较已就绪。后续仍按validation后test顺序。
@@ -128,7 +128,7 @@ ac87616提交r6发布，绑定实际代码并显式继承已验签的r5配置/�
 
 完整make check退出码0，耗时约41分钟；报告SHA256：
 `6751530d530d636d16c43fb3dba72159785e46f4f1ac2960e1197bc503197ba6`。
-历史重放m6p2b_historical_replay_v2_r6正在运行；短跑尚未启动，均不先写通过。
+历史重放和seed0短跑随后完整结束并验签，结果见下文。
 
 ## 旧三种子历史重放（不更新权重）
 
@@ -141,4 +141,60 @@ raw到exec平均差从0.9099051613变为0.9890795764。旧臂日均放电38.0000
 终点库存不同，前后成本不作公平收益结论。
 报告SHA256：`863ca67d6913baf361c7e6228f832bb74c6f8e1244610af17c7431b3dc8db0ab`。
 
-新初始化seed0×8短跑m6p2b_short_seed0_v2_r6已经启动，尚未验收。
+新初始化seed0×8短跑及独立单seed闸门随后完成，结果如下。
+
+## 最终受控验收（2026-10-03）
+
+本轮实现起点519d01a，最后实现提交3d5aaaf，发布ac87616；验收证据执行时
+HEAD为e91234b。本任务卡起点c3e37fb，原始M6-P2b项目起点55be5e5。
+最终文档提交不改变发布绑定的实现；完整起止提交在交付消息及git log可查。
+
+实际命令：
+
+- `uv run python -m scripts.m6p2b_quality_gate --run-id m6p2b_full_check_v2_r6 --full`
+- `uv run python -m scripts.m6p2b_inventory_repair --phase replay --run-id m6p2b_historical_replay_v2_r6`
+- `uv run python -m safe_rl_v2.inventory_train --short --seed 0 --run-id m6p2b_short_seed0_v2_r6`
+- `uv run python -m scripts.m6p2b_inventory_repair --phase gate --seed0-gate --run-id m6p2b_short_gate_seed0_v2_r6`
+
+单seed短跑8批、1536 transitions、128 Adam步、8次乘子更新、32完整episode。
+完整、冻结服务、物理、45%–55%库存与共同50%目标全部32/32通过；回退、
+未证明可达性、不可达记录均0。SOC范围[0.4999999992363155,0.5000000014197105]，
+最大目标缺口1.4197105e-7kWh，小于既有1e-6kWh；没有放宽阈值。
+共充电367.1931473kWh、放电331.3918155kWh，32条轨迹均出现双向储能，
+这不是要求每天循环，也不证明每一次随机策略充放电均经济最优。
+
+8批储能raw→exec平均绝对差0.5138398293；头饱和均值0.0201822920，执行储能
+标准差均值0.0659291593；修正器输出与物理实际储能执行差为0。储能头梯度
+均值0.2721442551（范围0.1713343153–0.3934231056），有效优势标准差均值
+1.0318231806，raw储能与优势协方差均值-0.0006928836、正负均有。终端惩罚和0，
+购电/退化奖励的8批累计分别-1.7488217659/-0.1164308271；终端惩罚已被修正器
+消除，不能靠加大其权重解决学习信号。短跑信号存在，但未证明PPO已形成稳定
+经济调度；收益机会与奖励方向的证据来自固定24-origin的9/9实测公平获利配对。
+
+最终checkpoint hash：
+`8f6061c4b0bdb677acbe572206d1ed92a6f4af80aa2739a8b5e198412bce3803`。
+最终报告hash：
+`489388c2866dd6a85789d97c1088c2ee4eaca239a5afaf8b6983fd83001d992a`。
+config/metrics/report/manifest/figures与checkpoint均完成写盘及重读验签。
+单seed闸门passed=true、failed_checks为空、formal_three_seed_gate=false。
+旧checkpoint仍只允许历史诊断；没有从旧权重恢复新版训练。
+
+统一原生验收报告：`runs/m6p2b_repair_acceptance_v2_r6/report.json`，
+SHA256 `f6fa418a4c2a38b235012867a82468c0d8b49b659dfcedefbc95698bf0c228f4`。
+该run保存六组输入证据的四类文件hash、各自来源manifest、实际实现绑定与
+最终checkpoint来源；五类产物及读回receipt齐全，汇总生成源码另存
+finalization_source.py。报告scope仅train-only修复及受控seed0验收；未运行
+三种子正式重训、636新诊断、validation或test。第一次汇总命令因/tmp模块路径
+缺失在写run前报错，随后以显式PYTHONPATH=.执行成功；没有重跑或覆盖训练资产。
+
+仍保留r4/r5标定偶发超时、r4首次trace索引异常及被中止r5完整门禁。
+有限验收不证明所有未来求解都能满足预算，冻结4.4°C与聚合工作量假设也不是
+实际未来可达性保证。预测或实际任务输入改变时仍须逐项记录，不凭SOC推定原因。
+validation readiness=false，缺少新版三种子正式训练复审、636日诊断及前述
+四个方法席位；不增加训练成本门槛，不称五方法比较已就绪。
+
+独立回滚点（逆序revert、先保留全部runs，不使用破坏性Git操作）：
+6d22ab6、6447eee、6c94c0e、08d2e56、4d37639、989970b、c24ceec、d927480、
+7b5a36a、50a1a90、db4c53e、336b2ca、3d5aaaf、ac87616。
+受保护目录及env.step均无本轮修改。最终git diff --check与干净工作树检查
+在验收记录提交后执行；完整测试后仅追加验收文档和原生证据，没有改实现/测试。

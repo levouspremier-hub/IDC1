@@ -137,3 +137,19 @@ wrapper代码并注明资产继承依据，旧r5发布保留为历史，不能�
 保留并写失败状态，不能声称完整门禁通过。补充回归转绿后对最终代码重新
 make check，并使用全新r6 run-id运行仅seed0×8批及单seed验收。验收命令仍为
 相关测试、完整make check、发布/矩阵验签、git diff --check及产物读回。
+
+
+## 最终单seed受控验收（2026-10-03）
+
+完整make check：3127通过、0失败/错误/跳过、47按not-slow规则排除，源码未变、
+原生JUnit及五类资产验签通过。历史重放144条，旧三seed权重未改；修复臂72/72
+服务/物理/库存/目标合格，无回退，旧臂库存0/72。新初始化seed0×8共1536
+transitions，32/32完整、服务/物理/库存/目标通过，无回退及未证明可达性。
+最终checkpoint/report/manifest写盘并重读验签；独立seed0闸门passed=true，
+formal_three_seed_gate=false。全程train-only，没有长训、validation/test或新636诊断。
+
+完整结论、起止实现SHA、信号诊断、残余限制与独立回滚点见
+`docs/audits/M6_P2b_R3_REPAIR_REVIEW.md`；机器证据汇总见
+`runs/m6p2b_repair_acceptance_v2_r6/`。首次汇总导入路径错误在创建run前结束，
+修正PYTHONPATH后的汇总成功，不改变训练代码或资产。最终文档提交后核对
+发布/矩阵、受保护目录与env.step未改、diff --check与工作树为空。
