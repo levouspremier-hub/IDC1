@@ -12,10 +12,10 @@ from evaluation.sources import ROLE_LOGICAL_PATHS
 from scenario.env_release import load_verified_env_release
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN_REVISION = "v2_r5"
+RUN_REVISION = "v2_r6"
 CONFIG_PATH = "configs/training/idc_training_config_v2_r5.json"
 MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r5.json"
-RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r5.json"
+RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r6.json"
 SEMANTICS = "terminal-inventory-v1"
 SOURCE_PATHS = (
     "contracts/inventory.py", "planning/model.py", "planning/snapshot_adapter.py",
@@ -235,9 +235,12 @@ def build_release():
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
         "reward_semantics": "common-sgd-potential-smooth-v1",
         "reward_shaping": potential_reward_spec(), "approved_decision_id": "M6-P2b",
-        "release_iteration": "r5",
-        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r4.json",
-                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r4.json")},
+        "release_iteration": "r6",
+        "inherited_calibration": {
+            "configuration_revision": "r5",
+            "reason": "input-dimension rejection only; valid 21D execution/reward unchanged"},
+        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r5.json",
+                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r5.json")},
         "readiness": {"formal_env_ready": True, "formal_training_ready": True},
         "assets": {role: {"path": path, "sha256": sha(ROOT / path)}
                    for role, path in ASSET_PATHS.items()},

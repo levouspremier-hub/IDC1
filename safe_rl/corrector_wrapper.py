@@ -106,6 +106,10 @@ class CorrectorWrapper(gym.Wrapper):
     def step(self, action):
         raw_action = np.asarray(action, dtype=np.float32).reshape(-1).copy()
         n_group = self.env.model.N
+        if raw_action.size != n_group + 1:
+            raise ValueError(
+                f"raw action requires {n_group + 1} values, got {raw_action.size}; "
+                "legacy action dimensions are unsupported")
         proposal = DispatchProposal(
             compute_actions=[float(x) for x in raw_action[:n_group]],
             storage_action=float(raw_action[n_group]),

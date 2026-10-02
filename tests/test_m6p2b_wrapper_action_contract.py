@@ -9,7 +9,8 @@ from tests.test_m6p2b_terminal_inventory import _env
 
 
 @pytest.mark.parametrize("dimension", [20, 22, 23])
-def test_wrapper_rejects_wrong_raw_dimension_without_advancing_or_projecting(monkeypatch, dimension):
+def test_wrapper_rejects_wrong_raw_dimension_without_advancing_or_projecting(
+        monkeypatch, dimension):
     calls = []
 
     def project(*args, **kwargs):
