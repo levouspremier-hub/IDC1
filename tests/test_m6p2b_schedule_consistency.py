@@ -81,6 +81,35 @@ def test_current_task_progress_matches_executor_priority_prefix():
             before[str(task.task_id)] - planned[str(task.task_id)], abs=1e-6)
 
 
+def test_starting_noninterruptible_service_preserves_the_forecast_recovery_tail():
+    from planning.service_guard import SERVICE_GUARD_VERSION
+    from safe_rl.corrector_wrapper import CorrectorWrapper
+
+    env = IDCPriceEnv20D(
+        horizon=4, forecast_cutoff=4, delta_t_hours=.5,
+        bess_soc_init=.498, access_limit_kw=1000., base_load=.3,
+        price_t=np.full(4, .2), pv_t=np.zeros(4), wt_t=np.zeros(4),
+        carbon_factor_t=np.full(4, .4), T_amb=np.array([25., 35., 25., 25.]),
+        server_seed=0, task_seed=0, forecast_seed=0)
+    env.terminal_inventory_enabled = True
+    env.reset(seed=0)
+    env.terminal_service_guard_version = SERVICE_GUARD_VERSION
+    env.terminal_service_temperature_margin_c = 0.
+    env.task_arrival_forecast[:] = 0.
+    env.access_limit_kw = env._idc_power_kw(np.full(env.model.N, env.base_load), 25.) + 2.
+    task = Task(1, "A", "known noninterruptible", 0, 3, np.array([.1] * 3),
+                6., 4, 3., False, False)
+    task.status = "waiting"
+    env.tasks = [task]
+    wrapped = CorrectorWrapper(env, corrector_time_limit_s=.25)
+    for _ in range(4):
+        _, _, _, _, info = wrapped.step(np.ones(21, dtype=np.float32))
+        assert info["correction_reason"] == "none"
+        assert info["inventory_audit"]["target_reachable"] is True
+    assert env.total_non_interruptible_interruption_count == 0
+    assert env.bess_energy_kWh == pytest.approx(50., abs=1e-6)
+
+
 def test_overdue_service_is_recorded_without_inventing_a_new_inventory_infeasibility():
     env = fixture_env()
     env.tasks[0].deadline = 0

@@ -1,0 +1,208 @@
+{
+  "schema": "idc-training-config-v2",
+  "version": "v2",
+  "status": "frozen",
+  "note": "M6-P2b train-only re-calibration; common SGD degradation reward",
+  "frozen_decision": {
+    "card": "M6-P2b",
+    "service_standard_id": "m6-service-standard-v1",
+    "service_standard_frozen": true,
+    "service_standard_thresholds": {
+      "on_time_task_rate_min": 0.95,
+      "on_time_work_rate_min": 0.95,
+      "end_leftover_work_fraction_max": 0.01,
+      "non_interruptible_interruption_max": 0
+    },
+    "service_standard_note": "四项服务资格阈值由 M6-P1-F5 冻结为 m6-service-standard-v1；本文件只**引用**其 ID 与数值，不重新定义判定口径。"
+  },
+  "calibration": {
+    "run_id": "m6p2b_calibration_v2_r3",
+    "command": "python -m scripts.m6p2b_inventory_repair --phase calibrate --run-id m6p2b_calibration_v2_r3",
+    "split": "train",
+    "origins": [
+      48,
+      480,
+      912,
+      1344,
+      1776,
+      2208,
+      2688,
+      3120,
+      3552,
+      3984,
+      4416,
+      4848,
+      5328,
+      5760,
+      6192,
+      6624,
+      7056,
+      7488,
+      7968,
+      8400,
+      8832,
+      9264,
+      9696,
+      10176
+    ],
+    "asset_hashes": {
+      "refs_v4": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8",
+      "formal_split_v5_train": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865",
+      "m13g_arrival_mapper_v1": "ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371",
+      "env_release_v1": "f86e6f0f163f86655c747b245960e38efd744b9a69f30283831f89e1416f556f",
+      "canonical_parquet": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+      "exogenous_v3_parquet": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "run_manifest_path": "runs/m6p2b_calibration_v2_r3/manifest.json",
+    "run_manifest_sha256": "4ee44e9be27a6e0ff507e053ccc2c33b3cbf3856f6a2a22b42a28076cc4bc460",
+    "run_report_path": "runs/m6p2b_calibration_v2_r3/report.json",
+    "run_report_sha256": "91b8a3a42758f0e3e379b66672b800db9869ab2f4ebd6060095335eee43b853f"
+  },
+  "training": {
+    "corrector": {
+      "mode": "on",
+      "time_limit_s": 0.25,
+      "source": "production_default",
+      "source_note": "经 planning.corrector.resolve_corrector_budget 解析；非本地硬编码。",
+      "note": "训练/评估同一修正语义；off 留作日后独立重训的机制对照。",
+      "inventory_version": "terminal-inventory-v1",
+      "horizon_policy": "real_episode_remainder",
+      "observation_version": "terminal-state-observation-v1",
+      "solver_feasibility_tolerance": 1e-08,
+      "service_guard_version": "arrived-service-reserve-v2",
+      "service_temperature_margin_c": 4.4
+    },
+    "backend": {
+      "device": "cpu",
+      "torch_num_threads": 1,
+      "note": "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False"
+    },
+    "policy": {
+      "hidden": 64,
+      "hidden_layers": 1,
+      "activation": "Tanh",
+      "log_std_init": 0.0,
+      "action_dim": 21,
+      "critic_heads": 3,
+      "obs_dim": 523,
+      "obs_dim_source": "formal env（horizon=48 时实测；不硬编码）"
+    },
+    "optimizer": {
+      "name": "Adam",
+      "lr": 0.0003,
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "eps": 1e-08,
+      "weight_decay": 0.0,
+      "schedule": "none"
+    },
+    "ppo": {
+      "clip_epsilon": 0.2,
+      "gae_lambda": 0.95,
+      "gamma_per_hour": 0.99,
+      "gamma_per_step": 0.99498743710662,
+      "gamma_formula": "sqrt(0.99)（半小时一步，按每小时 0.99 定义）"
+    },
+    "sampling": {
+      "forecast_cutoff": 48,
+      "forecast_source": "B6 ScenarioBundle 的 causal forecast（可见窗口 [t, t+forecast_cutoff)）",
+      "forecast_cutoff_note": "当前 safe_rl_v2/train.py 预检仍为 4；后续训练接线**必须**改为同值 48。",
+      "horizon": 48,
+      "episodes_per_batch": 4,
+      "transitions_per_batch": 192,
+      "epochs_per_batch": 4,
+      "minibatch_size": 48,
+      "minibatches_per_epoch": 4,
+      "frozen_within_batch": [
+        "old_raw_log_prob",
+        "advantage",
+        "critic_target"
+      ],
+      "lagrangian_updates_per_batch": 1
+    },
+    "scale": {
+      "batches_per_seed": 512,
+      "transitions_per_seed": 98304,
+      "train_seeds": [
+        0,
+        1,
+        2
+      ],
+      "seed_offsets": {
+        "task": 0,
+        "server": 1,
+        "forecast": 300000
+      },
+      "seed_note": "各 RNG 由主种子按固定偏移显式派生；不重播种全局 RNG。"
+    },
+    "budgets": {
+      "business_budget": 0.0,
+      "business_budget_unit": "violation_task_steps (per transition mean)",
+      "business_budget_from_proposal": 1.0,
+      "carbon_budget": 1.0320932631657727,
+      "carbon_budget_unit": "kgCO2e (per transition mean)",
+      "carbon_budget_from_proposal": 1.0,
+      "qualified_proposals": [
+        1.0,
+        0.5,
+        0.25
+      ]
+    },
+    "multipliers": {
+      "business": {
+        "constraint": "business",
+        "reference_proposal": 1.0,
+        "reference_transition_mean": 0.0,
+        "scale": 1.0,
+        "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+        "learning_rate": 0.01,
+        "learning_rate_formula": "0.01 / scale^2",
+        "max_multiplier": 10.0,
+        "max_multiplier_formula": "10 / scale",
+        "initial_multiplier": 0.0
+      },
+      "carbon": {
+        "constraint": "carbon",
+        "reference_proposal": 1.0,
+        "reference_transition_mean": 1.0320932631657727,
+        "scale": 1.0320932631657727,
+        "scale_formula": "max(1, 对应参考策略的该约束逐 transition 均值)",
+        "learning_rate": 0.009387762922982285,
+        "learning_rate_formula": "0.01 / scale^2",
+        "max_multiplier": 9.689046869007438,
+        "max_multiplier_formula": "10 / scale",
+        "initial_multiplier": 0.0
+      }
+    }
+  },
+  "configuration_revision": "r3",
+  "reward_semantics": "common-sgd-degradation-v1",
+  "reward_repair": {
+    "version": "common-sgd-degradation-v1",
+    "formula": "r_degradation = -(reward_cost_weight / cost_ref) * degradation_SGD",
+    "coefficient_basis": "same marginal reward per SGD; original cost/carbon/service terms",
+    "equivalent_weight": 0.0016666666666666668,
+    "frozen_refs_unchanged": true,
+    "evidence_path": "runs/m6p2b_reward_counterfactual_v2_r3/report.json",
+    "evidence_sha256": "72cf0cc0d06db7d8dc7e1d8b391a7acd0268abd5f25d2caa0286c5150a19a278"
+  },
+  "service_temperature_reserve": {
+    "version": "train-temperature-upper-reserve-v1",
+    "margin_c": 4.4,
+    "formula": "ceil(max(train_realized_c - signed_B6_forecast_c, 0) * 10) / 10",
+    "evidence_path": "runs/m6p2b_temperature_calibration_v2_r1/report.json",
+    "evidence_sha256": "386a5020d78e8684385e3e07ef869f7bb93b4e64645348892d9e97940f745fb7",
+    "physical_error_bound_proven": false,
+    "forecast_arrays_modified": false
+  },
+  "inventory_acceptance": {
+    "version": "inventory-progress-audit-v1",
+    "unexplained_gap_blocks": true,
+    "unproven_reachability_blocks": true,
+    "planner_consistency_loss_blocks": true,
+    "fair_pairing_terminal_difference_kwh_max": 1e-06,
+    "known_service_and_inventory_share_feasible_domain": true
+  }
+}
