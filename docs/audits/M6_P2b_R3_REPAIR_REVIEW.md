@@ -108,7 +108,9 @@ ac87616提交r6发布，绑定实际代码并显式继承已验签的r5配置/�
 失败，但退出码2，原生JUnit/console及五类产物保留、passed=false。这不是完整
 门禁通过。新`runs/m6p2b_related_check_v2_r6/`81项全部通过、0失败、0跳过，
 包含缺失/错误折扣率、旧checkpoint、旧动作、恢复、泄漏及真实终点回归。
-最终`runs/m6p2b_full_check_v2_r6/`仍在运行，不声明通过或启动长训。
+最终`runs/m6p2b_full_check_v2_r6/`已完成：ruff/mypy通过，3127项测试通过、
+0失败/错误/跳过，47项按既有not-slow规则排除；来源未变，原生JUnit、五类
+产物及读回验签通过。没有启动长训。
 
 日内探针补充核对：64个非坍缩状态的物理实际储能动作也均非坍缩，288次
 修正器储能输出与物理实际执行的最大差为0；不是只检查修正器提交动作。
@@ -121,3 +123,9 @@ ac87616提交r6发布，绑定实际代码并显式继承已验签的r5配置/�
 - `runs/m6p2b_reward_counterfactual_v2_r5_final/report.json`：`ab56d733e48cf3780f2a357e123a233870961eb698b5fdb620c3d9f56aaf1e39`。
 - `runs/m6p2b_storage_state_probe_v2_r4/report.json`：`c8a5470fceffa14d8b39527a0d28f0982d0bafb979c5aa73c888d076bb4ba232`。
 - `runs/m6p2b_related_check_v2_r6/report.json`：`86054c2388e6dac034a8c9c0b49182779f13113e533827cbfa1d14ca566df584`。
+
+## 完整门禁与下一步
+
+完整make check退出码0，耗时约41分钟；报告SHA256：
+`6751530d530d636d16c43fb3dba72159785e46f4f1ac2960e1197bc503197ba6`。
+历史重放m6p2b_historical_replay_v2_r6正在运行；短跑尚未启动，均不先写通过。
