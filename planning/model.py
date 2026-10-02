@@ -1120,6 +1120,21 @@ def solve_time_indexed_mip_raw_projection(
                         >= task.remaining_work - 1e-8):
                     lb[finished(i, k)] = 1.
 
+    if executor_consistent and guard is not None:
+        for i, task in enumerate(snapshot.tasks):
+            due = max(0, min(H, task.deadline - snapshot.step))
+            fully_due = guard.known_service_required_due_work[i] >= task.remaining_work - 1e-8
+            for k in range(H):
+                for g in range(n_group):
+                    ub[a(i, g, k)] = min(cap[g], task.remaining_work,
+                                         task.max_rate_work_per_step)
+                    if fully_due and k >= due:
+                        ub[a(i, g, k)] = 0.
+                if i in begun_index and fully_due:
+                    duration = int(np.ceil(task.remaining_work / task.max_rate_work_per_step))
+                    if k >= due - duration:
+                        lb[begun(i, k)] = 1.
+
     rows: list[dict[int, float]] = []
     lbs: list[float] = []
     ubs: list[float] = []
@@ -1219,6 +1234,15 @@ def solve_time_indexed_mip_raw_projection(
                 cumulative = {a(i, g, t): 1. for g in range(n_group) for t in range(k + 1)}
                 add({**cumulative, finished(i, k): -work}, 0., np.inf,
                     f"known_executor_finished[{i},{k}]")
+                due = max(0, min(H, task.deadline - snapshot.step))
+                minimum_progress = max(guard.known_service_required_end_work[i]
+                                       - rate * (H - k - 1), 0.)
+                if k < due:
+                    minimum_progress = max(minimum_progress,
+                                           guard.known_service_required_due_work[i]
+                                           - rate * (due - k - 1))
+                add(cumulative, minimum_progress, min(work, (k + 1) * rate),
+                    f"known_executor_derived_progress_bounds[{i},{k}]")
                 if k:
                     add({finished(i, k): 1., finished(i, k - 1): -1.}, 0., np.inf,
                         f"known_executor_finished_monotone[{i},{k}]")

@@ -125,7 +125,10 @@ def main():
                                   "service": service.service.model_dump()}), flush=True)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
-    report = {"scope": "train_only_service_trace", "parameter_updates": 0,
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
+    qualified = (len(episodes) == 2 and error is None
+                 and all(all(inventory_episode_acceptance(e).values()) for e in episodes))
+    report = {"scope": "train_only_service_trace", "passed": qualified, "parameter_updates": 0,
               "validation_run": False, "test_run": False, "failure": error,
               "episodes": episodes, "steps": rows,
               "candidate_semantics_binding": semantics_binding(),
@@ -136,8 +139,9 @@ def main():
     folder = write_run(args.run_id, config=config, metrics=metrics, report=report,
                        base_dir=str(ROOT / "runs"), seed=0,
                        command="python -m scripts.m6p2b_service_trace " + " ".join(sys.argv[1:]),
-                       status="failed" if error else "success",
-                       failure_classification="trace_failure" if error else None,
+                       status="success" if qualified else "failed",
+                       failure_classification=(
+                           None if qualified else "trace_failure_or_acceptance_failed"),
                        **training_source_ledger(provenance))
     if json.loads((folder / "report.json").read_text()) != report:
         raise ValueError("trace read-back differs")

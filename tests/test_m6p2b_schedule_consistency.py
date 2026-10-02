@@ -293,3 +293,19 @@ def test_future_known_service_retains_priority_when_middle_task_has_finished():
                     assert served[j] == pytest.approx(
                         min(remaining[j], snapshot.tasks[j].max_rate_work_per_step), abs=1e-6)
         remaining = [max(w - x, 0.) for w, x in zip(remaining, served, strict=True)]
+
+
+def test_noninterruptible_first_step_can_be_partial_before_full_continuation():
+    env = fixture_env(task=False, margin=0.)
+    task = Task(1, "A", "partial first start", 0, 3, np.array([.1] * 3),
+                6., 3, 3., False, False)
+    task.remaining_work = 5.
+    task.status = "waiting"
+    env.tasks = [task]
+    plan = solve_time_indexed_mip_raw_projection(
+        build_snapshot(env), DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.25, stage_b_tolerance=0.)
+    assert plan.solver_status == "optimal"
+    np.testing.assert_allclose(plan.allocation.sum(axis=1)[0], [1., 2., 2.],
+                               atol=1e-6, rtol=0.)
+    assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
