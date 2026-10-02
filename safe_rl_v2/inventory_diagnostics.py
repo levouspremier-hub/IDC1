@@ -93,6 +93,12 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
                                        for r in rows),
         "original_degradation_reward_sum": sum(
             r["reward_semantics_audit"]["original_degradation_reward"] for r in rows),
+        "original_load_smooth_sum": sum(
+            r["reward_semantics_audit"].get("original_load_smooth", r["r_load_smooth"])
+            for r in rows),
+        "original_action_smooth_sum": sum(
+            r["reward_semantics_audit"].get("original_action_smooth", r["r_action_smooth"])
+            for r in rows),
         "carbon_kg": record.carbon_kg_co2e,
         "charge_kwh": float(env.total_bess_charge_kWh),
         "discharge_kwh": float(env.total_bess_discharge_kWh),

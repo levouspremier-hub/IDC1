@@ -173,8 +173,8 @@ def freeze_calibration(config, folder, report):
     training = {k: v for k, v in candidate.items() if k not in ("schema", "status", "note")}
     frozen = copy.deepcopy(config)
     frozen.update(schema="idc-training-config-v2", version="v2", status="frozen",
-                  configuration_revision="r4",
-                  note="M6-P2b train-only re-calibration; common SGD degradation reward",
+                  configuration_revision="r5",
+                  note="M6-P2b train-only calibration; common SGD and potential stability shaping",
                   training=training)
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"

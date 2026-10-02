@@ -318,11 +318,20 @@ def build_train_env(origin: int, *, master_seed: int, config: dict):
         env.terminal_inventory_enabled = True
         env.terminal_inventory_reward_version = config.get(
             "reward_semantics", "original-env-reward-v1")
-        if env.terminal_inventory_reward_version == "common-sgd-degradation-v1":
+        if env.terminal_inventory_reward_version in (
+                "common-sgd-degradation-v1", "common-sgd-potential-smooth-v1"):
             actual_weight = (env.reward_cost_weight / env.cost_ref
                              * env.bess_degradation_cost_ref)
             if abs(actual_weight - config["reward_repair"]["equivalent_weight"]) > 1e-12:
                 raise FormalTrainLoopError("reward repair coefficient differs from frozen binding")
+        if env.terminal_inventory_reward_version == "common-sgd-potential-smooth-v1":
+            shaping = config["reward_shaping"]
+            gamma = float(config["training"]["ppo"]["gamma_per_step"])
+            if (shaping["gamma"] != gamma
+                    or shaping["load_weight"] != env.reward_load_smooth_weight
+                    or shaping["action_weight"] != env.reward_action_smooth_weight):
+                raise FormalTrainLoopError("potential shaping differs from frozen discount/weights")
+            env.terminal_inventory_reward_gamma = gamma
         observation_version = config["training"]["corrector"].get("observation_version")
         if observation_version is not None:
             from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION

@@ -57,7 +57,8 @@ def main():
     parser.add_argument("--origins-limit", type=int)
     parser.add_argument("--candidate", action="store_true")
     parser.add_argument("--reward-version", choices=("original-env-reward-v1",
-                                                   "common-sgd-degradation-v1"))
+                                                   "common-sgd-degradation-v1",
+                                                   "common-sgd-potential-smooth-v1"))
     args = parser.parse_args()
     if (ROOT / "runs" / args.run_id).exists():
         raise FileExistsError("counterfactual run already exists")
@@ -125,6 +126,18 @@ def main():
                         - (arm["original_degradation_reward_sum"]
                            - baseline["original_degradation_reward_sum"])
                         - cost_slope * degradation_extra)
+                    if config["reward_semantics"] == "common-sgd-potential-smooth-v1":
+                        pair["potential_reward_arithmetic_gain"] = (
+                            pair["common_sgd_reward_arithmetic_gain"]
+                            - (arm["original_load_smooth_sum"]
+                               - baseline["original_load_smooth_sum"])
+                            - (arm["original_action_smooth_sum"]
+                               - baseline["original_action_smooth_sum"])
+                            + pair["reward_component_differences"].get(
+                                "r_potential_smooth_sum", 0.))
+                        if abs(pair["potential_reward_arithmetic_gain"]
+                               - pair["measured_reward_gain"]) > 1e-10:
+                            raise ValueError("potential reward measured/arithmetic mismatch")
                     pairs.append(pair)
                 env, _ = build_train_env(origin, master_seed=0, config=config)
                 env.reset(seed=0)
@@ -180,7 +193,8 @@ def main():
             p["eligible"] and p["net_money_gain_sgd"] > 1e-6 and p["measured_reward_gain"] > 0
             for p in pairs),
         "validation_run": False, "test_run": False, "formal_acceptance_claimed": False,
-        "proposed_formula": "r_degradation = -reward_cost_weight * degradation_SGD / cost_ref",
+        "reward_shaping": config.get("reward_shaping"),
+        "proposed_formula": "common SGD plus registered potential stability shaping",
         "coefficient_basis": "Same marginal reward per SGD for grid purchase and degradation; "
         "frozen refs and all other reward terms unchanged; registered wrapper semantics reported",
     }

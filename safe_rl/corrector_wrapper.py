@@ -23,6 +23,7 @@ INVENTORY_OBSERVATION_VERSION = "terminal-state-observation-v1"
 INVENTORY_OBSERVATION_FIELDS = ("current_soc", "target_soc", "episode_remaining_fraction")
 ORIGINAL_REWARD_VERSION = "original-env-reward-v1"
 COMMON_SGD_REWARD_VERSION = "common-sgd-degradation-v1"
+POTENTIAL_REWARD_VERSION = "common-sgd-potential-smooth-v1"
 
 
 class CorrectorWrapper(gym.Wrapper):
@@ -41,13 +42,20 @@ class CorrectorWrapper(gym.Wrapper):
         self._inventory_audits: list[dict] = []
         self.reward_version = getattr(
             env.unwrapped, "terminal_inventory_reward_version", ORIGINAL_REWARD_VERSION)
-        if self.reward_version not in (ORIGINAL_REWARD_VERSION, COMMON_SGD_REWARD_VERSION):
+        if self.reward_version not in (ORIGINAL_REWARD_VERSION, COMMON_SGD_REWARD_VERSION,
+                                       POTENTIAL_REWARD_VERSION):
             raise ValueError("unknown inventory reward semantics")
-        if self.reward_version == COMMON_SGD_REWARD_VERSION:
+        if self.reward_version in (COMMON_SGD_REWARD_VERSION, POTENTIAL_REWARD_VERSION):
             if not bool(getattr(env.unwrapped, "terminal_inventory_enabled", False)):
                 raise ValueError("inventory reward semantics require terminal inventory contract")
             if env.unwrapped.cost_ref <= 0 or env.unwrapped.bess_degradation_cost_ref <= 0:
                 raise ValueError("inventory reward semantics require positive frozen scales")
+        self.reward_gamma = 0.
+        if self.reward_version == POTENTIAL_REWARD_VERSION:
+            gamma = getattr(env.unwrapped, "terminal_inventory_reward_gamma", None)
+            if gamma is None or not np.isfinite(gamma) or not 0 < gamma <= 1:
+                raise ValueError("potential reward requires explicit valid PPO discount")
+            self.reward_gamma = float(gamma)
         self.inventory_observation_version = getattr(
             env.unwrapped, "terminal_inventory_observation_version", None)
         if self.inventory_observation_version is not None:
@@ -60,6 +68,13 @@ class CorrectorWrapper(gym.Wrapper):
                 low=np.concatenate((env.observation_space.low, np.zeros(3, dtype=np.float32))),
                 high=np.concatenate((env.observation_space.high, np.ones(3, dtype=np.float32))),
                 dtype=np.float32)
+
+    def _stability_potential(self):
+        base = self.env.unwrapped
+        return (-float(base.reward_load_smooth_weight) * float(np.mean(np.abs(
+            base.prev_loads - base.base_load)))
+                - float(base.reward_action_smooth_weight) * float(
+                    np.mean(np.abs(base.prev_action))))
 
     def _inventory_observation(self, observation):
         if self.inventory_observation_version is None:
@@ -110,19 +125,36 @@ class CorrectorWrapper(gym.Wrapper):
             ]
         )
 
+        previous_potential = (self._stability_potential()
+                              if self.reward_version == POTENTIAL_REWARD_VERSION else 0.)
         obs, reward, terminated, truncated, info = self.env.step(exec_action)
         original_reward = float(reward)
         original_degradation_reward = float(info["r_bess_degradation"])
         purchase_slope = float(self.env.reward_cost_weight / self.env.cost_ref)
         degradation_slope = float(
             self.env.reward_bess_degradation_weight / self.env.bess_degradation_cost_ref)
-        if self.reward_version == COMMON_SGD_REWARD_VERSION:
+        original_load_smooth = float(info["r_load_smooth"])
+        original_action_smooth = float(info["r_action_smooth"])
+        next_potential = 0.
+        if self.reward_version in (COMMON_SGD_REWARD_VERSION, POTENTIAL_REWARD_VERSION):
             degradation_slope = purchase_slope
             info["r_bess_degradation"] = -degradation_slope * float(info["bess_degradation_cost"])
             reward = original_reward - original_degradation_reward + info["r_bess_degradation"]
+        if self.reward_version == POTENTIAL_REWARD_VERSION:
+            next_potential = (0. if terminated or truncated else self._stability_potential())
+            info["r_potential_smooth"] = self.reward_gamma * next_potential - previous_potential
+            info["r_load_smooth"] = info["r_action_smooth"] = 0.
+            reward = (reward - original_load_smooth - original_action_smooth
+                      + info["r_potential_smooth"])
+        info["reward_total"] = float(reward)
         info["reward_semantics_audit"] = {
             "version": self.reward_version, "original_env_reward": original_reward,
             "original_degradation_reward": original_degradation_reward,
+            "original_load_smooth": original_load_smooth,
+            "original_action_smooth": original_action_smooth,
+            "potential_before": previous_potential, "potential_after": next_potential,
+            "potential_discount": self.reward_gamma if self.reward_version
+            == POTENTIAL_REWARD_VERSION else None,
             "purchase_reward_per_sgd": purchase_slope,
             "degradation_reward_per_sgd": degradation_slope,
             "equivalent_degradation_weight": degradation_slope

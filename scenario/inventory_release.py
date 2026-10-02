@@ -12,10 +12,10 @@ from evaluation.sources import ROLE_LOGICAL_PATHS
 from scenario.env_release import load_verified_env_release
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN_REVISION = "v2_r4"
-CONFIG_PATH = "configs/training/idc_training_config_v2_r4.json"
-MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r4.json"
-RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r4.json"
+RUN_REVISION = "v2_r5"
+CONFIG_PATH = "configs/training/idc_training_config_v2_r5.json"
+MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r5.json"
+RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r5.json"
 SEMANTICS = "terminal-inventory-v1"
 SOURCE_PATHS = (
     "contracts/inventory.py", "planning/model.py", "planning/snapshot_adapter.py",
@@ -67,6 +67,19 @@ def reward_repair_spec():
             "evidence_sha256": "72cf0cc0d06db7d8dc7e1d8b391a7acd0268abd5f25d2caa0286c5150a19a278"}
 
 
+def potential_reward_spec():
+    frozen = json.loads((ROOT / "configs/training/idc_training_config_v1.json").read_text())
+    paths = ["runs/m6p2b_reward_counterfactual_v2_r4_final/report.json",
+             "runs/m6p2b_storage_state_probe_v2_r4/report.json"]
+    return {"version": "common-sgd-potential-smooth-v1",
+            "formula": "r_common - r_load_smooth - r_action_smooth + gamma*Phi(next)-Phi(state)",
+            "potential": "-w_load*mean(abs(prev_loads-base_load))-w_action*mean(abs(prev_exec))",
+            "terminal_potential": 0., "gamma": frozen["training"]["ppo"]["gamma_per_step"],
+            "load_weight": .05, "action_weight": .03,
+            "coefficient_basis": "existing weights; shaping discounted return is -Phi(initial)",
+            "train_evidence": [{"path": path, "sha256": sha(ROOT / path)} for path in paths]}
+
+
 def temperature_reserve_spec():
     return {"version": "train-temperature-upper-reserve-v1", "margin_c": 4.4,
             "formula": "ceil(max(train_realized_c - signed_B6_forecast_c, 0) * 10) / 10",
@@ -96,7 +109,7 @@ def refresh_method_readiness(matrix):
             method["status"] = "training_release_ready_evaluation_pending"
             method["runnable_now"] = False
             method["blocking_reasons"] = [
-                "r4训练配置和独立发布已接线；受控验收与完整门禁仍须通过",
+                "r5训练配置和独立发布已接线；受控验收与完整门禁仍须通过",
                 "新版正式checkpoint与完整train诊断尚未完成，不能进入正式评估"]
         elif method.get("trains_ppo"):
             method["blocking_reasons"] = [
@@ -105,17 +118,19 @@ def refresh_method_readiness(matrix):
 
 
 
-def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1"):
+def diagnostic_candidate_config(*, reward_semantics="common-sgd-potential-smooth-v1"):
     """Explicit unreleased semantics for calibration/probes, never formal restore."""
     from safe_rl_v2.formal_train_loop import load_frozen_training_config
     config = copy.deepcopy(load_frozen_training_config())
     config.update(schema="idc-training-config-v2", version="v2",
-                  configuration_revision="r4", status="candidate_diagnostic_only",
+                  configuration_revision="r5", status="candidate_diagnostic_only",
                   reward_semantics=reward_semantics)
-    if reward_semantics == "common-sgd-degradation-v1":
+    if reward_semantics in ("common-sgd-degradation-v1", "common-sgd-potential-smooth-v1"):
         config["reward_repair"] = reward_repair_spec()
     elif reward_semantics != "original-env-reward-v1":
         raise ValueError("unregistered candidate reward semantics")
+    if reward_semantics == "common-sgd-potential-smooth-v1":
+        config["reward_shaping"] = potential_reward_spec()
     config["service_temperature_reserve"] = temperature_reserve_spec()
     config["inventory_acceptance"] = inventory_acceptance_spec()
     config["training"]["corrector"].update(
@@ -137,19 +152,23 @@ def load_config():
         raise ValueError("frozen inventory training config v2 is required")
     corrector = config["training"]["corrector"]
     from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION
-    if (config.get("configuration_revision") != "r4"
+    if (config.get("configuration_revision") != "r5"
             or corrector.get("observation_version") != INVENTORY_OBSERVATION_VERSION
             or config["training"]["policy"]["obs_dim"] != 523
             or corrector.get("solver_feasibility_tolerance") != 1e-8):
-        raise ValueError("r4 requires registered terminal state observation semantics")
+        raise ValueError("r5 requires registered terminal state observation semantics")
     if config.get("inventory_acceptance") != inventory_acceptance_spec():
-        raise ValueError("r4 inventory progress acceptance binding mismatch")
+        raise ValueError("r5 inventory progress acceptance binding mismatch")
     if corrector.get("service_guard_version") != "arrived-service-reserve-v3":
-        raise ValueError("r4 requires registered causal arrived service reserves")
+        raise ValueError("r5 requires registered causal arrived service reserves")
     if (corrector["inventory_version"] != SEMANTICS or corrector["time_limit_s"] != .25
-            or config["reward_semantics"] != "common-sgd-degradation-v1"
+            or config["reward_semantics"] != "common-sgd-potential-smooth-v1"
             or config.get("reward_repair") != reward_repair_spec()):
         raise ValueError("unregistered inventory/reward/budget semantics")
+    shaping = config.get("reward_shaping")
+    if (shaping != potential_reward_spec()
+            or shaping["gamma"] != config["training"]["ppo"]["gamma_per_step"]):
+        raise ValueError("potential reward requires frozen discount and train evidence")
     reserve = config.get("service_temperature_reserve")
     if (reserve != temperature_reserve_spec()
             or corrector.get("service_temperature_margin_c") != reserve["margin_c"]
@@ -189,7 +208,7 @@ def load_matrix():
     if matrix.get("schema") != "m9-experiment-matrix-v4":
         raise ValueError("inventory experiment matrix v4 is required")
     if matrix.get("policy_observation") != observation_spec():
-        raise ValueError("v4 r4 requires the shared versioned terminal state observation")
+        raise ValueError("v4 r5 requires the shared versioned terminal state observation")
     # All substantive preregistered experimental design remains unchanged.
     for key in ("split_freeze", "scenario_freeze", "training_schedule", "evaluation_schedule",
                 "pairing", "statistics", "fair_cost_carbon_pairing"):
@@ -214,10 +233,11 @@ def build_release():
         raise ValueError("inventory release source closure must be committed")
     return {
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
-        "reward_semantics": "common-sgd-degradation-v1", "approved_decision_id": "M6-P2b",
-        "release_iteration": "r4",
-        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r2.json",
-                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r2.json")},
+        "reward_semantics": "common-sgd-potential-smooth-v1",
+        "reward_shaping": potential_reward_spec(), "approved_decision_id": "M6-P2b",
+        "release_iteration": "r5",
+        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r4.json",
+                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r4.json")},
         "readiness": {"formal_env_ready": True, "formal_training_ready": True},
         "assets": {role: {"path": path, "sha256": sha(ROOT / path)}
                    for role, path in ASSET_PATHS.items()},
@@ -239,6 +259,8 @@ def checkpoint_binding():
     return {"release_path": RELEASE_PATH, "release_sha256": sha(ROOT / RELEASE_PATH),
             "inventory_version": SEMANTICS, "reward_semantics": release["reward_semantics"],
             "service_guard_version": config["training"]["corrector"]["service_guard_version"],
+            "reward_shaping_version": config["reward_shaping"]["version"],
+            "reward_discount": config["reward_shaping"]["gamma"],
             "observation_version": config["training"]["corrector"]["observation_version"],
             "observation_dimension": config["training"]["policy"]["obs_dim"],
             "training_config_sha256": sha(ROOT / CONFIG_PATH),
