@@ -112,3 +112,9 @@ r_new = r_common_sgd - r_load_smooth - r_action_smooth
 折扣率报错；然后修改wrapper。重跑24-origin标定、收益对照、恢复/发布验签、
 make check，再仅seed0×8批。证据使用全新r5 run-id。独立回滚点989970b，
 返修测试/实现/冻结资产/发布/验收分别提交，不覆盖r4。长训仍禁止。
+
+初态常数核对：现有环境reset的prev_action全为0.5，故正式初态Phi=-0.015；
+完整episode折扣塑形和为共同常数+0.015，策略间差为零。上文“初态Phi=0时为零”
+是数学条件而非本环境的初始值；不修改reset或增加势函数偏移来追求数值零。
+两组完整序列单测直接按实际初态验证-Phi(initial)。r5指标保留每个episode的
+r_potential_smooth累计/折扣值，最终报告核对此共同常数，不能当作额外调度收益。
