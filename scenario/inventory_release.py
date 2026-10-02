@@ -12,10 +12,10 @@ from evaluation.sources import ROLE_LOGICAL_PATHS
 from scenario.env_release import load_verified_env_release
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN_REVISION = "v2_r3"
-CONFIG_PATH = "configs/training/idc_training_config_v2_r3.json"
-MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r3.json"
-RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r3.json"
+RUN_REVISION = "v2_r4"
+CONFIG_PATH = "configs/training/idc_training_config_v2_r4.json"
+MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r4.json"
+RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r4.json"
 SEMANTICS = "terminal-inventory-v1"
 SOURCE_PATHS = (
     "contracts/inventory.py", "planning/model.py", "planning/snapshot_adapter.py",
@@ -96,7 +96,7 @@ def refresh_method_readiness(matrix):
             method["status"] = "training_release_ready_evaluation_pending"
             method["runnable_now"] = False
             method["blocking_reasons"] = [
-                "r3训练配置和独立发布已接线；受控验收与完整门禁仍须通过",
+                "r4训练配置和独立发布已接线；受控验收与完整门禁仍须通过",
                 "新版正式checkpoint与完整train诊断尚未完成，不能进入正式评估"]
         elif method.get("trains_ppo"):
             method["blocking_reasons"] = [
@@ -110,7 +110,7 @@ def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1")
     from safe_rl_v2.formal_train_loop import load_frozen_training_config
     config = copy.deepcopy(load_frozen_training_config())
     config.update(schema="idc-training-config-v2", version="v2",
-                  configuration_revision="r3", status="candidate_diagnostic_only",
+                  configuration_revision="r4", status="candidate_diagnostic_only",
                   reward_semantics=reward_semantics)
     if reward_semantics == "common-sgd-degradation-v1":
         config["reward_repair"] = reward_repair_spec()
@@ -121,7 +121,7 @@ def diagnostic_candidate_config(*, reward_semantics="common-sgd-degradation-v1")
     config["training"]["corrector"].update(
         inventory_version=SEMANTICS, horizon_policy="real_episode_remainder",
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
-        service_guard_version="arrived-service-reserve-v2",
+        service_guard_version="arrived-service-reserve-v3",
         service_temperature_margin_c=temperature_reserve_spec()["margin_c"])
     config["training"]["policy"]["obs_dim"] = observation_spec()["dimension"]
     config["candidate_source"] = {
@@ -137,15 +137,15 @@ def load_config():
         raise ValueError("frozen inventory training config v2 is required")
     corrector = config["training"]["corrector"]
     from safe_rl.corrector_wrapper import INVENTORY_OBSERVATION_VERSION
-    if (config.get("configuration_revision") != "r3"
+    if (config.get("configuration_revision") != "r4"
             or corrector.get("observation_version") != INVENTORY_OBSERVATION_VERSION
             or config["training"]["policy"]["obs_dim"] != 523
             or corrector.get("solver_feasibility_tolerance") != 1e-8):
-        raise ValueError("r3 requires registered terminal state observation semantics")
+        raise ValueError("r4 requires registered terminal state observation semantics")
     if config.get("inventory_acceptance") != inventory_acceptance_spec():
-        raise ValueError("r3 inventory progress acceptance binding mismatch")
-    if corrector.get("service_guard_version") != "arrived-service-reserve-v2":
-        raise ValueError("r3 requires registered causal arrived service reserves")
+        raise ValueError("r4 inventory progress acceptance binding mismatch")
+    if corrector.get("service_guard_version") != "arrived-service-reserve-v3":
+        raise ValueError("r4 requires registered causal arrived service reserves")
     if (corrector["inventory_version"] != SEMANTICS or corrector["time_limit_s"] != .25
             or config["reward_semantics"] != "common-sgd-degradation-v1"
             or config.get("reward_repair") != reward_repair_spec()):
@@ -189,7 +189,7 @@ def load_matrix():
     if matrix.get("schema") != "m9-experiment-matrix-v4":
         raise ValueError("inventory experiment matrix v4 is required")
     if matrix.get("policy_observation") != observation_spec():
-        raise ValueError("v4 r3 requires the shared versioned terminal state observation")
+        raise ValueError("v4 r4 requires the shared versioned terminal state observation")
     # All substantive preregistered experimental design remains unchanged.
     for key in ("split_freeze", "scenario_freeze", "training_schedule", "evaluation_schedule",
                 "pairing", "statistics", "fair_cost_carbon_pairing"):
@@ -215,7 +215,7 @@ def build_release():
     return {
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
         "reward_semantics": "common-sgd-degradation-v1", "approved_decision_id": "M6-P2b",
-        "release_iteration": "r3",
+        "release_iteration": "r4",
         "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r2.json",
                        "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r2.json")},
         "readiness": {"formal_env_ready": True, "formal_training_ready": True},
@@ -238,6 +238,7 @@ def checkpoint_binding():
     config = load_config()
     return {"release_path": RELEASE_PATH, "release_sha256": sha(ROOT / RELEASE_PATH),
             "inventory_version": SEMANTICS, "reward_semantics": release["reward_semantics"],
+            "service_guard_version": config["training"]["corrector"]["service_guard_version"],
             "observation_version": config["training"]["corrector"]["observation_version"],
             "observation_dimension": config["training"]["policy"]["obs_dim"],
             "training_config_sha256": sha(ROOT / CONFIG_PATH),

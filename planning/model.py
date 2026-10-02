@@ -121,7 +121,8 @@ def _base_only_terminal_certificate(snapshot: InventorySnapshot) -> dict | None:
     increments = []
     pf = snapshot.planning_forecast
     guard = snapshot.service_guard
-    coupled = guard is not None and guard.version == "arrived-service-reserve-v2"
+    coupled = guard is not None and guard.version in (
+        "arrived-service-reserve-v2", "arrived-service-reserve-v3")
     for k in range(snapshot.planning_horizon_steps):
         base = pf.base_idc_power[k]
         if coupled and guard is not None:
@@ -975,7 +976,9 @@ def solve_time_indexed_mip_raw_projection(
 
     inventory_enabled = isinstance(snapshot, InventorySnapshot)
     guard = snapshot.service_guard if isinstance(snapshot, InventorySnapshot) else None
-    coupled = guard is not None and guard.version == "arrived-service-reserve-v2"
+    coupled = guard is not None and guard.version in (
+        "arrived-service-reserve-v2", "arrived-service-reserve-v3")
+    executor_consistent = guard is not None and guard.version == "arrived-service-reserve-v3"
     terminal = snapshot.terminal_inventory if isinstance(snapshot, InventorySnapshot) else None
     if isinstance(snapshot, InventorySnapshot):
         validate_inventory_snapshot(snapshot)
@@ -1023,8 +1026,27 @@ def solve_time_indexed_mip_raw_projection(
     off_aggregate_work = off_inventory_gap + (1 if inventory_enabled else 0)
     off_aggregate_backlog = off_aggregate_work + (H if coupled else 0)
     off_prefix = off_aggregate_backlog + (H + 1 if coupled else 0)
-    off_aggregate_busy = off_prefix + (n_task if coupled else 0)
-    n_vars = off_aggregate_busy + (H if coupled else 0)
+    off_aggregate_busy = off_prefix + (n_task if coupled and not executor_consistent else 0)
+    off_active = off_aggregate_busy + (H if coupled else 0)
+    active_tasks = [i for i, t in enumerate(snapshot.tasks)
+                    if executor_consistent and t.remaining_work > 1e-8
+                    and t.max_rate_work_per_step > 1e-8]
+    active_index = {i: j for j, i in enumerate(active_tasks)}
+    off_finished = off_active + len(active_tasks) * H
+    off_begun = off_finished + len(active_tasks) * H
+    begun_tasks = [i for i in active_tasks if guard is not None
+                   and not guard.known_task_interruptible[i] and not guard.known_task_started[i]]
+    begun_index = {i: j for j, i in enumerate(begun_tasks)}
+    n_vars = off_begun + len(begun_tasks) * H
+
+    def active(i, k):
+        return off_active + active_index[i] * H + k
+
+    def finished(i, k):
+        return off_finished + active_index[i] * H + k
+
+    def begun(i, k):
+        return off_begun + begun_index[i] * H + k
 
     # 经济/服务目标（阶段 B 的 tie-break，单位 SGD）
     c_econ = np.zeros(n_vars)
@@ -1073,11 +1095,30 @@ def solve_time_indexed_mip_raw_projection(
                 ub[off_aggregate_backlog + k + 1], backlog_upper)
             ub[off_aggregate_busy + k] = int(backlog_upper > 1e-8)
         for i, task in enumerate(snapshot.tasks):
-            ub[off_prefix + i] = int(min(task.remaining_work, task.max_rate_work_per_step) > 1e-8)
+            if not executor_consistent:
+                ub[off_prefix + i] = int(
+                    min(task.remaining_work, task.max_rate_work_per_step) > 1e-8)
             ub[off_bus + i] = max(
                 task.remaining_work - guard.known_service_required_end_work[i], 0.)
             ub[off_dls + i] = max(
                 task.remaining_work - guard.known_service_required_due_work[i], 0.)
+
+    if executor_consistent and guard is not None:
+        ub[off_active:n_vars] = 1.
+        for i in active_tasks:
+            task = snapshot.tasks[i]
+            due = max(0, min(H, task.deadline - snapshot.step))
+            for k in range(H):
+                if (k + 1) * task.max_rate_work_per_step < task.remaining_work - 1e-8:
+                    ub[finished(i, k)] = 0.
+                if guard.known_service_required_due_work[i] >= task.remaining_work - 1e-8:
+                    if k >= due - 1:
+                        lb[finished(i, k)] = 1.
+                    if k >= due:
+                        ub[active(i, k)] = 0.
+                if (k == H - 1 and guard.known_service_required_end_work[i]
+                        >= task.remaining_work - 1e-8):
+                    lb[finished(i, k)] = 1.
 
     rows: list[dict[int, float]] = []
     lbs: list[float] = []
@@ -1136,21 +1177,22 @@ def solve_time_indexed_mip_raw_projection(
                     reserve_row[off_z + k] = big_m
                     add(reserve_row, -np.inf, headroom + big_m,
                         f"schedule_coupled_charging_reserve[{k}]")
-                previous = None
-                for i in guard.known_service_order:
-                    demand = min(snapshot.tasks[i].remaining_work,
-                                 snapshot.tasks[i].max_rate_work_per_step)
-                    if demand <= 1e-8:
-                        continue
-                    row = {a(i, g, 0): 1. for g in range(n_group)}
-                    row[off_prefix + i] = -demand
-                    add(row, -np.inf, 0., f"executor_prefix_active[{i}]")
-                    if previous is not None:
-                        j, preceding = previous
-                        row = {a(j, g, 0): 1. for g in range(n_group)}
-                        row[off_prefix + i] = -preceding
-                        add(row, 0., np.inf, f"executor_prefix_preceding[{i}]")
-                    previous = (i, demand)
+                if not executor_consistent:
+                    previous = None
+                    for i in guard.known_service_order:
+                        demand = min(snapshot.tasks[i].remaining_work,
+                                     snapshot.tasks[i].max_rate_work_per_step)
+                        if demand <= 1e-8:
+                            continue
+                        row = {a(i, g, 0): 1. for g in range(n_group)}
+                        row[off_prefix + i] = -demand
+                        add(row, -np.inf, 0., f"executor_prefix_active[{i}]")
+                        if previous is not None:
+                            j, preceding = previous
+                            row = {a(j, g, 0): 1. for g in range(n_group)}
+                            row[off_prefix + i] = -preceding
+                            add(row, 0., np.inf, f"executor_prefix_preceding[{i}]")
+                        previous = (i, demand)
             if coupled and guard is not None:
                 add({a(i, g, 0): 1. for i in range(n_task) for g in range(n_group)},
                     sum(guard.group_work_floor), np.inf, "arrived_service_prefix_floor")
@@ -1162,6 +1204,49 @@ def solve_time_indexed_mip_raw_projection(
             -terminal.target_kwh, np.inf, "terminal_gap_below")
         add({off_inventory_gap: 1.0, off_soc + H: 1.0},
             terminal.target_kwh, np.inf, "terminal_gap_above")
+
+    if executor_consistent and guard is not None:
+        for k in range(H):
+            preceding_tasks: list[int] = []
+            for i in guard.known_service_order:
+                if i not in active_index:
+                    continue
+                task = snapshot.tasks[i]
+                rate, work = task.max_rate_work_per_step, task.remaining_work
+                row = {a(i, g, k): 1. for g in range(n_group)}
+                add({**row, active(i, k): -rate}, -np.inf, 0.,
+                    f"known_executor_active[{i},{k}]")
+                cumulative = {a(i, g, t): 1. for g in range(n_group) for t in range(k + 1)}
+                add({**cumulative, finished(i, k): -work}, 0., np.inf,
+                    f"known_executor_finished[{i},{k}]")
+                if k:
+                    add({finished(i, k): 1., finished(i, k - 1): -1.}, 0., np.inf,
+                        f"known_executor_finished_monotone[{i},{k}]")
+                for j in preceding_tasks:
+                    preceding_rate = snapshot.tasks[j].max_rate_work_per_step
+                    add({**{a(j, g, k): 1. for g in range(n_group)},
+                         active(i, k): -preceding_rate, finished(j, k): preceding_rate},
+                        0., np.inf, f"known_executor_priority[{j},{i},{k}]")
+                preceding_tasks.append(i)
+                if not guard.known_task_interruptible[i]:
+                    if guard.known_task_started[i]:
+                        demand = min(rate, max(work - k * rate, 0.))
+                        add(row, demand, demand, f"known_executor_running[{i},{k}]")
+                        lb[active(i, k)] = ub[active(i, k)] = int(demand > 1e-8)
+                        lb[finished(i, k)] = ub[finished(i, k)] = int(
+                            work <= (k + 1) * rate + 1e-8)
+                    else:
+                        prior = {begun(i, k - 1): -1.} if k else {}
+                        add({begun(i, k): 1., **prior}, 0., np.inf,
+                            f"known_executor_begun_monotone[{i},{k}]")
+                        add({begun(i, k): 1., active(i, k): -1.}, 0., np.inf,
+                            f"known_executor_begun_active[{i},{k}]")
+                        add({begun(i, k): 1., active(i, k): -1., **prior}, -np.inf, 0.,
+                            f"known_executor_begun_only_if_active[{i},{k}]")
+                        continuity = {**row, finished(i, k): rate}
+                        if k:
+                            continuity[begun(i, k - 1)] = -rate
+                        add(continuity, 0., np.inf, f"known_executor_continuity[{i},{k}]")
 
     # 投影绝对值线性化：d_g >= |u_g - raw_g|（cap<=0 时 u_g=0）
     for g in range(n_group):
@@ -1197,7 +1282,9 @@ def solve_time_indexed_mip_raw_projection(
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
     if coupled and guard is not None:
-        integrality[off_prefix:off_prefix + n_task] = 1
+        if not executor_consistent:
+            integrality[off_prefix:off_prefix + n_task] = 1
+        integrality[off_active:n_vars] = 1
         integrality[off_aggregate_busy:off_aggregate_busy + H] = 1
     # 全局 deadline：阶段 A 与 B 共享同一次调用的总预算
     deadline = (call_deadline if call_deadline is not None else
@@ -1224,7 +1311,7 @@ def solve_time_indexed_mip_raw_projection(
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
     _audit: dict = {
-        "n_variables": n_vars, "n_integer_variables": H + (H + n_task if coupled else 0),
+        "n_variables": n_vars, "n_integer_variables": int(np.count_nonzero(integrality)),
         "n_constraints": len(rows) + 1,
     }
 
@@ -1268,9 +1355,22 @@ def solve_time_indexed_mip_raw_projection(
                 for k in range(H):
                     witness[off_aggregate_busy + k] = int(
                         guard.aggregate_backlog_work[k + 1] > 1e-8)
-                for i in range(n_task):
+                for i in ([] if executor_consistent else range(n_task)):
                     witness[off_prefix + i] = int(sum(
                         guard.known_service_allocation[0][i]) > 1e-8)
+            if executor_consistent and guard is not None:
+                for i in active_tasks:
+                    served_total = 0.
+                    started = False
+                    for k in range(H):
+                        amount = sum(guard.known_service_allocation[k][i])
+                        served_total += amount
+                        started = started or amount > 1e-8
+                        witness[active(i, k)] = int(amount > 1e-8)
+                        witness[finished(i, k)] = int(
+                            served_total >= snapshot.tasks[i].remaining_work - 1e-8)
+                        if i in begun_index:
+                            witness[begun(i, k)] = int(started)
             witness[off_soc:off_soc + H + 1] = certificate["energy_kwh"]
             witness[off_charge:off_charge + H] = certificate["charge_kw"]
             witness[off_discharge:off_discharge + H] = certificate["discharge_kw"]
@@ -1537,7 +1637,7 @@ def solve_time_indexed_mip_raw_projection(
     return RawProjectionResult(
         backend="mip", solver_status=SOLVER_OPTIMAL, failure_class=failure,
         horizon_steps=H, n_variables=n_vars,
-        n_integer_variables=H + (H + n_task if coupled else 0), n_constraints=len(rows_b),
+        n_integer_variables=int(np.count_nonzero(integrality)), n_constraints=len(rows_b),
         stage_a_status=status_a, stage_b_status=status_b,
         stage_a_solve_time_s=tA, stage_b_solve_time_s=tB,
         stage_a_objective=offset_a, stage_b_objective=float(c_econ @ x),

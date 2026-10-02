@@ -173,14 +173,14 @@ def freeze_calibration(config, folder, report):
     training = {k: v for k, v in candidate.items() if k not in ("schema", "status", "note")}
     frozen = copy.deepcopy(config)
     frozen.update(schema="idc-training-config-v2", version="v2", status="frozen",
-                  configuration_revision="r3",
+                  configuration_revision="r4",
                   note="M6-P2b train-only re-calibration; common SGD degradation reward",
                   training=training)
     frozen["training"]["corrector"]["inventory_version"] = SEMANTICS
     frozen["training"]["corrector"]["horizon_policy"] = "real_episode_remainder"
     frozen["training"]["corrector"].update(
         observation_version=observation_spec()["version"], solver_feasibility_tolerance=1e-8,
-        service_guard_version="arrived-service-reserve-v2",
+        service_guard_version="arrived-service-reserve-v3",
         service_temperature_margin_c=config["service_temperature_reserve"]["margin_c"])
     frozen["training"]["backend"]["note"] = (
         "CPU / torch=1; inventory solver feasibility=1e-8; random_seed=0 / parallel=False")
@@ -363,6 +363,9 @@ def main(argv=None):
     if args.phase == "calibrate":
         from scenario.inventory_release import diagnostic_candidate_config
         config = diagnostic_candidate_config()
+    elif args.phase in ("release", "gate", "audit"):
+        from scenario.inventory_release import load_config
+        config = load_config()
     origins = select_origins()
     if args.origins_limit is not None:
         if args.phase != "replay" or not 1 <= args.origins_limit <= len(origins):

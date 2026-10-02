@@ -23,7 +23,8 @@ class TerminalInventory(ContractBase):
 
 
 class ArrivedServiceReserve(ContractBase):
-    version: Literal["arrived-service-reserve-v1", "arrived-service-reserve-v2"] = (
+    version: Literal["arrived-service-reserve-v1", "arrived-service-reserve-v2",
+                     "arrived-service-reserve-v3"] = (
         "arrived-service-reserve-v1")
     renewable_reserve_assumption: Literal["zero-renewables-through-real-remainder"] = (
         "zero-renewables-through-real-remainder")
@@ -36,6 +37,8 @@ class ArrivedServiceReserve(ContractBase):
     current_allocation: list[list[float]]
     note: str
     known_service_allocation: list[list[list[float]]] = Field(default_factory=list)
+    known_task_interruptible: list[bool] = Field(default_factory=list)
+    known_task_started: list[bool] = Field(default_factory=list)
     known_service_order: list[int] = Field(default_factory=list)
     known_service_required_end_work: list[float] = Field(default_factory=list)
     known_service_required_due_work: list[float] = Field(default_factory=list)
@@ -86,8 +89,12 @@ def validate_inventory_snapshot(snapshot: InventorySnapshot) -> None:
                 or not np.all(np.isfinite(allocation)) or np.any(allocation < 0)
                 or not np.allclose(allocation.sum(axis=0), floor, atol=1e-8, rtol=0)):
             raise ValueError("invalid arrived service guard")
-        if guard.version == "arrived-service-reserve-v2":
+        if guard.version in ("arrived-service-reserve-v2", "arrived-service-reserve-v3"):
             H, n, G = snapshot.planning_horizon_steps, len(snapshot.tasks), len(floor)
+            if guard.version == "arrived-service-reserve-v3" and (
+                    len(guard.known_task_interruptible) != n
+                    or len(guard.known_task_started) != n):
+                raise ValueError("missing known-task continuity metadata")
             schedule = np.asarray(guard.known_service_allocation, dtype=float).reshape(H, n, G)
             coefficients = np.asarray(guard.reserve_power_coefficients_kw_per_work, dtype=float)
             base = np.asarray(guard.reserve_base_power_kw, dtype=float)

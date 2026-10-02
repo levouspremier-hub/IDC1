@@ -254,3 +254,42 @@ def test_readiness_requires_fallback_gap_review_and_verified_fair_pairing():
     row["fallbacks"] = 0
     assert validation_ready([row], expected_episodes=1, pairing_verified=False) is False
     assert validation_ready([row], expected_episodes=1, pairing_verified=True) is True
+
+
+def test_completed_known_tasks_do_not_alias_continuity_or_aggregate_variables():
+    env = fixture_env(task=False)
+    for i in range(12):
+        task = Task(i, "A", "completed known", 0, 1, np.array([.1]),
+                    2., 3, 3., True, False)
+        task.remaining_work = 0.
+        task.status = "finished"
+        env.tasks.append(task)
+    plan = solve_time_indexed_mip_raw_projection(
+        build_snapshot(env), DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    assert plan.inventory_audit["target_reachable"] is True
+    assert plan.soc_kwh[-1] == pytest.approx(50., abs=1e-6)
+
+
+def test_future_known_service_retains_priority_when_middle_task_has_finished():
+    env = fixture_env(task=False)
+    for i, (work, rate, priority) in enumerate([(4., 2., 3.), (1., 1., 2.), (2., 1., 1.)]):
+        task = Task(i, "A", "known priority", 0, int(work / rate), np.array([.1]),
+                    work, 3, priority, True, False)
+        task.status = "waiting"
+        env.tasks.append(task)
+    snapshot = build_snapshot(env)
+    plan = solve_time_indexed_mip_raw_projection(
+        snapshot, DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.25)
+    assert plan.solver_status == "optimal"
+    remaining = [t.remaining_work for t in snapshot.tasks]
+    for k in range(3):
+        served = plan.allocation[:, :, k].sum(axis=1)
+        for i in range(3):
+            if served[i] > 1e-6:
+                for j in range(i):
+                    assert served[j] == pytest.approx(
+                        min(remaining[j], snapshot.tasks[j].max_rate_work_per_step), abs=1e-6)
+        remaining = [max(w - x, 0.) for w, x in zip(remaining, served, strict=True)]

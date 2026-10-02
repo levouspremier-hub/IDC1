@@ -7,7 +7,7 @@ import numpy as np
 from contracts.inventory import ArrivedServiceReserve
 from idc_model.allocation import allocate_tasks
 
-SERVICE_GUARD_VERSION = "arrived-service-reserve-v2"
+SERVICE_GUARD_VERSION = "arrived-service-reserve-v3"
 
 
 def power_upper_envelope(env, temperature):
@@ -70,16 +70,18 @@ def _coupled_reserve(env, summaries, capacity, floor, order, temperature, arriva
         due.append(float(per_task[:cutoff, i].sum()))
         shortfall += max(task["remaining_work"] - min(end[i], due[-1]), 0.)
     return ArrivedServiceReserve(
-        version=SERVICE_GUARD_VERSION, temperature_margin_c=margin,
+        version=env.terminal_service_guard_version, temperature_margin_c=margin,
         charge_limit_kw=limits[0], charge_limits_kw=limits,
         reserved_service_power_kw=powers[0], group_work_floor=floor.sum(axis=0).tolist(),
         current_allocation=floor.tolist(), known_service_allocation=schedule,
+        known_task_interruptible=[t["interruptible"] for t in summaries],
+        known_task_started=[t["started"] for t in summaries],
         known_service_order=order, known_service_required_end_work=end,
         known_service_required_due_work=due, known_service_shortfall_work=shortfall,
         reserve_base_power_kw=bases, reserve_power_coefficients_kw_per_work=coefficients,
         aggregate_arrival_work=arrivals, aggregate_service_work=served,
         aggregate_backlog_work=backlog,
-        note="V2 charging power is coupled to optimized known service and aggregate backlog; "
+        note="Charging power is coupled to optimized known service and aggregate backlog; "
         "charge_limits_kw describe the complete service witness, not fixed planner bounds. "
         "Forecast arrivals are aggregate reservations with conserved carryover, not future tasks. "
         "Zero renewables and B6 temperature plus registered train margin are assumptions; "
@@ -90,7 +92,8 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
     version = getattr(env, "terminal_service_guard_version", None)
     if version is None:
         return None
-    if version not in ("arrived-service-reserve-v1", SERVICE_GUARD_VERSION):
+    if version not in ("arrived-service-reserve-v1", "arrived-service-reserve-v2",
+                       SERVICE_GUARD_VERSION):
         raise ValueError("unknown terminal service guard version")
     if not bool(getattr(env, "terminal_inventory_enabled", False)):
         raise ValueError("service guard requires terminal inventory contract")
@@ -101,7 +104,9 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
     live = {str(t.task_id): t for t in env.tasks if t.status != "not_arrived"}
     summaries = [dict(task_id=t.task_id, remaining_work=t.remaining_work,
                       max_rate=t.max_rate_work_per_step, priority=t.priority,
-                      deadline=t.deadline, arrival=int(live[t.task_id].arrival_time))
+                      deadline=t.deadline, arrival=int(live[t.task_id].arrival_time),
+                      interruptible=bool(live[t.task_id].interruptible),
+                      started=live[t.task_id].start_time is not None)
                  for t in tasks]
     # Keep the executor's exact priority/deadline/arrival/id ordering. Serving a
     # critical task requires the preceding demands in that ordering as well.
@@ -132,7 +137,7 @@ def build_service_guard(env, tasks, capacity, *, temperature, arrival):
     floor = allocate_tasks(summaries, floor_capacity.tolist())
     actual_floor = np.asarray(floor.matrix, dtype=float).reshape(
         len(tasks), len(capacity)).sum(axis=0)
-    if version == SERVICE_GUARD_VERSION:
+    if version in ("arrived-service-reserve-v2", SERVICE_GUARD_VERSION):
         return _coupled_reserve(
             env, summaries, capacity, np.asarray(floor.matrix).reshape(len(tasks), len(capacity)),
             order, temperature, arrival, margin)
