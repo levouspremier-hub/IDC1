@@ -83,3 +83,32 @@ r4 最终72日收益对照全部完整、服务/目标/物理通过、无回退�
 不选择有利时刻、不读未来任务或真值、不更新权重；每个求解仍0.25秒。
 先给出平滑项是否属于目标的具体分析及同状态证据，再决定是否另开奖励返修卡；
 本卡不自动改奖励，不启动长训。证据 runs/m6p2b_storage_state_probe_v2_r4/。
+
+## 诊断证实后的奖励返修边界与公式
+
+旧禁止“改动奖励系数”继续生效：不调原权重或refs；本节只授权在wrapper替换
+两个路径依赖平滑惩罚的语义。允许safe_rl/corrector_wrapper.py、
+safe_rl_v2/formal_train_loop.py、scenario/inventory_release.py及诊断入口、奖励测试，
+新增全新v2_r5训练配置/发布及v4_r5矩阵；r3/r4和诊断保留。依据已有用户计划
+“诊断证实需要奖励修复，先形成公式、系数依据和train-only对照，落实再短跑”。
+
+完整证据：runs/m6p2b_reward_counterfactual_v2_r4_final/的48个公平配对有9个
+净获利，8个实测奖励为负，两个平滑项抵消经济/服务收益；只在算术中去掉这
+两项则9个均为正。runs/m6p2b_storage_state_probe_v2_r4/：96个固定状态中
+64个执行非坍缩，288次探针无回退、24基础episode合格，排除全程映射信号消失。
+本结论不把未计入协议的负载/动作摆动当作货币成本，不直接按获利计数选系数。
+
+新语义common-sgd-potential-smooth-v1：
+Phi(s) = -w_load * mean(abs(prev_loads-base_load))
+         -w_action * mean(abs(prev_exec_action))；终止状态Phi=0。
+r_new = r_common_sgd - r_load_smooth - r_action_smooth
+        + gamma*Phi(next_state) - Phi(state)。
+两系数沿用现有环境0.05/0.03，不调参；gamma必须显式等于冻结PPO gamma。
+完整episode的折扣塑形和=-Phi(initial)，同初始状态下与提案无关；对初始Phi=0
+的正式episode恰为0。保留成本/碳/服务/退化/终端分项，新增塑形分项并保留原
+平滑值审计。绝不新增逐步SOC惩罚，不改env.step或物理/任务约束。
+
+先提交失败测试，覆盖逐项账目、完整折扣望远镜恒等式、动作/状态不变、缺失
+折扣率报错；然后修改wrapper。重跑24-origin标定、收益对照、恢复/发布验签、
+make check，再仅seed0×8批。证据使用全新r5 run-id。独立回滚点989970b，
+返修测试/实现/冻结资产/发布/验收分别提交，不覆盖r4。长训仍禁止。
