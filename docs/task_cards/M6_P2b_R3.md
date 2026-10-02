@@ -10,7 +10,7 @@ safe_rl/corrector_wrapper.py、safe_rl_v2/inventory_diagnostics.py/formal_train_
 inventory_train.py、scripts/m6p2b_inventory_repair.py/defect_audit.py及必要的本卡
 safe_rl_v2/rollout.py（仅汇总已记录inventory审计，不改变raw/logp/buffer语义）、
 受控诊断入口、scenario/inventory_release.py、checkpointing/inventory_eval_input.py、
-相关tests、docs及全新v2_r3配置/发布、v4_r3矩阵和runs/m6p2b_*_v2_r3*产物。
+相关tests、docs及全新v2_r3/r4配置/发布、v4_r3/r4矩阵和runs/m6p2b_*_v2_r3/r4产物。
 保留旧文件。新service reserve版本与实际规划代码、wrapper、奖励及配置共同绑定。
 
 采用调度耦合的保守功率上界：基于现有非线性IT/COP公式及预测温度+冻结4.4°C，
@@ -46,3 +46,12 @@ git diff --check。实现后重新跑固定种子受控复审、24-origin train-
 充放电/收益、raw→exec及有效优势，不能把修正器成功当作PPO学会。
 回滚点c3e37fb；本卡失败测试、实现、冻结资产、发布与验收分别独立提交，逆序
 revert。最终报告说明残余风险、单seed结论与validation readiness，工作树干净。
+
+## 补充反例与候选版本（2026-10-02）
+
+r3的72日标定通过并生成冻结候选配置/矩阵，但尚未发布、没有checkpoint。
+补充准确预测反例证明，开始不可中断任务后，旧模型仍允许未来暂停该任务而
+错算回充余量。失败证据runs/m6p2b_r3_noninterruptible_redtests/及新增回归已提交。
+后续增加已到达任务的全时域执行优先级与不可中断连续性约束（包括可部分执行
+的首次启动），与现有环境分配器一致；不读取未来任务、不增加0.25预算。
+保留r3候选及全部失败/成功诊断，最终使用全新r4配置、矩阵和发布重新标定。
