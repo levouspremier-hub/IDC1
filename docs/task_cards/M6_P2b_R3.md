@@ -118,3 +118,22 @@ make check，再仅seed0×8批。证据使用全新r5 run-id。独立回滚点98
 是数学条件而非本环境的初始值；不修改reset或增加势函数偏移来追求数值零。
 两组完整序列单测直接按实际初态验证-Phi(initial)。r5指标保留每个episode的
 r_potential_smooth累计/折扣值，最终报告核对此共同常数，不能当作额外调度收益。
+
+## 最后接口红线返修（r6发布，标定系数沿用r5）
+
+门禁复审实际复现：当前wrapper接收23维raw，生成21维exec并推进step=1。
+这是AGENTS红线6的截断兼容缺陷；checkpoint/buffer虽已校验21维，公开wrapper
+入口同样必须拒绝。先新增失败测试覆盖20/22/23维，断言在规划与环境推进前
+明确ValueError；合法21维仍逐元素保留raw。允许wrapper的入口维度校验、
+新tests/test_m6p2b_wrapper_action_contract.py、scenario/inventory_release.py，
+新增release v2_r6及r6受控runs。不会改env.step，不影响合法动作的规划/奖励。
+
+r6仅发布入口校验修复；沿用已验签且行为不变的r5冻结配置/矩阵及24-origin
+标定，不重算系数/预算/refs，不重做有效动作的奖励选择。新release绑定实际
+wrapper代码并注明资产继承依据，旧r5发布保留为历史，不能混用checkpoint绑定。
+回滚点3e5e767；测试/实现/发布/验收分别提交。
+
+完整make check r5约55%时主动SIGINT中止，原生console/JUnit及五类产物已
+保留并写失败状态，不能声称完整门禁通过。补充回归转绿后对最终代码重新
+make check，并使用全新r6 run-id运行仅seed0×8批及单seed验收。验收命令仍为
+相关测试、完整make check、发布/矩阵验签、git diff --check及产物读回。
