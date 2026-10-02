@@ -71,3 +71,11 @@ launch_verification.json观察到第3批checkpoint，schema/角色/seed/实际r7
 单seed正式运行，不具备新版三seed复审、636诊断或五方法validation readiness。
 回滚先有序停止本run、保留产物，再逆序revert本卡独立实现/发布提交；d69c91a
 为开卡回滚点。本卡结束提交启动记录、diff --check和工作树为空。
+
+
+收尾命令范围纠正：一次无文件范围的uv run ruff check扫到了协议排除的旧链/
+兼容shim，667项问题全部位于本卡未修改文件。原生失败记录保存为
+runs/m6p2b_ruff_overscan_v2_r7/，未把它算作通过。按Makefile MAIN_PY完全相同
+范围重查0问题、退出0，保存于runs/m6p2b_ruff_main_scope_v2_r7/。没有修改
+旧链/受保护文件。启动后观察到5批/20 episode journal、回退0；这是进度快照，
+不是正式训练完成或最终验收结论。代码源与发布绑定保持不变，最终工作树为空。
