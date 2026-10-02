@@ -94,3 +94,21 @@ independent_rolling_optimization、penalty_ppo、safe_ppo_single_step_corrector�
 `runs/m6p2b_related_check_v2_r5/`：78项相关测试通过，0失败、0跳过，原生JUnit/
 console与来源hash均保存且读回验签。完整`runs/m6p2b_full_check_v2_r5/`的
 ruff/mypy已通过，pytest尚在进行，不能将running状态写成通过。
+
+## r6 最后接口校验与完整门禁
+
+额外复审合成环境确认：wrapper曾接受23维raw、截成21维exec并推进环境。
+checkpoint/buffer拒绝旧维度并不能代替wrapper入口拒绝。336b2ca先提交20/22/23维
+失败回归，3d5aaaf添加进入规划前的明确ValueError，所有错误维度不推进环境。
+这只改变非法输入的拒绝行为，合法21维的执行、奖励、物理与标定参数不变。
+ac87616提交r6发布，绑定实际代码并显式继承已验签的r5配置/矩阵/标定。
+配置仍为v2_r5、矩阵v4_r5，发布与受控run-id为r6；不把继承写成重新标定。
+
+`runs/m6p2b_full_check_v2_r5/`因补此红线修复主动中止：2622项已执行测试无
+失败，但退出码2，原生JUnit/console及五类产物保留、passed=false。这不是完整
+门禁通过。新`runs/m6p2b_related_check_v2_r6/`81项全部通过、0失败、0跳过，
+包含缺失/错误折扣率、旧checkpoint、旧动作、恢复、泄漏及真实终点回归。
+最终`runs/m6p2b_full_check_v2_r6/`仍在运行，不声明通过或启动长训。
+
+日内探针补充核对：64个非坍缩状态的物理实际储能动作也均非坍缩，288次
+修正器储能输出与物理实际执行的最大差为0；不是只检查修正器提交动作。
