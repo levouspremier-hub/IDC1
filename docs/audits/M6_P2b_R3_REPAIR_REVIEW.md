@@ -60,8 +60,8 @@ Phi(s)=-0.05*mean(abs(prev_loads-base_load))-0.03*mean(abs(prev_exec_action))，
 
 新奖励8项直接回归通过；r5标定首次72例服务/目标均通过，折扣塑形和范围
 [0.014999999999999987,0.015000000000000012]；6624/compute=1一次超时，
-因此passed=false、未冻结。相同代码/预算的新run-id复跑正在进行。
-新语义下的完整收益对照、完整make check和seed0短跑尚未通过，不宣称验收完成。
+因此passed=false、未冻结。随后相同代码/预算的retry1与实测收益对照已通过，
+详见下方r5证据；完整make check和seed0短跑仍待验收，不宣称全部问题解决。
 
 ## 后续闸门
 
@@ -93,7 +93,7 @@ independent_rolling_optimization、penalty_ppo、safe_ppo_single_step_corrector�
 
 `runs/m6p2b_related_check_v2_r5/`：78项相关测试通过，0失败、0跳过，原生JUnit/
 console与来源hash均保存且读回验签。完整`runs/m6p2b_full_check_v2_r5/`的
-ruff/mypy已通过，pytest尚在进行，不能将running状态写成通过。
+ruff/mypy通过，pytest随后因r6接口修复主动中止，详情见下节；不作为完整通过证据。
 
 ## r6 最后接口校验与完整门禁
 
@@ -112,3 +112,12 @@ ac87616提交r6发布，绑定实际代码并显式继承已验签的r5配置/�
 
 日内探针补充核对：64个非坍缩状态的物理实际储能动作也均非坍缩，288次
 修正器储能输出与物理实际执行的最大差为0；不是只检查修正器提交动作。
+
+## 已完成诊断的报告验签
+
+以下均为原生报告文件的SHA256，尚不代替完整门禁和训练验收。
+
+- `runs/m6p2b_calibration_v2_r5_retry1/report.json`：`0702a47e5cc81e51565da86b444b0ccd314b372b8ab49c2154615371a78304f6`。
+- `runs/m6p2b_reward_counterfactual_v2_r5_final/report.json`：`ab56d733e48cf3780f2a357e123a233870961eb698b5fdb620c3d9f56aaf1e39`。
+- `runs/m6p2b_storage_state_probe_v2_r4/report.json`：`c8a5470fceffa14d8b39527a0d28f0982d0bafb979c5aa73c888d076bb4ba232`。
+- `runs/m6p2b_related_check_v2_r6/report.json`：`86054c2388e6dac034a8c9c0b49182779f13113e533827cbfa1d14ca566df584`。
