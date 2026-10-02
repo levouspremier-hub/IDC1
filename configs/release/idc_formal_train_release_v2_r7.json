@@ -1,0 +1,143 @@
+{
+  "schema": "idc-formal-train-release-v2",
+  "inventory_version": "terminal-inventory-v1",
+  "reward_semantics": "common-sgd-potential-smooth-v1",
+  "reward_shaping": {
+    "version": "common-sgd-potential-smooth-v1",
+    "formula": "r_common - r_load_smooth - r_action_smooth + gamma*Phi(next)-Phi(state)",
+    "potential": "-w_load*mean(abs(prev_loads-base_load))-w_action*mean(abs(prev_exec))",
+    "terminal_potential": 0.0,
+    "gamma": 0.99498743710662,
+    "load_weight": 0.05,
+    "action_weight": 0.03,
+    "coefficient_basis": "existing weights; shaping discounted return is -Phi(initial)",
+    "train_evidence": [
+      {
+        "path": "runs/m6p2b_reward_counterfactual_v2_r4_final/report.json",
+        "sha256": "7ccf4098ab0720b4fa836733e9fecd3a00f6b2e4a290b0e344a920a5823cdc74"
+      },
+      {
+        "path": "runs/m6p2b_storage_state_probe_v2_r4/report.json",
+        "sha256": "c8a5470fceffa14d8b39527a0d28f0982d0bafb979c5aa73c888d076bb4ba232"
+      }
+    ]
+  },
+  "approved_decision_id": "M6-P2b",
+  "release_iteration": "r7",
+  "inherited_calibration": {
+    "configuration_revision": "r5",
+    "reason": "seed0 launch and running receipts only; execution/reward/training math unchanged"
+  },
+  "supersedes": {
+    "path": "configs/release/idc_formal_train_release_v2_r6.json",
+    "sha256": "a2a0396a366c26eaf316bb826607f48e9d9085e5b87be92feeeee3157fbd0191"
+  },
+  "seed0_formal_authorization": {
+    "decision": "user explicitly authorized only seed0 formal 512 batches on 2026-10-03",
+    "allowed_seeds": [
+      0
+    ],
+    "fresh_initialization_required": true,
+    "gate_path": "runs/m6p2b_short_gate_seed0_v2_r6",
+    "gate_hashes": {
+      "report.json": "6290155e0206eaeedf9f05dbb4bc1abc172af062570ac0092a21610745e29422",
+      "manifest.json": "b3651a42eec026704b06b820d056d7635b77266d5cb49f2f51a2e68bd3f82e33"
+    },
+    "inherited_qualification": "r6 single-seed short run; no weight restore",
+    "allowed_source_changes": [
+      "safe_rl_v2/inventory_train.py",
+      "scenario/inventory_release.py"
+    ],
+    "formal_three_seed_gate": false
+  },
+  "readiness": {
+    "formal_env_ready": true,
+    "formal_training_ready": true
+  },
+  "assets": {
+    "canonical_parquet": {
+      "path": "data/processed/singapore_2024/half_hour.parquet",
+      "sha256": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd"
+    },
+    "canonical_manifest": {
+      "path": "data/manifest/singapore_2024_half_hour.json",
+      "sha256": "e6484d6b050f100234a46811be30061f477bcc053b285854da5a882d2753b667"
+    },
+    "truth_split_manifest": {
+      "path": "data/manifest/singapore_2024_splits.json",
+      "sha256": "a096535fcdec81534f8cc05671d34d879a7e9517d06be789510dea586149af27"
+    },
+    "forecast_policy_v3": {
+      "path": "data/manifest/singapore_2024_forecast_policy_v3.json",
+      "sha256": "23863ea44b3a882449f8930370b1e02182f5467e4c4d52acbfadaf675acfe754"
+    },
+    "b6_arrival_policy": {
+      "path": "data/manifest/m13f_arrival_intensity_policy_v1.json",
+      "sha256": "7066a0e127bc28f6a56ad4e62810c34536e1eb13b3c3c134baa3a1e6c4bca251"
+    },
+    "exogenous_v3_manifest": {
+      "path": "data/manifest/singapore_2024_exogenous_v3.json",
+      "sha256": "31cb241c2891ba2e687f704b233e2572223ebeed39dbf6257cf67d6569b07be4"
+    },
+    "exogenous_v3_source_manifest": {
+      "path": "data/manifest/m13f_materialization_sources_v4.json",
+      "sha256": "73f75cefea4c62e6cdec75adf5efa1e4c21ff23c4ae4381c8a5402ded6c1f557"
+    },
+    "exogenous_v3_parquet": {
+      "path": "data/processed/singapore_2024/exogenous_drivers_v3.parquet",
+      "sha256": "07b648f0a15db1d8c39838e3e501dafa2f9956155489702e3379cdb775858612"
+    },
+    "refs_v4": {
+      "path": "configs/frozen_refs/refs_v4.json",
+      "sha256": "0889dcae5d896963301b3f645fdb3ceab0584105b01b990f009f957625a9b7c8"
+    },
+    "formal_split_manifest_train": {
+      "path": "data/manifest/formal_splits_v5/train.json",
+      "sha256": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865"
+    },
+    "arrival_mapper_policy": {
+      "path": "data/manifest/m13g_arrival_mapper_v1.json",
+      "sha256": "ef401999ce9f43d0f03d31e4a96de5867581eac3d8d007a29054a7f97f4fb371"
+    },
+    "env_release": {
+      "path": "configs/release/idc_formal_env_release_v1.json",
+      "sha256": "f86e6f0f163f86655c747b245960e38efd744b9a69f30283831f89e1416f556f"
+    },
+    "training_config": {
+      "path": "configs/training/idc_training_config_v2_r5.json",
+      "sha256": "31e1ce5b83e0fb75e41f150c7079d64d0907ccddd823ea9313bf03c4239b0e39"
+    },
+    "experiment_matrix": {
+      "path": "configs/experiments/m9_experiment_matrix_v4_r5.json",
+      "sha256": "eb48aa0dfcfdd82f1a1abe77849b5a876cce1582870d5a502fed1b479e516e77"
+    }
+  },
+  "semantics_binding": {
+    "contracts/inventory.py": "d5f7f238a95b07fb1005f5215a8ee28fe7bd80fca7f104c2adfcfa20fa1e76c3",
+    "planning/model.py": "fb541da36954f03a5f23e778ceb3ee137fc9064255cfc6b2d7552f5abbf4feb2",
+    "planning/snapshot_adapter.py": "29b09436e84d670b7d32e9a41404729408d3906820b79e47e00def4e2d1a282e",
+    "planning/corrector.py": "5b53bfde843dd9031390c6106d62f7e5b703f42aa176a397e702ecf3ea42779d",
+    "safe_rl/corrector_wrapper.py": "26ee9b5702cb56cf803529dd4609671aa29669dfc929ff03acee9e5780d5ae8e",
+    "safe_rl_v2/inventory_train.py": "40504c2175a08774e0b0e591c4c8750ddae86aa019c896d0e515f0864f427e12",
+    "safe_rl_v2/formal_train_loop.py": "ec5763b3ad99a9284b713aa86ca940b6531eaad54cbabb8ceb503a394833d679",
+    "safe_rl_v2/rollout.py": "d89805ce0516d6dfb0a7f08681e4ad4af19272f50487bf5a9f2179b169ac8f02",
+    "safe_rl_v2/policy.py": "6e05953b00fd5364aa52672815592807bffad6e4806ac1d6ba97c1e72fa47c03",
+    "safe_rl_v2/buffer.py": "0028a2ab827f36e536a85fe03792b483fef2b154e6892ea0565073543a7a07e8",
+    "safe_rl_v2/ppo_update.py": "a5b7b2b63573869e6d3b6e8268cbae441e4a2d540a71db3d2b899010fac4d92b",
+    "safe_rl_v2/ppo_objective.py": "fd27262a2d41c70667d2b7bc0aee3b87658729b7928f7e30540e3059d2cd2978",
+    "safe_rl_v2/lagrangian.py": "67aaca0e2d7b2527bf3ac3c02025a678420d32c1829f56e9aef1abe6ac10d9be",
+    "safe_rl_v2/models.py": "697143a4d0e1a5a7f860b2444543728acd839219630da6cfd4da271bbea5ba64",
+    "checkpointing/versioned.py": "1dfe2d1f1c3e3ab3f2a5ed8b6cefd1a64d99eb040836c8a224864bcc92a0077c",
+    "safe_rl_v2/inventory_diagnostics.py": "c55a0002717581cdb9b0fafd4ef8dfe7202690e66469e03b03eb3a3845f7d6fb",
+    "scenario/inventory_release.py": "3817757c941dfc4b2bc6b75747bff8dc1a22ffb3b38b8ff23c8ac500f850c81a",
+    "checkpointing/inventory_eval_input.py": "a54e534f3e8614b01df45fa25cbe9d5f86edefb6830fc43155c6763e62cc6944",
+    "envs/idc_price_env.py": "76c11490094b8b276a990b6f2d42ffacbdfb54c2d770d33b0039d1cc735afe57",
+    "scripts/m6p2b_inventory_repair.py": "dd55cbe5c582dd7e838e08172540246b4b60a61ccbc2a497f43b1761b51fb0ce",
+    "evaluation/adapter.py": "7b69c4e1642b044d95dc6189e4d2e799895ae01ba9dcc05ee27567ec451010bb",
+    "planning/service_guard.py": "1408466d2b533f6c0f605667b5ad10c1a78bfdd5b8a1b2f80442266f2fccb14a",
+    "idc_model/allocation.py": "9a6ccdfb5260f8b6954c5ba11f03ee5b5fbe40fdb6192a3d7eb5a9b198abbf8f",
+    "evaluation/inventory.py": "8e19d31ee01ad1c980d13321241231254c1a2ec4c7ab6b757eaf8c42084a56ab",
+    "evaluation/metrics.py": "d1f9450f28dddf043a1a0d622c19953345fcb2dd7e39d3a7906c176f79143a2b"
+  },
+  "release_revision": "73fcc091da859d843b8c24bdd0ffed5e6ccc3637"
+}
