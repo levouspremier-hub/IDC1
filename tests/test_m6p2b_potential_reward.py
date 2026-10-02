@@ -70,3 +70,24 @@ def test_potential_reward_requires_explicit_valid_discount(gamma):
         env.terminal_inventory_reward_gamma = gamma
     with pytest.raises(ValueError, match="discount"):
         CorrectorWrapper(env, corrector_time_limit_s=.25)
+
+
+@pytest.mark.parametrize("field", ["ppo", "shaping"])
+def test_frozen_potential_discount_cannot_diverge_from_actual_ppo(tmp_path, monkeypatch, field):
+    import json
+
+    from scenario import inventory_release as release
+
+    path = release.ROOT / release.CONFIG_PATH
+    if not path.exists():
+        pytest.skip("new potential calibration not yet frozen")
+    config = json.loads(path.read_text())
+    if field == "ppo":
+        config["training"]["ppo"]["gamma_per_step"] = .5
+    else:
+        config["reward_shaping"]["gamma"] = .5
+    local = tmp_path / "discount-mismatch.json"
+    local.write_text(json.dumps(config))
+    monkeypatch.setattr(release, "CONFIG_PATH", str(local))
+    with pytest.raises(ValueError, match="frozen discount"):
+        release.load_config()
