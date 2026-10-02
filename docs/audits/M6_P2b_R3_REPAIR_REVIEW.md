@@ -77,3 +77,20 @@ independent_rolling_optimization、penalty_ppo、safe_ppo_single_step_corrector�
 
 回滚采用独立提交逆序revert，不覆盖历史runs，不改受保护目录或主分支。
 最终验收将补充起止SHA、实际命令及结果、证据hash、回滚列表和干净工作树。
+
+## r5 受控发布进展
+
+`runs/m6p2b_calibration_v2_r5_retry1/`：相同代码和预算复跑72例，完整、服务、
+目标全部合格，回退为0；共同折扣塑形常数仍为0.015。50a1a90冻结全新配置/
+矩阵，db4c53e提交绑定实际代码、gamma和塑形证据的发布。r4及r5首次失败均保留，
+不能因一次复跑成功宣称所有偶发超时已被消除。
+
+`runs/m6p2b_reward_counterfactual_v2_r5_final/`：72/72完整、服务/物理/目标合格，
+无回退。48个公平配对中9个净获利，9个实测训练奖励增益均为正；实测与公式最大
+误差1.2351231148954867e-15。折扣塑形项范围
+[0.014999999999999987,0.01500000000000001]，同初态策略间差为浮点精度。
+这是实际运行对照，不用旧r4的算术补偿代替新奖励的执行结果。
+
+`runs/m6p2b_related_check_v2_r5/`：78项相关测试通过，0失败、0跳过，原生JUnit/
+console与来源hash均保存且读回验签。完整`runs/m6p2b_full_check_v2_r5/`的
+ruff/mypy已通过，pytest尚在进行，不能将running状态写成通过。
