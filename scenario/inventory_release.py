@@ -12,10 +12,10 @@ from evaluation.sources import ROLE_LOGICAL_PATHS
 from scenario.env_release import load_verified_env_release
 
 ROOT = Path(__file__).resolve().parent.parent
-RUN_REVISION = "v2_r6"
+RUN_REVISION = "v2_r7"
 CONFIG_PATH = "configs/training/idc_training_config_v2_r5.json"
 MATRIX_PATH = "configs/experiments/m9_experiment_matrix_v4_r5.json"
-RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r6.json"
+RELEASE_PATH = "configs/release/idc_formal_train_release_v2_r7.json"
 SEMANTICS = "terminal-inventory-v1"
 SOURCE_PATHS = (
     "contracts/inventory.py", "planning/model.py", "planning/snapshot_adapter.py",
@@ -235,12 +235,23 @@ def build_release():
         "schema": "idc-formal-train-release-v2", "inventory_version": SEMANTICS,
         "reward_semantics": "common-sgd-potential-smooth-v1",
         "reward_shaping": potential_reward_spec(), "approved_decision_id": "M6-P2b",
-        "release_iteration": "r6",
+        "release_iteration": "r7",
         "inherited_calibration": {
             "configuration_revision": "r5",
-            "reason": "input-dimension rejection only; valid 21D execution/reward unchanged"},
-        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r5.json",
-                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r5.json")},
+            "reason": ("seed0 launch and running receipts only; "
+                       "execution/reward/training math unchanged")},
+        "supersedes": {"path": "configs/release/idc_formal_train_release_v2_r6.json",
+                       "sha256": sha(ROOT / "configs/release/idc_formal_train_release_v2_r6.json")},
+        "seed0_formal_authorization": {
+            "decision": "user explicitly authorized only seed0 formal 512 batches on 2026-10-03",
+            "allowed_seeds": [0], "fresh_initialization_required": True,
+            "gate_path": "runs/m6p2b_short_gate_seed0_v2_r6",
+            "gate_hashes": {name: sha(ROOT / "runs/m6p2b_short_gate_seed0_v2_r6" / name)
+                            for name in ("report.json", "manifest.json")},
+            "inherited_qualification": "r6 single-seed short run; no weight restore",
+            "allowed_source_changes": ["safe_rl_v2/inventory_train.py",
+                                       "scenario/inventory_release.py"],
+            "formal_three_seed_gate": False},
         "readiness": {"formal_env_ready": True, "formal_training_ready": True},
         "assets": {role: {"path": path, "sha256": sha(ROOT / path)}
                    for role, path in ASSET_PATHS.items()},

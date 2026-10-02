@@ -70,6 +70,56 @@ def require_short_gate(binding):
         raise ValueError("live short-run artifacts no longer satisfy the recorded gate")
 
 
+
+def require_seed0_launch_gate(binding, *, seed):
+    """User-authorized seed 0 only; inherit verified r6 qualification, never weights."""
+    if seed != 0:
+        raise ValueError("single-seed formal authorization is restricted to seed 0")
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
+    from scenario.inventory_release import verify_release
+
+    authorization = verify_release()["seed0_formal_authorization"]
+    gate_folder = ROOT / authorization["gate_path"]
+    for name, digest in authorization["gate_hashes"].items():
+        if sha(gate_folder / name) != digest:
+            raise ValueError("seed0 gate evidence hash mismatch")
+    gate = json.loads((gate_folder / "report.json").read_text())
+    old_binding = gate["inventory_binding"]
+    # Only launch code and its release declaration changed. Physics, reward,
+    # optimizer, policy, buffer, config and matrix must be byte-identical.
+    ignored = {"release_path", "release_sha256", "semantics_binding"}
+    if ({k: v for k, v in binding.items() if k not in ignored}
+            != {k: v for k, v in old_binding.items() if k not in ignored}):
+        raise ValueError("seed0 inherited configuration/reward binding differs")
+    before, after = old_binding["semantics_binding"], binding["semantics_binding"]
+    allowed = {"safe_rl_v2/inventory_train.py", "scenario/inventory_release.py"}
+    if (set(before) != set(after)
+            or any(before[p] != after[p] for p in before if p not in allowed)):
+        raise ValueError("seed0 inheritance changed training/planning semantics")
+    if (gate.get("passed") is not True or gate.get("seeds") != [0]
+            or gate.get("formal_three_seed_gate") is not False
+            or len(gate["short_runs"]) != 1):
+        raise ValueError("seed0 requires qualified single-seed evidence")
+    source = gate["short_runs"][0]
+    folder = ROOT / "runs" / source["run_id"]
+    report = verify_written_run(folder, old_binding)
+    if (source["seed"] != 0 or not all(source["checks"].values())
+            or sha(folder / "report.json") != source["report_sha256"]
+            or sha(folder / "manifest.json") != source["source_manifest_sha256"]
+            or sha(folder / "checkpoint_final.pt") != source["checkpoint_sha256"]
+            or report["seed"] != 0 or report["scope"] != "controlled_short_run"
+            or report["batches"] != 8 or report["transitions"] != 1536
+            or report["adam_steps"] != 128 or report["lagrangian_updates"] != 8
+            or len(report["inventory_episodes"]) != 32
+            or not all(all(inventory_episode_acceptance(e).values())
+                       for e in report["inventory_episodes"])
+            or not all(b["zero_action_fallback_steps"] == 0
+                       and b["storage_signal"]["head_grad_norm_mean"] > 0
+                       for b in report["batch_records"])):
+        raise ValueError("live seed0 short-run artifacts no longer qualify")
+    return authorization
+
+
 def verify_written_run(folder, binding):
     folder = Path(folder)
     receipt = json.loads((folder / "artifact_verification.json").read_text())
@@ -86,8 +136,15 @@ def _run(args):
     config, matrix = load_config(), load_matrix()
     binding = checkpoint_binding()
     apply_frozen_thread_setting(config)
+    seed0_formal = getattr(args, "seed0_formal", False)
+    if seed0_formal and (args.short or args.seed != 0):
+        raise ValueError("seed0 formal authorization requires seed 0 and full training")
+    authorization = None
     if not args.short:
-        require_short_gate(binding)
+        if seed0_formal:
+            authorization = require_seed0_launch_gate(binding, seed=args.seed)
+        else:
+            require_short_gate(binding)
     batches = preregistered_batches(matrix, args.seed)
     if args.short:
         batches = batches[:8]
@@ -136,6 +193,13 @@ def _run(args):
         "training_scope": scope, "artifact_role": role, "schema": schema,
     }
     try:
+        write_run(args.run_id, config=config, metrics=pd.DataFrame(),
+                  report={"status": "running", "scope": scope, "seed": args.seed,
+                          "target_batches": len(batches), "completed_batches": next_batch,
+                          "inventory_binding": binding,
+                          "formal_launch_authorization": authorization},
+                  base_dir=str(ROOT / "runs"), seed=args.seed, command=command,
+                  status="running", dependency_lock_hash=sha(ROOT / "uv.lock"))
         for index in range(next_batch, len(batches)):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
@@ -154,7 +218,22 @@ def _run(args):
                 save_bound(folder / "checkpoint_batch2.pt", binding=binding,
                            origin_provenance=provenance, next_batch_index=2,
                            **checkpoint_kwargs)
-            if args.short or (index + 1) % 16 == 0:
+            if index == 0 or (index + 1) % 16 == 0:
+                write_run(args.run_id, config=config,
+                          metrics=pd.DataFrame([{
+                              "batch_index": r["batch_index"],
+                              "transitions": r["transitions"],
+                              **r["storage_signal"]} for r in records]),
+                          report={"status": "running", "scope": scope, "seed": args.seed,
+                                  "target_batches": len(batches),
+                                  "completed_batches": index + 1,
+                                  "transitions": sum(r["transitions"] for r in records),
+                                  "inventory_binding": binding,
+                                  "formal_launch_authorization": authorization,
+                                  "checkpoint_latest_sha256": sha(folder / "checkpoint_latest.pt")},
+                          base_dir=str(ROOT / "runs"), seed=args.seed, command=command,
+                          status="running", **training_source_ledger(provenance))
+            if args.short or index == 0 or (index + 1) % 16 == 0:
                 episodes = batch["inventory_episodes"]
                 print(f"seed={args.seed} batch={index+1}/{len(batches)} "
                       f"inventory={sum(e['inventory_qualified'] for e in episodes)}/4 "
@@ -169,6 +248,7 @@ def _run(args):
                     for r in records for e in r["inventory_episodes"]]
         report = {
             "scope": scope, "seed": args.seed, "batches": len(records),
+            "formal_launch_authorization": authorization,
             "batches_newly_run": len(batches) - next_batch,
             "resumed_from": args.resume_from,
             "resume_source_sha256": sha(args.resume_from) if args.resume_from else None,
@@ -245,10 +325,15 @@ def run(args):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--short", action="store_true")
+    parser.add_argument("--seed0-formal", action="store_true",
+                        help="explicit seed0-only launch using verified inherited qualification")
     parser.add_argument("--seed", type=int, choices=(0, 1, 2), required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--resume-from")
-    return run(parser.parse_args(argv))
+    args = parser.parse_args(argv)
+    if args.seed0_formal and (args.short or args.seed != 0):
+        parser.error("--seed0-formal requires --seed 0 and full training")
+    return run(args)
 
 
 if __name__ == "__main__":
