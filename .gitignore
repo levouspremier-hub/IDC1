@@ -184,3 +184,6 @@ marl/**/*.pyc
 !docs/archive/
 !docs/archive/2026-08-14/
 !docs/archive/2026-08-14/*.md
+
+# SSH execution workflow; local connection config remains ignored by default.
+!docs/REMOTE_EXECUTION.md
