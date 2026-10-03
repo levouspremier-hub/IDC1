@@ -87,6 +87,20 @@ def dump(path, value):
     path.write_text(json.dumps(jsonable(value), ensure_ascii=False, allow_nan=False))
 
 
+def forecast_evidence(snapshot):
+    bundle = snapshot.forecast
+    if bundle.split != "train" or not bundle.forecast_provenance:
+        raise ValueError("diagnosis requires train forecast provenance")
+    return {
+        "split": bundle.split, "generated_at": jsonable(bundle.generated_at),
+        "sources": jsonable(bundle.forecast_provenance),
+        "start": bundle.start, "forecast_cutoff": bundle.forecast_cutoff,
+        "visible_mask": snapshot.planning_forecast.visible_mask,
+        "assumed_mask": snapshot.planning_forecast.assumed_mask,
+        "extension_policy": snapshot.planning_forecast.extension_policy,
+    }
+
+
 class Observer:
     """Small function wrappers only; serialization occurs after correct() returns."""
 
@@ -114,6 +128,24 @@ class Observer:
         original_milp = optimize.milp
         original_certificate = model._base_only_terminal_certificate
         original_validate = model.validate_inventory_snapshot
+        original_empty = model._projection_empty
+
+        def empty(*args, **kwargs):
+            caller = inspect.currentframe().f_back
+            local = caller.f_locals
+            if "res_b" in local:
+                phase = "B"
+            elif "res_a" in local:
+                phase = "A" if local["res_a"].status != 0 else "after_A_before_B"
+            elif "res_inventory" in local:
+                phase = "R" if local["res_inventory"].status != 0 else "after_R_before_A"
+            elif "t_inventory" in local:
+                phase = "R_certificate_before_solver"
+            else:
+                phase = "validation_or_build_before_R"
+            self.current["observed_failure_phase"] = phase
+            del caller, local
+            return original_empty(*args, **kwargs)
 
         def make_snapshot(env):
             self.current = {"solver_calls": [], "pid": os.getpid()}
@@ -179,7 +211,8 @@ class Observer:
             events = self.current["solver_calls"]
             timing = self.current
             timing.update(model_call_s=end - start, budget_s=kwargs["time_limit_s"],
-                          failure_stage=failure_stage(result, events),
+                          failure_stage=timing.get("observed_failure_phase",
+                                                   failure_stage(result, events)),
                           variables=result.n_variables, constraints=result.n_constraints,
                           integer_variables=result.n_integer_variables)
             r_start = timing.get("r_enter_perf")
@@ -206,6 +239,7 @@ class Observer:
                 (guard, "build_service_guard", make_guard),
                 (model, "validate_inventory_snapshot", validate),
                 (model, "_base_only_terminal_certificate", certificate),
+                (model, "_projection_empty", empty),
                 (optimize, "milp", milp),
                 (corrector, "solve_time_indexed_mip_raw_projection", solve),
                 (wrapper.CorrectorWrapper, "step", step),
@@ -227,10 +261,7 @@ class Observer:
                    known_task_started=guard.known_task_started,
                    known_task_interruptible=guard.known_task_interruptible,
                    horizon=snapshot.planning_horizon_steps,
-                   forecast_provenance=jsonable(snapshot.planning_forecast.provenance)
-                   if hasattr(snapshot.planning_forecast, "provenance") else
-                   {k: v for k, v in snapshot.planning_forecast.model_dump(mode="json").items()
-                    if "source" in k or "provenance" in k or "cutoff" in k},
+                   forecast_provenance=forecast_evidence(snapshot),
                    timing=jsonable(self.current), peak_rss_bytes=peak_rss_bytes())
         audit = info["inventory_audit"]
         row["inventory_audit"] = {k: v for k, v in audit.items()

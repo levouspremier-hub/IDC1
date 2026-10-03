@@ -109,3 +109,21 @@ def test_checkpoint_hash_is_locked():
 
     with pytest.raises(ValueError, match="checkpoint"):
         assert_unchanged(CHECKPOINT_SHA, "0" * 64, "checkpoint")
+
+
+@pytest.mark.leakage
+def test_forecast_evidence_uses_signed_bundle_and_visible_window():
+    from scripts.m6p2b_seed0_diagnosis import forecast_evidence
+
+    bundle = SimpleNamespace(split="train", generated_at="2024-04-15T00:00:00+08:00",
+                             forecast_provenance={"price": {"source_kind": "seasonal_naive"}},
+                             start="5040", forecast_cutoff=48)
+    snapshot = SimpleNamespace(forecast=bundle, planning_forecast=SimpleNamespace(
+        visible_mask=[True, False], assumed_mask=[False, True], extension_policy="frozen"))
+    result = forecast_evidence(snapshot)
+    assert result["sources"] == bundle.forecast_provenance
+    assert result["generated_at"] == bundle.generated_at
+    assert result["visible_mask"] == [True, False]
+    bundle.split = "test"
+    with pytest.raises(ValueError, match="train"):
+        forecast_evidence(snapshot)
