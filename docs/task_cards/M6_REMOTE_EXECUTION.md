@@ -14,3 +14,14 @@
 
 ## 回滚点
 工作分支 p5-eval-viz-m6-p2b-s0-diagnosis，开卡前 HEAD 9f127ab5d900fa0a66df8c012d440ae70253c219；开卡提交作回滚点，后续显式 revert；保留任务与传输文件。
+
+## 本地验收 / 待主机接入
+
+- 开卡 `7bc95e0`；失败规格 `386738a` 在模块未实现时收集失败；实现 `b644513` 已普通推送。
+- 新增 11 项测试全部通过，包含真实 rsync 的同大小/同 mtime 内容损坏修复，临时 Git 仓库的 detached 子进程、三任务单槽排队、成功/失败/源码突变分类、checkpoint 保留、孤儿任务回收和 receipt 验签。
+- Ruff、mypy 通过；25 个发布源码与开卡前 9f127ab hash 完全一致；未改配置、预算或训练语义。
+- runs/m6_remote_execution_local_v1/ 保存五类产物、测试 XML、完整命令与源 hash、receipt。仅假 uv/临时仓库，不代表真实 WSL/依赖/网络验收。
+- 当前 Mac 四小时零更新 soak 仍在运行；本次未中断它，也未并行启动完整 make check 或实际训练。局部门禁针对新增执行工具，不能冒称全仓完整门禁已重跑。
+- 用户主机已有 WSL2 和 GPT；主机准备指令已写入 docs/REMOTE_EXECUTION.md，待返回 SSH 用户名、Tailscale 地址、端口、远端根路径和 host key 指纹后，才在 Mac 配置并完成首次联机 check/回传验收。
+- 默认单槽执行，全部新 runs/checkpoint/失败证据与显式输出自动回传；Mac 重启后需 watch 恢复；Windows 重启会中断计算，保留证据，不自动重跑。
+- 所有实现与文档提交普通推送至当前工作分支；不合并 paper-baseline。最终远端 SHA 在交付消息中核对。
