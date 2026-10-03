@@ -118,7 +118,19 @@ with exact commands, output and timezone (Asia/Shanghai). They show battery
 10% at 04:13:12, 5% at 04:23:22, thermal pressure 1 at 04:25:16, returning to 0
 at 04:26:06, then battery 4% at 04:30:12 and 3% at 04:35:42. A separate `pmset`
 inspection showed low-power sleep at 04:52:14, after training had finished.
-The new diagnostic ran on AC power. No CPU-frequency history was recovered.
+The new diagnostic ran on AC power. Targeted read-only CPU/battery queries from
+macOS powerlog are retained in `runs/m6p2b_seed0_host_context_v1/`, including
+parameterized SQL and extracted rows. Encoded core-performance residency changes
+near the onset: Channel 2 state 11 accounts for about 62% at 04:18:27, while
+state 1 accounts for 74% at 04:34:19. The encoded LostPerformance bucket 1 for
+cluster 1 / device 1 changes from absent or zero before 04:23 to an APWakeTime
+ratio of .824 during 04:23:15–04:33:15. These are undecoded state/bucket labels,
+not measured GHz or a CPU-performance-loss percentage. Their temporal resolution
+also spans several batches. All recorded CPMS power-reduction samples in the
+nearby window remain in the 0% bucket; no CPMS control-state event was recorded
+between 04:15 and 04:40. No verified frequency/state legend was recovered.
+These observations support investigating host-state changes but do not establish
+throttling, a solver-budget defect, or the historical failure mechanism.
 
 Using the original latest-checkpoint mtime and subtracting recorded tail-batch
 durations yields an **upper estimate** of 04:24:57.948 for index 503's start;
@@ -132,7 +144,12 @@ leaving long-process and historical host-state mechanisms unresolved.
 ## Checks, retained failures and next decision
 
 - New diagnostic unit tests: 7 passed; explicit script Ruff and mypy passed.
-- Full `make check`: running; final count and artifact receipt recorded at closure.
+- Full `make check`: passed, 3146 tests, 47 deselected, 429 warnings; pytest
+  elapsed 2294.49 s, command elapsed 2304.59 s. Zero failures/errors; all bound
+  source hashes unchanged. Results/XML/receipt are in
+  `runs/m6p2b_seed0_diagnosis_check_v1/`.
+- All six diagnostic/replay/analysis/host/check run receipts were reverified
+  against their files at closure; the failed v1 evidence was also verified.
 - v2 artifact receipt: 150 files verified immediately after completion.
 - `runs/m6p2b_seed0_analysis_v1/` contains machine-readable timing and all 24
   paired raw/exec differences.
