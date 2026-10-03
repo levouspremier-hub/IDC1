@@ -301,12 +301,13 @@ def historical_summary():
     return result
 
 
-def episode(folder, origin, mode, policy_path):
+def episode(folder, origin, mode, policy_path, *, policy=None):
     validate_case(origin, mode)
     folder.mkdir(parents=True, exist_ok=False)
     config = load_config()
     apply_frozen_thread_setting(config)
-    policy = load_policy(policy_path)
+    if policy is None:
+        policy = load_policy(policy_path)
     policy.eval()
     before = parameter_hash(policy)
     sources = semantics_binding()

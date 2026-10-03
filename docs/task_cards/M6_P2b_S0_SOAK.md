@@ -27,7 +27,7 @@ Rebuild environment and sampling RNG per episode; never reset within a trajector
 Record cycle/ordinal/PID, start/end time and parameters/source hashes.
 Host sample every 60 seconds and at episode boundaries: AC power, thermal state,
 process RSS/CPU, load and disk. Require AC at start; abort after the current episode
-on detected loss of AC, telemetry failure, <5 GiB free disk, or source/hash drift.
+on detected loss of AC, telemetry failure, changed power settings, <5 GiB free disk, or source/hash drift.
 An episode failure is retained and ends the shared loop after that full episode;
 replay its first failure snapshot in a fresh process, then perform post controls
 if host conditions remain valid. Any failed acceptance makes the run failed.
