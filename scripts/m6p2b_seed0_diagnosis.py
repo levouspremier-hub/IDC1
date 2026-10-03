@@ -347,6 +347,107 @@ def receipt(folder):
     dump(folder / "artifact_verification.json", {"hashes": hashes})
 
 
+def replay_capture(capture_path, output):
+    """Repeat identical causal input with observer off/on; never restore an env."""
+    from contracts.inventory import InventorySnapshot
+    from contracts.models import DispatchProposal
+    from planning.corrector import correct
+
+    verify_release()
+    capture = json.loads(capture_path.read_text())
+    assert_unchanged(CHECKPOINT_SHA, capture["source_checkpoint_sha256"], "capture source")
+    assert_unchanged(.25, capture["budget_s"], "capture budget")
+    snapshot = InventorySnapshot.model_validate(capture["snapshot"])
+    proposal = DispatchProposal.model_validate(capture["proposal"])
+    validate_case(int(snapshot.forecast.start), "deterministic")
+    forecast_evidence(snapshot)
+    output.mkdir(parents=True, exist_ok=False)
+    rows = []
+    for repeat in range(3):
+        results = []
+        for instrumented in (False, True):
+            observer = Observer(output)
+            context = observer.installed() if instrumented else contextlib.nullcontext()
+            with context:
+                started = time.perf_counter()
+                result = correct(snapshot, proposal, time_limit_s=.25)
+                elapsed = time.perf_counter() - started
+            results.append({
+                "instrumented": instrumented, "failure": str(result.failure),
+                "exec": [*result.exec_compute_actions, result.exec_storage_action],
+                "stage_a_status": result.stage_a_status,
+                "stage_b_status": result.stage_b_status,
+                "target_gap_kwh": result.inventory_audit.get("target_gap_kwh"),
+                "wall_s": elapsed, "timing": observer.current if instrumented else None,
+            })
+        left, right = results
+        difference = float(np.max(np.abs(np.array(left["exec"]) - right["exec"])))
+        rows.append({"origin": int(snapshot.forecast.start), "repeat": repeat,
+                     "pid": os.getpid(), "capture_path": str(capture_path.relative_to(ROOT)),
+                     "capture_sha256": sha(capture_path), "results": results,
+                     "max_exec_difference": difference,
+                     "equivalent": difference <= 1e-6 and all(left[k] == right[k] for k in (
+                         "failure", "stage_a_status", "stage_b_status", "target_gap_kwh"))})
+    dump(output / "replay.json", rows)
+    return rows
+
+
+def run_replays(run_id, source_run):
+    source = ROOT / "runs" / source_run
+    source_report = json.loads((source / "report.json").read_text())
+    if (len(source_report.get("episodes", [])) != 48
+            or json.loads((source / "manifest.json").read_text())["status"] != "success"):
+        raise ValueError("same-input replay requires completed baseline, including failed cases")
+    folder = ROOT / "runs" / run_id
+    if folder.exists():
+        raise FileExistsError("replay run exists")
+    config = {"scope": "same_input_solver_replay", "source_run": source_run,
+              "origins": list(ORIGINS),
+              "capture": "first fresh failure in mode order; otherwise deterministic initial",
+              "repeats": 3, "arms": ["fresh", "shared"], "observer": [False, True],
+              "solver_budget_s": .25, "parameter_updates": 0}
+    ledger = training_source_ledger({r["origin"]: r["injection_provenance"]
+                                     for r in source_report["episodes"]})
+    rows = []
+
+    def save(status, error=None):
+        write_run(run_id, config=config, report={"rows": rows, "failure": error,
+                  "all_equivalent": bool(rows) and all(r["equivalent"] for r in rows)},
+                  metrics=pd.DataFrame([{k: v for k, v in row.items() if k != "results"}
+                                        for row in rows]),
+                  status=status, failure_classification=error, base_dir=str(ROOT / "runs"),
+                  command=" ".join(sys.argv), **ledger)
+
+    save("running")
+    try:
+        for arm in ("fresh", "shared"):
+            for origin in ORIGINS:
+                capture = source / "fresh" / f"{origin}_deterministic" / "initial.json"
+                for mode in MODES:
+                    failed = source / "fresh" / f"{origin}_{mode}" / "first_failure.json"
+                    if failed.exists():
+                        capture = failed
+                        break
+                output = folder / arm / str(origin)
+                if arm == "fresh":
+                    subprocess.run([sys.executable, "-m", "scripts.m6p2b_seed0_diagnosis",
+                                    "--replay-worker", str(capture), "--replay-out", str(output)],
+                                   check=True, cwd=ROOT)
+                    result = json.loads((output / "replay.json").read_text())
+                else:
+                    result = replay_capture(capture, output)
+                rows.extend([{**r, "arm": arm} for r in result])
+                save("running")
+        if len(rows) != 36:
+            raise ValueError("incomplete replay")
+        save("success")
+    except BaseException as exc:
+        save("failed", f"{type(exc).__name__}: {exc}")
+        raise
+    finally:
+        receipt(folder)
+
+
 def run(run_id):
     folder = ROOT / "runs" / run_id
     if folder.exists():
@@ -415,8 +516,15 @@ def main():
     parser.add_argument("--origin", type=int)
     parser.add_argument("--mode", choices=MODES)
     parser.add_argument("--policy", type=Path)
+    parser.add_argument("--replay-worker", type=Path)
+    parser.add_argument("--replay-out", type=Path)
+    parser.add_argument("--replay-source-run")
     args = parser.parse_args()
-    if args.worker:
+    if args.replay_worker:
+        replay_capture(args.replay_worker, args.replay_out)
+    elif args.run_id and args.replay_source_run:
+        run_replays(args.run_id, args.replay_source_run)
+    elif args.worker:
         episode(args.worker, args.origin, args.mode, args.policy)
     elif args.run_id:
         run(args.run_id)
