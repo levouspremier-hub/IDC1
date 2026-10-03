@@ -55,3 +55,21 @@ receipt. Progress report is updated after each episode. Logs/large assets ignore
 Task-card commit is rollback point; use explicit revert for subsequent commits.
 Commit and push explicit files to existing origin branch; verify remote SHA.
 Remote baseline now synchronized by the machine-transfer task. No baseline merge.
+
+## Implementation checks and launch
+
+- `dd743bb`: registered card; `798a53f`: initial failing specifications
+  (collection failed because soak module was absent).
+- `0562eef`: implementation; 12 focused tests passed, Ruff and mypy passed.
+  Includes a mocked end-to-end orchestration check for retained policy identity,
+  duration boundary and both 24-case controls. No training semantics changed.
+- Remote origin branch SHA verified as `0562eef78eaea3b1264cfe08b842f016bb5f4961`
+  before launch. Baseline synchronization/authentication is now working.
+- Started 2026-10-03 23:38:53 Asia/Shanghai, detached Python PID 23796,
+  under `caffeinate -i -s`. Log: `runs/m6p2b_seed0_soak_v1.console.log`.
+  AC attached at launch; first fresh-before deterministic origin 5040 completed
+  with zero fallback and qualified service. Four-hour clock starts only after
+  all 24 pre-controls, not at launcher time. This is a launch record, not acceptance.
+- Thread heartbeat automation `seed-0` checks every 30 minutes, quiet while
+  normal; on completion it verifies artifacts/comparisons and records/pushes audit.
+  No timed source changes or heavy tests permitted while running.
