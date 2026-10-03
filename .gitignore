@@ -178,3 +178,9 @@ marl/**/*.pyc
 # Track multi-agent documentation
 !docs/MULTI_AGENT_ENV_INTERFACE_SPEC.md
 !docs/MULTI_AGENT_ENV_IMPLEMENTATION_REPORT.md
+
+# Project transfer index and historical root audit archive.
+!docs/PROJECT_TRANSFER.md
+!docs/archive/
+!docs/archive/2026-08-14/
+!docs/archive/2026-08-14/*.md
