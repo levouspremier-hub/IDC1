@@ -177,3 +177,11 @@ HTTPS push failed because no GitHub credential was available; SSH port 22 was
 closed. The GitHub connector also reported that baseline `23cf26c` was absent
 remotely. Local commits are retained; remote synchronization is **not complete**.
 No merge, history rewrite or force push was attempted.
+
+
+Git delivery follow-up (2026-10-03): browser-authorized GitHub CLI restored local
+authentication. The complete working branch was pushed successfully through
+`f6ea7bf`, and its remote SHA was verified against local HEAD. This supersedes
+the earlier credential blocker, without changing any diagnostic conclusion.
+Final housekeeping delivery and machine-transfer instructions are recorded in
+`docs/task_cards/M6_PROJECT_TRANSFER.md` and `docs/PROJECT_TRANSFER.md`.
