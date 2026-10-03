@@ -43,3 +43,69 @@ def test_parameter_mutation_detected():
         policy.weight.add_(1)
     with pytest.raises(ValueError, match="policy"):
         assert_unchanged(before, parameter_hash(policy), "policy")
+
+
+def test_failed_preflight_writes_complete_artifacts(tmp_path, monkeypatch):
+    import json
+
+    import scripts.m6p2b_seed0_diagnosis as diag
+
+    (tmp_path / "uv.lock").write_text("test dependency lock")
+    monkeypatch.setattr(diag, "ROOT", tmp_path)
+
+    def reject():
+        raise ValueError("release binding mismatch")
+
+    monkeypatch.setattr(diag, "verify_release", reject)
+    with pytest.raises(ValueError, match="binding mismatch"):
+        diag.run("failed_test")
+    folder = tmp_path / "runs/failed_test"
+    assert all((folder / name).exists() for name in (
+        "config.yaml", "metrics.parquet", "report.json", "figures", "manifest.json"))
+    assert json.loads((folder / "manifest.json").read_text())["status"] == "failed"
+    with pytest.raises(FileExistsError):
+        diag.run("failed_test")
+
+
+def test_observer_preserves_solver_options_and_separates_stages(tmp_path, monkeypatch):
+    import numpy as np
+    import scipy.optimize as optimize
+
+    import planning.corrector as corrector
+    from scripts.m6p2b_seed0_diagnosis import Observer
+
+    calls = []
+
+    def solver(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(status=0, message="optimal")
+
+    result = SimpleNamespace(failure_class="none", n_variables=1, n_constraints=1,
+                             n_integer_variables=0, inventory_audit={},
+                             stage_a_solve_time_s=0., stage_b_solve_time_s=0.)
+    first, second = {"time_limit": .19}, {"time_limit": .11}
+
+    def planner(snapshot, proposal, **kwargs):
+        c_off = np.ones(1)
+        c_econ = np.zeros(1)
+        optimize.milp(c=c_off, options=first)
+        optimize.milp(c=c_econ, options=second)
+        return result
+
+    monkeypatch.setattr(optimize, "milp", solver)
+    monkeypatch.setattr(corrector, "solve_time_indexed_mip_raw_projection", planner)
+    observer = Observer(tmp_path)
+    with observer.installed():
+        actual = corrector.solve_time_indexed_mip_raw_projection(None, None, time_limit_s=.25)
+    assert actual is result
+    assert calls[0]["options"] is first and calls[1]["options"] is second
+    assert [e["stage"] for e in observer.current["solver_calls"]] == ["A", "B"]
+    assert [e["passed_time_limit_s"] for e in observer.current["solver_calls"]] == [.19, .11]
+    assert optimize.milp is solver
+
+
+def test_checkpoint_hash_is_locked():
+    from scripts.m6p2b_seed0_diagnosis import CHECKPOINT_SHA
+
+    with pytest.raises(ValueError, match="checkpoint"):
+        assert_unchanged(CHECKPOINT_SHA, "0" * 64, "checkpoint")
