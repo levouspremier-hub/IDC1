@@ -73,3 +73,22 @@ Remote baseline now synchronized by the machine-transfer task. No baseline merge
 - Thread heartbeat automation `seed-0` checks every 30 minutes, quiet while
   normal; on completion it verifies artifacts/comparisons and records/pushes audit.
   No timed source changes or heavy tests permitted while running.
+
+## Closure: failed acceptance with captured evidence
+
+- Source run failed as preregistered after 2349.214 s shared time, 441 shared
+  episodes; no four-hour pass. Full 24 fresh-before and 24 fresh-after controls
+  passed. Total 489 episodes / 23472 steps; all artifacts retained.
+- Shared ordinal 440, origin 5136 deterministic: first timeout at step 13 in B,
+  after A optimal left .010782 s; B returned time limit. The same raw action,
+  SOC and task state were normal in the pre-control. This episode had 24 timeouts.
+- Captured first-failure snapshot: six fresh-process solver calls all normal.
+  All other 488 raw/exec trajectories exactly match their pre-control case.
+- All 1476 source receipt entries verified; parameter/checkpoint/bound and
+  diagnostic source hashes unchanged. Host samples all AC, stable settings,
+  no pmset thermal warning; transient resource or scheduling effects not excluded.
+- Read-only five-artifact audit: `runs/m6p2b_seed0_soak_audit_v1/`.
+  Detailed limits and next decision: `docs/audits/M6_P2b_S0_SOAK.md`.
+- Root cause of slowdown and historical batch 503 remain unresolved. No algorithm
+  repair, training, validation/test or new run was launched during closure.
+  Pause heartbeat after publishing this result; preserve original failure.
