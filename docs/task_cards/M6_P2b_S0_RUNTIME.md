@@ -85,3 +85,14 @@ used to replace the failed action or relabel its failure.
   labels are declared unreliable; original evidence is retained unchanged.
 - Audit docs/audits/M6_P2b_S0_RUNTIME.md records uncertainty and next protocol.
   No semantic repair or root-cause closure claimed; no training started.
+
+## Scheduling probe launch
+
+- Pushed/verified 5470177b6ce94547aa276abb25bb5d4e86684417 before launch.
+- 2026-10-04 12:57:56 Asia/Shanghai: detached caffeinate -i -s Python PID 6982,
+  run m6p2b_seed0_scheduling_v1; local log runs/m6p2b_seed0_scheduling_v1.console.log.
+- AC attached. First three fresh-before episodes passed without fallback.
+  Observer drift check includes scheduling script in addition to CPU observer/soak.
+- Automatic root-investigation follow-up seed-0 reactivated every 30 minutes;
+  quiet while normal, no concurrent heavy checks/source edits. Completion of this
+  launch does not satisfy the user's root-cause/repair goal.
