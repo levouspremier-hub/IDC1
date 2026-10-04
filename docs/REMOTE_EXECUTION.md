@@ -176,6 +176,6 @@ Ruff/mypy 通过，pytest 因冻结 PV 逐位比较失败及 pandas C CSV parser
 最终验收：host-portability-gate-v5（固定0311745）已成功结束，make check为
 3190 passed、0失败/错误（47个slow未纳入），额外slow真实数据重建通过，
 原始CSV生成的arrival模板与冻结cache逐位一致。全部产物已回到Mac并通过
-终态receipt逐文件验签。完整审计见docs/HOST_PORTABILITY_ACCEPTANCE_2026-10-04.md，
+终态receipt逐文件验签。完整审计见docs/dev_reports/HOST_PORTABILITY_ACCEPTANCE_2026-10-04.md，
 五类汇总在runs/m6_host_portability_v2/。现在可以按上述工具提交固定版本任务；
 正式训练仍需seed0诊断与训练闸门通过，Windows重启恢复与并发须单独验收。
