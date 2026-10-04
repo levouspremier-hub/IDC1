@@ -40,3 +40,26 @@ at runs/remote_seed0-host-isolation-v1; inner five artifacts and local/remote re
 Task-card commit is rollback point; ordinary explicit commits/push, verify SHA.
 No large outputs/checkpoints in Git. Execution isolation is a candidate mitigation,
 not an algorithm repair or completed user goal until required checks pass.
+
+## First preflight failure / bounded contract-only continuation
+
+Job seed0-host-isolation-v1, pinned 8a3f1f2, failed before policy export/load or
+any environment step: Linux local_pv_kw rebuild differs from frozen parquet in
+520 rows. Complete failed inner/outer artifacts transferred and verified.
+This is the existing cross-platform production-verifier issue; full-policy
+host qualification remains blocked. Do not bypass release/checkpoint validation.
+
+Allowed new scripts/m6p2b_seed0_capsule.py and tests/test_m6p2b_seed0_capsule.py:
+contract-only solver replay, no policy load/inference, no checkpoint binding claim.
+Authenticate original captured input by fixed SHA, original release ledger source
+and asset hashes, checkpoint file hash, train provenance and typed snapshot/proposal.
+Use existing sealed assets' midnight first-failure input (origin5136 step13), not
+new scheduling input absent from that asset set. Preserve original published
+solver settings/.25 budget. MAC 128 sequential solves then WSL single-slot 128
+solves, new run/job IDs seed0-capsule-isolation-v1. Match optimal exec to original
+six-call successful replay; record failures without relabeling and CPU/wall.
+This may qualify a captured physical solve, never final policy, full environment
+or formal training. A separate numerical-verifier/new-provenance decision is
+required before the full-policy probe can run; no source/assets relaxation here.
+Acceptance: new failing specification first; pytest capsule and observer tests,
+Ruff/mypy, strict input tamper rejection, five artifacts and full remote receipts.
