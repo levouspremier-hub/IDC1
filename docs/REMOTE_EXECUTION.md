@@ -12,7 +12,7 @@ Mac 现有长时零更新诊断继续运行，本次不操作其进程或绑定�
 > 已有 WSL2；先确认 Ubuntu 版本、Linux 用户名、systemd 状态、磁盘空间。
 > 仓库 https://github.com/levouspremier-hub/IDC1 ，工作分支
 > p5-eval-viz-m6-p2b-s0-diagnosis 。在 WSL Linux 文件系统内准备目录，不要放 /mnt/c。
-> 阅读该分支 docs/REMOTE_EXECUTION.md；安装 git、rsync、openssh-server、curl、
+> 阅读该分支 docs/REMOTE_EXECUTION.md；安装 make、git、rsync、openssh-server、curl、
 > uv 和 Python 3.12，以及 WSL 内的 Tailscale。需要管理员密码或网页登录时由我操作，
 > 不读取/展示密码、token、私钥。启用普通 SSH 服务，通过 Tailscale 地址连接，
 > 不对公网路由器开放 22 端口。保留现有 SSH 设置和 authorized_keys。
@@ -35,7 +35,7 @@ Ubuntu：
 
 ```sh
 sudo apt-get update
-sudo apt-get install -y git rsync openssh-server curl ca-certificates
+sudo apt-get install -y make git rsync openssh-server curl ca-certificates
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ~/.local/bin/uv python install 3.12
 sudo systemctl enable --now ssh

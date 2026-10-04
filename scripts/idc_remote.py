@@ -296,6 +296,12 @@ def gather_runs(job):
             shutil.move(str(p), target / p.name)
 
 
+def task_environment(uv, output, job_id, revision):
+    return {**os.environ, 'PATH': str(Path(uv).parent) + os.pathsep
+            + os.environ.get('PATH', ''), 'IDC_JOB_OUTPUT': str(output),
+            'IDC_JOB_ID': job_id, 'IDC_JOB_REVISION': revision}
+
+
 def worker(base, job_id):
     import fcntl
     job = base / 'jobs' / job_id
@@ -337,8 +343,7 @@ def worker(base, job_id):
             run([uv, 'sync', '--frozen'], cwd=work, stdout=log, stderr=log)
             dump(output / 'remote_status.json', {**request, 'state': 'running'})
             dump(output / 'request.json', request)
-            task_env = {**os.environ, 'IDC_JOB_OUTPUT': str(output),
-                        'IDC_JOB_ID': job_id, 'IDC_JOB_REVISION': request['revision']}
+            task_env = task_environment(uv, output, job_id, request['revision'])
             code = subprocess.call([uv, 'run', '--frozen', *request['argv']], cwd=work,
                                    stdout=log, stderr=log, env=task_env)
             state = 'succeeded' if code == 0 else 'failed'

@@ -218,8 +218,15 @@ def test_real_rsync_returns_checkpoint_and_replaces_same_size_corruption(tmp_pat
 
 def test_noninteractive_task_path_contains_resolved_uv_directory(tmp_path, monkeypatch):
     monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    import subprocess
+
     uv = tmp_path / 'user-local/bin/uv'
+    uv.parent.mkdir(parents=True)
+    uv.write_text("#!/bin/sh\nprintf 'fixture-uv\\n'\n")
+    uv.chmod(0o755)
     env = remote.task_environment(str(uv), tmp_path, 'job', 'a' * 40)
+    assert subprocess.check_output(['sh', '-c', 'uv --version'], env=env,
+                                   text=True).strip() == 'fixture-uv'
     assert env['PATH'].split(':')[0] == str(uv.parent)
     assert env['IDC_JOB_ID'] == 'job'
     assert env['IDC_JOB_REVISION'] == 'a' * 40
