@@ -214,3 +214,13 @@ def test_real_rsync_returns_checkpoint_and_replaces_same_size_corruption(tmp_pat
     remote.rsync(str(source) + '/', str(target) + '/')
     remote.verify_receipt(target, remote.read(target / 'receipt.json'))
     assert checkpoint.read_bytes() == b'correct'
+
+
+def test_noninteractive_task_path_contains_resolved_uv_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv('PATH', '/usr/bin:/bin')
+    uv = tmp_path / 'user-local/bin/uv'
+    env = remote.task_environment(str(uv), tmp_path, 'job', 'a' * 40)
+    assert env['PATH'].split(':')[0] == str(uv.parent)
+    assert env['IDC_JOB_ID'] == 'job'
+    assert env['IDC_JOB_REVISION'] == 'a' * 40
+    assert env['IDC_JOB_OUTPUT'] == str(tmp_path)
