@@ -25,3 +25,13 @@ SSH 公钥本机文件及指纹（允许发送主机追加 authorized_keys），
 - 未启动任何远端训练、诊断或完整检查；未改源、锁文件、模型及预算。
 
 - 更新：用户已完成 Mac Tailscale 权限与同一网络登录；客户端 Connected、主机在线。主机 ED25519 实测指纹与用户给定值完全一致，已钉扎 known_hosts。SSH BatchMode 到达认证阶段，但返回 Permission denied (publickey,password)，仍待主机追加/核对 Mac 公钥及 authorized_keys 权限。运行状态更新为 waiting_remote_public_key；没有启动远端任务。
+
+## 首次真实联机结果 / 待补 make
+
+- SSH BatchMode 实际通过，doctor 通过；项目 Python3.12 可用，主机32逻辑CPU与充足空间。
+- 资产集 5005eb32bc2b9971c3153d3d6be0999039572bfa25694fcadffef4af9fce7eed：3686文件已双端验签。
+- host-transfer-ok-v1 exit0 与 host-transfer-fail-v1 预定 exit7 完整自动回传，分别13个文件验签，均保留约1.25MB payload与内外层运行证据，SSH会话结束后工作进程仍能完成。
+- host-check-v1 exit127：make未安装，未进入测试；8个文件完整自动回传验签。原失败保留，不覆盖。
+- 实测非交互 SSH make/uv 均不在 PATH：uv有 ~/.local/bin/uv 实体，make缺包。返修范围已在 M6_REMOTE_EXECUTION 登记，失败规格 1ac1bbd、修复 c12aa45；12项本地runner测试+Ruff+mypy通过，证据 runs/m6_remote_path_repair_v1/；25个正式源绑定未变。
+- 修复已普通推送并经 doctor 部署；待主机交互认证安装 make，随后新 job host-check-v2 完整复测。sudo -n 拒绝交互认证，未尝试取得密码或放松sudo安全设置。
+- runs/m6_remote_connect_v1/ 状态 waiting_host_make_install；链路验收部分通过，完整工程检查未通过，不宣称训练准备完成。未启动正式训练、held-out或诊断。
