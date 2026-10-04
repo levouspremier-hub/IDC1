@@ -166,3 +166,9 @@ Ruff/mypy 通过，pytest 因冻结 PV 逐位比较失败及 pandas C CSV parser
 三项新任务均已全部回传验签。当前待解决跨平台测试问题，不能据此启动正式训练。
 
 跨平台修复已见 docs/task_cards/M6_HOST_PORTABILITY.md：保留原冻结文件与checkpoint绑定，注册生成配方与新验证器版本分别核验。本地120项相关回归和全链静态检查通过；当前主机离线，修复后的WSL完整门禁仍待恢复连接后以新任务验收。
+
+主机恢复后的最新进展：映射器的source_revision级联校验已按原完整配方修复；
+固定0311745的WSL针对性76项全部通过并完整回传验签。host-portability-gate-v5
+正在执行完整make check及slow数据重建；终态见runs/m6_host_portability_v2。
+这些平台修复不改变正式checkpoint的25项源码绑定、依赖锁或求解预算；
+旧失败和原final模型保留。正式训练及Windows重启恢复仍需各自验收。

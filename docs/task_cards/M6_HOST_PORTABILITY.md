@@ -35,3 +35,10 @@ v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源�
 
 ## M54g 选项接线夹具稳定性
 原测试 test_both_raw_projection_stages_use_deterministic_mip_options 在 v4 主机和本机针对性复测均真实 timeout；这是要求较大随机实例必须在0.05s完成的夹具脆弱性，不据此认定正式0.25s预算失效。允许仅修改该测试，复用 tests/test_m44_corrector.py 的两个任务、两个组、24步合成 snapshot，保留真实 correct()/milp、A/B至少两次、确定性选项断言与原0.05s预算；其余复杂实例及跨进程slow保持原样，不改生产代码/物理约束/任务状态。先留存原失败，新的针对性和完整门禁验证。回滚986d19a。
+
+## 主机恢复后的针对性证据
+- v4 完整失败产物已全部回传验签：2963 passed、206 failed、20 errors；映射器修复先87359bc失败规格、再986d19a实现。mapper 原完整 SOURCE_PATHS 与容量源 task_model 保持不变。
+- host-portability-focused-v1：64 passed、1 failed，唯一失败为原M54g大随机夹具timeout，未执行后续项；原XML和全部产物保留。
+- 0311745只替换真实A/B选项接线测试的输入夹具为已有两任务合成snapshot，0.05s预算、真实milp调用和>=2阶段断言保留，生产代码及其余复杂/slow测试不变。
+- host-portability-focused-v2（03117453b317b29e96889bbd096e65bb99d3aec6）：76 tests、0 failures/errors；全部回传验签。Mac mapper/portable为64项通过，选项测试12项通过。25个正式checkpoint绑定源与uv.lock对9b7b59a逐字节不变。
+- host-portability-gate-v5固定同一0311745，单槽运行完整make check、slow真实数据重建及CSV冻结模板逐位复核，Ruff/mypy已通过；其终态以新审计runs/m6_host_portability_v2为准，不把针对性通过当作完整门禁完成。
