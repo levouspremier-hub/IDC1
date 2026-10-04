@@ -228,14 +228,18 @@ def test_pv_is_positive_at_some_daytime_steps(frame):
 
 
 def assert_frozen_pv_agreement(actual, expected):
+    assert_frozen_power_agreement(actual, expected, PV_CAPACITY_KW)
+
+
+def assert_frozen_power_agreement(actual, expected, physical_scale_kw):
     assert actual.shape == expected.shape
     assert np.isfinite(actual).all() and np.isfinite(expected).all()
     # libm implementations differ across arm64/macOS and x86_64/Linux.
     # Bound only cross-platform roundoff to eight float64 eps at the frozen
-    # 500 kW physical scale (8.89e-13 kW), with no relative tolerance.
+    # physical scale (PV 500 kW, wind 800 kW), with no relative tolerance.
     assert np.array_equal(actual == 0., expected == 0.)
     np.testing.assert_allclose(actual, expected, rtol=0.,
-                               atol=8 * np.finfo(np.float64).eps * PV_CAPACITY_KW)
+                               atol=8 * np.finfo(np.float64).eps * physical_scale_kw)
 
 
 def test_pv_chain_is_deterministic_and_matches_the_frozen_parameters(frame, pv_inputs):
@@ -668,6 +672,8 @@ def test_real_inputs_rematerialize_identically():
         expected = frame[column].to_numpy()
         if column == "local_pv_kw":
             assert_frozen_pv_agreement(actual, expected)
+        elif column == "wind_generation_kw":
+            assert_frozen_power_agreement(actual, expected, RATED_CAPACITY_KW)
         else:
             assert np.array_equal(actual, expected), column
 
