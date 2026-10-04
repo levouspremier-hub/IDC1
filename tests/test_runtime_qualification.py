@@ -104,3 +104,22 @@ def test_qualification_stops_after_three_failed_budgets_without_training(monkeyp
     assert not any('safe_rl_v2.inventory_train' in c for c in calls)
     assert saves[-1][3]['formal_training_ready'] is False
     assert saves[-1][3]['selected_budget_s'] is None
+
+
+def test_positive_clipped_ratio_overflow_has_zero_finite_actor_gradient():
+    import torch
+    from safe_rl_v2.ppo_objective import ppo_clipped_actor_objective
+    class Policy:
+        value = torch.tensor([0.], requires_grad=True)
+        def evaluate_raw_actions(self, observation, raw_action):
+            return self.value
+    policy = Policy()
+    out = ppo_clipped_actor_objective(
+        policy, observation=torch.zeros((1, 523)), raw_action=torch.zeros((1, 21)),
+        old_raw_log_prob=torch.tensor([-1e30]), adv_reward=torch.tensor([2.]),
+        adv_business=torch.zeros(1), adv_carbon=torch.zeros(1),
+        lambda_business=0., lambda_carbon=0., clip_epsilon=.2)
+    assert out['loss'].item() == pytest.approx(-2.4)
+    out['loss'].backward()
+    assert torch.isfinite(policy.value.grad).all()
+    assert policy.value.grad.item() == 0.
