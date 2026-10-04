@@ -42,3 +42,7 @@ v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源�
 - 0311745只替换真实A/B选项接线测试的输入夹具为已有两任务合成snapshot，0.05s预算、真实milp调用和>=2阶段断言保留，生产代码及其余复杂/slow测试不变。
 - host-portability-focused-v2（03117453b317b29e96889bbd096e65bb99d3aec6）：76 tests、0 failures/errors；全部回传验签。Mac mapper/portable为64项通过，选项测试12项通过。25个正式checkpoint绑定源与uv.lock对9b7b59a逐字节不变。
 - host-portability-gate-v5固定同一0311745，单槽运行完整make check、slow真实数据重建及CSV冻结模板逐位复核，Ruff/mypy已通过；其终态以新审计runs/m6_host_portability_v2为准，不把针对性通过当作完整门禁完成。
+
+## 最终验收（2026-10-04）
+host-portability-gate-v5 固定03117453b317b29e96889bbd096e65bb99d3aec6，终态 succeeded / exit0。Ruff、mypy（194源）与 make check 全部通过：3190 passed、47 slow deselected、0 failures/errors，pytest耗时2472.19s。额外slow真实数据重建1项通过；真实CSV生成arrival template与原冻结cache逐位一致。全部产物回到runs/remote_host-portability-gate-v5/，终态local_transfer_receipt all_files_verified=true；失败v4和focused-v1亦全部保留验签。runs/m6_host_portability_v2/已写齐五类产物及receipt，25个checkpoint绑定源码和锁再次对9b7b59a逐字节核对一致。
+这仅完成平台工程门禁和传输链验收；未启动正式训练/seed1/2/held-out，不构成seed0历史突变根因或长期训练故障已排除的证明。Windows重启恢复和扩大并发仍未实测。精简审计见docs/HOST_PORTABILITY_ACCEPTANCE_2026-10-04.md。
