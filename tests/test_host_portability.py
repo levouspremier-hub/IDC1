@@ -95,3 +95,13 @@ def test_portable_verifier_dirty_source_is_rejected(monkeypatch):
     monkeypatch.setattr(b6, '_git', git)
     with pytest.raises(b6.B6ExogenousError, match='portable.*未提交'):
         b6.load_verified_v3_bundle()
+
+
+def test_downstream_recipe_revisions_stay_anchored_for_verifier_only_changes():
+    from scenario.b6_refs import refs_code_revision
+    from scenario.b6_split_manifests import resolve_materializer_revision
+    from scenario.formal_scenario_b6 import b6_formal_code_revision
+
+    assert refs_code_revision() == '577f1db4d5ca78553aa1be866f643ebeb7e8cb13'
+    assert resolve_materializer_revision() == '577f1db4d5ca78553aa1be866f643ebeb7e8cb13'
+    assert b6_formal_code_revision() == '626f97f3cbd13082e14197028dd62d356b8e54e4'
