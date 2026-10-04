@@ -75,8 +75,14 @@ class _Spy:
 # --- 1. 运行时证明：两阶段都走 deterministic_mip_options ---------------------
 
 def test_both_raw_projection_stages_use_deterministic_mip_options(monkeypatch):
+    # This wiring assertion requires real A/B solves, rather than performance of
+    # a random 20-group instance. Keep its original shared 0.05s budget; the
+    # other tests and the cross-process probe retain the original large case.
+    from tests.test_m44_corrector import _snapshot
+
     spy = _Spy(monkeypatch)
-    snapshot, proposal = _snapshot_and_proposal()
+    snapshot = _snapshot()
+    proposal = DispatchProposal(compute_actions=[0.5, 0.5], storage_action=0.3)
 
     correction = correct(snapshot, proposal, time_limit_s=NORMAL_BUDGET_S)
     assert str(correction.failure) == "none", (
