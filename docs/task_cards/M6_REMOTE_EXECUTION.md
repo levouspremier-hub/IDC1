@@ -33,3 +33,5 @@
 ## 发布预检查返修
 
 host-check-v2 在取 Git SHA 时失败：本机新任务卡 c20e8f5 尚未推送，远端 not our ref；未进入测试。保留失败产物。允许提交前 fetch/核对 requested revision 是否在 origin 实际已发布 heads 的祖先中，拒绝未发布 SHA，禁止创建远端任务；不自动提交或推送用户未提交内容。新增失败回归后实现，原层边界不变，回滚点 c20e8f5。
+
+验收：584c4d6 先提交两项 AttributeError 失败规格；c1f14e5 实现，14 项 runner 测试、Ruff/mypy/diff-check 通过。精简机器证据 runs/m6_remote_publication_preflight_v1/，25 个正式绑定源未变。已推送并核对 origin SHA。真实 host-check-v3 受 WSL GitHub TLS/连接超时阻塞，保留失败并回传；不将网络阻塞计为工程门禁通过。

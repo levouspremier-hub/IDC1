@@ -103,6 +103,8 @@ python3 -m scripts.idc_remote seed
 ## 日常启动、查看和全部回传
 
 先 commit/push；每个 job 名字唯一，禁止复用，HEAD 会解析为完整 SHA。
+提交前会 fetch origin，并核对指定 SHA 是否属于 GitHub 当前已发布分支的历史。
+尚未推送的版本会在创建主机任务之前被拒绝；历史已发布版本仍可指定。
 先做联机检查，正式训练仍待单独授权：
 
 ```sh
@@ -140,7 +142,7 @@ Mac 重启或手动终止 watcher 后重新 `watch <job>` 即可恢复；没有�
 metrics_unavailable.json，不能伪造五类产物齐全。主机进程消失标记 interrupted，
 保留可恢复产物，不自动重跑。输出 symlink 不回传目标内容，记录传输失败。
 
-## 首次联机验收（尚待主机连接信息）
+## 首次联机验收
 
 1. Mac→WSL SSH、doctor、资产全量验签。
 2. 提交 check；确认 Mac SSH 断开后主机继续，排队不重叠。
@@ -150,3 +152,10 @@ metrics_unavailable.json，不能伪造五类产物齐全。主机进程消失�
 
 本地已用临时 Git 仓库/假 uv 验证 detached 子进程、单槽队列、固定 SHA、失败
 checkpoint 保留及五类外层产物。它不等于真实 Windows/WSL/网络/依赖验收。
+
+2026-10-04 实测：SSH、doctor、3686 个资产文件验签、成功/失败任务自动全部回传
+均通过，make 4.4.1 已安装。host-check-v1 缺 make、v2 未发布 SHA、v3 主机
+GitHub HTTPS TLS 中断均保留失败产物；三次都未进入 pytest，完整门禁仍待通过。
+WSL IPv4 访问 GitHub 独立检查连接超时。需先恢复主机 GitHub HTTPS，再使用
+新 job-id 运行 make check；不关闭 TLS 校验、不修改依赖锁或求解预算。
+Mac 断网重试与 Windows 重启恢复仍未实测，不据此宣称正式训练准备完成。

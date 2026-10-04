@@ -35,3 +35,9 @@ SSH 公钥本机文件及指纹（允许发送主机追加 authorized_keys），
 - 实测非交互 SSH make/uv 均不在 PATH：uv有 ~/.local/bin/uv 实体，make缺包。返修范围已在 M6_REMOTE_EXECUTION 登记，失败规格 1ac1bbd、修复 c12aa45；12项本地runner测试+Ruff+mypy通过，证据 runs/m6_remote_path_repair_v1/；25个正式源绑定未变。
 - 修复已普通推送并经 doctor 部署；待主机交互认证安装 make，随后新 job host-check-v2 完整复测。sudo -n 拒绝交互认证，未尝试取得密码或放松sudo安全设置。
 - runs/m6_remote_connect_v1/ 状态 waiting_host_make_install；链路验收部分通过，完整工程检查未通过，不宣称训练准备完成。未启动正式训练、held-out或诊断。
+
+## 安装 make 后的复测 / GitHub 网络阻塞
+
+- GNU Make 4.4.1 实测可用。host-check-v2 请求未发布 c20e8f5，GitHub not our ref，未进入测试；完整回传验签。提交入口已补已发布历史预检查（584c4d6 失败规格、c1f14e5 修复），14 项 runner 测试、Ruff/mypy 通过；证据 runs/m6_remote_publication_preflight_v1/，25 个正式绑定源与 c12aa45 一致。
+- c1f14e5 完整 SHA 已普通推送并与 origin 分支 SHA 核对一致；doctor 已部署。host-check-v3 请求该 SHA，在主机 fetch 阶段遇 GnuTLS recv error (-110)，未进入测试；失败产物及 receipt 已完整回传验签。独立 WSL IPv4 curl GitHub 连接 8 秒超时，SSH/回传正常。
+- runs/m6_remote_connect_v1/ 更新为 waiting_host_github_network。需修复 WSL GitHub HTTPS，再用新 job-id 完整门禁；保留三次失败。未改算法、发布配置、预算或 checkpoint；未启动正式训练、held-out 或诊断。
