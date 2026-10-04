@@ -32,3 +32,6 @@ v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源�
 
 ## 到达映射器级联修复
 主机恢复后 v4 完整门禁：2963 passed、206 failed、20 errors，主要因 arrival_mapper 的完整 SOURCE_PATHS 覆盖前述验证器，导致 source_revision 漂移。扩大允许范围至 scenario/arrival_mapper.py::mapper_code_revision 和 portable_numeric 的注册消费者表；保留完整路径、dirty 校验和全部任务映射逻辑，仅在完整配方与原注册 a806599080bfd43796ba3c2ad696a19e2ba28f42 等价时保留原 stamp。先提交失败回归，针对性测试后再完整主机验收。另有 M54g 0.05 秒真实求解夹具 timeout，独立按原预算复测，不扩大预算。回滚点 b502fe2744a21350a78a210f555f7b923e45c689。
+
+## M54g 选项接线夹具稳定性
+原测试 test_both_raw_projection_stages_use_deterministic_mip_options 在 v4 主机和本机针对性复测均真实 timeout；这是要求较大随机实例必须在0.05s完成的夹具脆弱性，不据此认定正式0.25s预算失效。允许仅修改该测试，复用 tests/test_m44_corrector.py 的两个任务、两个组、24步合成 snapshot，保留真实 correct()/milp、A/B至少两次、确定性选项断言与原0.05s预算；其余复杂实例及跨进程slow保持原样，不改生产代码/物理约束/任务状态。先留存原失败，新的针对性和完整门禁验证。回滚986d19a。
