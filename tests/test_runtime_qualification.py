@@ -69,6 +69,7 @@ def test_cold_input_uses_factory_validation_without_duplicate_outer_chain(monkey
 
 def test_strict_recording_keeps_original_failure_and_partial_records(monkeypatch):
     import numpy as np
+
     from safe_rl_v2.inventory_diagnostics import RecordingWrapper
     from tests.test_m51b_rollout_collection import make_env
     env = make_env(horizon=2)
@@ -82,3 +83,24 @@ def test_strict_recording_keeps_original_failure_and_partial_records(monkeypatch
         wrapped.step(np.zeros(21))
     assert wrapped.failure is error
     assert wrapped.records == []
+
+
+def test_qualification_stops_after_three_failed_budgets_without_training(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from scripts import runtime_qualification as q
+    monkeypatch.setattr(q, 'ROOT', tmp_path)
+    monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': p}})
+    monkeypatch.setattr(q, 'sha', lambda p: 'test-hash')
+    saves, calls = [], []
+    monkeypatch.setattr(q, 'save', lambda *a, **kw: saves.append(a))
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=1 if 'diagnose' in argv else 0)
+    monkeypatch.setattr(q.subprocess, 'run', run)
+    (tmp_path / 'runs').mkdir()
+    assert q.qualify('qualify', [.25, .5, 1.]) == 1
+    assert len(calls) == 5
+    assert not any('safe_rl_v2.inventory_train' in c for c in calls)
+    assert saves[-1][3]['formal_training_ready'] is False
+    assert saves[-1][3]['selected_budget_s'] is None

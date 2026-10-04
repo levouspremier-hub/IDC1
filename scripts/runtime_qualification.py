@@ -58,7 +58,7 @@ def save(run_id, candidate, rows, report, status, error=None):
         failure_classification=error, command=' '.join(sys.argv),
         dependency_lock_hash=sha(ROOT / 'uv.lock'),
         data_hash=sha(ROOT / 'data/processed/singapore_2024/half_hour.parquet'),
-        scenario_hash=sha(ROOT / 'configs/training/idc_training_config_v2_r5.json'))
+        scenario_hash=sha(ROOT / 'data/manifest/formal_splits_v5/train.json'))
 
 
 def episode(folder, candidate, origin, mode, policy=None):
@@ -77,19 +77,28 @@ def episode(folder, candidate, origin, mode, policy=None):
             tensor = torch.as_tensor(obs, dtype=torch.float32)
             if mode == 'deterministic':
                 from evaluation.controlled_run import deterministic_action
-                return deterministic_action(policy, obs)
-            raw, _, _ = policy.act(tensor, generator)
+                raw = torch.as_tensor(deterministic_action(policy, obs))
+                logp = policy.evaluate_raw_actions(tensor, raw)
+            else:
+                raw, logp, _ = policy.act(tensor, generator)
+            action_records.append({'observation': np.asarray(obs).tolist(),
+                                   'a_raw': raw.tolist(), 'old_raw_log_prob': float(logp)})
+            if not torch.isfinite(raw).all() or not torch.isfinite(logp).all():
+                raise ValueError('nonfinite diagnostic raw action/log probability')
             return raw.cpu().numpy().astype(np.float32)
 
     started = time.perf_counter()
+    action_records = []
     try:
         with warnings.catch_warnings(), torch.inference_mode():
             warnings.simplefilter('ignore', RuntimeWarning)
-            result, rows, _, _ = evaluate_origin(config, origin, 0, action, run_id=folder.name)
+            result, rows, _, _ = evaluate_origin(
+                config, origin, 0, action, run_id=folder.name, strict=True)
         with (folder / 'steps.jsonl').open('w') as stream:
             from scripts.m6p2b_seed0_diagnosis import jsonable
             for row in rows:
                 stream.write(json.dumps(jsonable(row), allow_nan=False) + '\n')
+        dump(folder / 'raw_actions.json', action_records)
         result.update(mode=mode, pid=os.getpid(), elapsed_s=time.perf_counter()-started,
                       parameter_hash_before=before, parameter_hash_after=parameter_hash(policy),
                       parameter_updates=0, budget_s=config['runtime_budget_s'])
@@ -104,6 +113,7 @@ def episode(folder, candidate, origin, mode, policy=None):
     except Exception as exc:
         dump(folder / 'failure.json', {'reason': str(exc),
              'evidence': getattr(exc, 'evidence', {}), 'origin': origin, 'mode': mode,
+             'raw_actions': action_records,
              'budget_s': config['runtime_budget_s'], 'parameter_hash_before': before,
              'parameter_hash_after': parameter_hash(policy)})
         raise
@@ -213,10 +223,208 @@ def diagnose(run_id, path, *, soak=False):
         return 1
 
 
+def gate(run_id, path):
+    candidate = verify_candidate(path)
+    folder = ROOT / 'runs' / run_id
+    folder.mkdir(exist_ok=False)
+    report = {'train_only': True, 'candidate_sha256': sha(path), 'passed': False,
+              'formal_training_ready': False}
+    save(run_id, candidate, [], report, 'running')
+    with (folder / 'make_check.log').open('w') as log:
+        result = subprocess.run(['make', 'check'], cwd=ROOT, stdout=log, stderr=log,
+                                env={**os.environ, 'PYTEST_ADDOPTS':
+                                     '--junitxml=' + str(folder / 'pytest.xml')})
+    verify_candidate(path)
+    report.update(passed=result.returncode == 0, exit_code=result.returncode)
+    save(run_id, candidate, [], report, 'success' if report['passed'] else 'failed',
+         None if report['passed'] else 'make check failed')
+    return result.returncode
+
+
+def _same_state(a, b):
+    if torch.is_tensor(a):
+        return torch.is_tensor(b) and torch.equal(a, b)
+    if isinstance(a, dict):
+        return isinstance(b, dict) and set(a) == set(b) and all(
+            _same_state(a[k], b[k]) for k in a)
+    if isinstance(a, (tuple, list)):
+        return type(a) is type(b) and len(a) == len(b) and all(
+            _same_state(x, y) for x, y in zip(a, b, strict=True))
+    return a == b
+
+
+def resume_audit(run_id, path):
+    # Controlled boundary failures; real unchanged 4x48 collection/PPO between them.
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from checkpointing.versioned import read_checkpoint_payload
+    from safe_rl_v2 import inventory_train as entry
+    from safe_rl_v2.controlled_formal_train import _generators
+    from safe_rl_v2.formal_train_loop import (
+        build_lagrangian,
+        build_optimizer,
+        load_resume_checkpoint,
+    )
+    candidate = verify_candidate(path)
+    config = candidate['config']
+    apply_frozen_thread_setting(config)
+    folder = ROOT / 'runs' / run_id
+    folder.mkdir(exist_ok=False)
+    rows = []
+    report = {'candidate_sha256': sha(path), 'train_only': True, 'passed': False,
+              'formal_training_ready': False, 'failures': 'controlled boundary stop',
+              'workload': 'two real batches, each 4 episodes x 48 steps; frozen PPO'}
+    save(run_id, candidate, rows, report, 'running')
+    real_batch = entry.run_training_batch
+    previous = None
+    try:
+        for boundary in (0, 1, 2):
+            child_id = run_id + f'_boundary_{boundary}'
+            def batch(*args, audit_boundary=boundary, **kwargs):
+                if kwargs['batch_index'] == audit_boundary:
+                    raise RuntimeError('controlled recovery audit boundary stop')
+                return real_batch(*args, **kwargs)
+            args = SimpleNamespace(short=True, seed=0, seed0_formal=False, run_id=child_id,
+                                   resume_from=None if previous is None else str(previous),
+                                   runtime_candidate=str(path))
+            with patch.object(entry, 'run_training_batch', batch):
+                if entry.run(args) != 1:
+                    raise ValueError('controlled failure did not stop')
+            child = ROOT / 'runs' / child_id
+            failed = json.loads((child / 'failed_batch.json').read_text())
+            if failed['reason'] != 'controlled recovery audit boundary stop':
+                raise ValueError('unexpected real failure during resume audit')
+            checkpoint = child / 'checkpoint_before_batch.pt'
+            state = read_checkpoint_payload(checkpoint)['state']
+            policy = build_seeded_policy(config, obs_dim=523, seed=0)
+            optimizer = build_optimizer(config, policy)
+            lag = build_lagrangian(config)
+            sampling, shuffle = _generators(0)
+            restored = load_resume_checkpoint(
+                checkpoint, policy=policy, optimizer=optimizer, lagrangian=lag,
+                sampling_generator=sampling, shuffle_generator=shuffle, config=config,
+                expected_obs_dim=523, expected_schema=SHORT_SCHEMA,
+                expected_scope='controlled_short_run', expected_role='controlled_training_resume')
+            checks = {'cursor': restored['next_batch_index'] == boundary,
+                      'policy': _same_state(policy.state_dict(), state['policy']),
+                      'adam': _same_state(optimizer.state_dict(), state['optimizer']),
+                      'multipliers': _same_state(lag.state_dict(), state['lagrangian']),
+                      'sampling_rng': torch.equal(
+                          sampling.get_state(), state['sampling_generator']),
+                      'shuffle_rng': torch.equal(shuffle.get_state(), state['shuffle_generator']),
+                      'dates': restored['origins'] == state['origins'],
+                      'ledger': restored['origin_provenance'] == {
+                          int(k): v for k, v in state['origin_provenance'].items()}}
+            if not all(checks.values()):
+                raise ValueError('restored batch boundary differs')
+            rows.append({'boundary': boundary, 'run_id': child_id, 'checks': checks,
+                         'checkpoint_sha256': sha(checkpoint),
+                         'adam_steps': failed['adam_steps_at_failure'],
+                         'multiplier_updates': failed['multiplier_updates_at_failure']})
+            previous = checkpoint
+        if [r['adam_steps'] for r in rows] != [0, 16, 32] or [
+                r['multiplier_updates'] for r in rows] != [0, 1, 2]:
+            raise ValueError('updates jumped across explicit recovery')
+        verify_candidate(path)
+        report.update(passed=True, boundaries=rows, explicit_new_run_ids=True)
+        save(run_id, candidate, rows, report, 'success')
+        return 0
+    except Exception as exc:
+        report['boundaries'] = rows
+        save(run_id, candidate, rows, report, 'failed', str(exc))
+        return 1
+
+
+def short_run_qualified(folder, path):
+    from safe_rl_v2.inventory_train import verify_written_run
+    from scenario.runtime_release import candidate_binding
+    report = verify_written_run(folder, candidate_binding(path))
+    return (report['batches'] == 8 and report['transitions'] == 1536
+            and report['adam_steps'] == 128 and report['lagrangian_updates'] == 8
+            and len(report['inventory_episodes']) == 32
+            and all(all(inventory_episode_acceptance(e).values())
+                    and e['target_qualified'] is True for e in report['inventory_episodes'])
+            and all(b['zero_action_fallback_steps'] == 0
+                    for b in report['batch_records']))
+
+
+def qualify(run_id, paths):
+    candidates = [verify_candidate(path) for path in paths]
+    if [c['config']['runtime_budget_s'] for c in candidates] != list(BUDGETS):
+        raise ValueError('qualification must preregister exactly .25/.50/1.00 in order')
+    folder = ROOT / 'runs' / run_id
+    folder.mkdir(exist_ok=False)
+    rows = []
+    report = {'passed': False, 'train_only': True, 'formal_training_ready': False,
+              'attempts': rows, 'formal_512_started': False}
+    save(run_id, {'candidates': candidates}, [], report, 'running')
+    selected = None
+    try:
+        report['preflight'] = []
+        for action in ('gate', 'resume-audit'):
+            child = run_id + '_' + action.replace('-', '_')
+            status = subprocess.run([sys.executable, '-m', 'scripts.runtime_qualification',
+                action, '--candidate', str(paths[0]), '--run-id', child], cwd=ROOT).returncode
+            report['preflight'].append({'action': action, 'run_id': child, 'exit_code': status})
+            save(run_id, {'candidates': candidates}, [], report, 'running')
+            if status != 0:
+                raise ValueError('qualification preflight failed: ' + action)
+        for path, candidate in zip(paths, candidates, strict=True):
+            budget = candidate['config']['runtime_budget_s']
+            label = str(round(budget*100)).zfill(3)
+            attempt = {'budget_s': budget, 'candidate_sha256': sha(path), 'passed': False,
+                       'phases': []}
+            rows.append(attempt)
+            def phase(action, suffix, phase_label=label, phase_path=path, phase_attempt=attempt):
+                child = run_id + '_' + phase_label + '_' + suffix
+                status = subprocess.run([sys.executable, '-m', 'scripts.runtime_qualification',
+                    action, '--candidate', str(phase_path), '--run-id', child], cwd=ROOT).returncode
+                phase_attempt['phases'].append(
+                    {'action': action, 'run_id': child, 'exit_code': status})
+                save(run_id, {'candidates': candidates}, [], report, 'running')
+                return status == 0
+            if not phase('diagnose', 'diagnose'):
+                continue
+            shorts_passed = True
+            for seed in (0, 1, 2):
+                child = run_id + '_' + label + f'_short_seed{seed}'
+                status = subprocess.run([sys.executable, '-m', 'safe_rl_v2.inventory_train',
+                    '--short', '--seed', str(seed), '--runtime-candidate', str(path),
+                    '--run-id', child], cwd=ROOT).returncode
+                accepted = status == 0 and short_run_qualified(ROOT/'runs'/child, path)
+                attempt['phases'].append({'action': 'short', 'run_id': child, 'seed': seed,
+                                          'exit_code': status, 'quality_passed': accepted})
+                save(run_id, {'candidates': candidates}, [], report, 'running')
+                if not accepted:
+                    shorts_passed = False
+                    break
+            if not shorts_passed or not phase('soak', 'soak'):
+                continue
+            attempt['passed'] = True
+            selected = budget
+            break
+        for path in paths:
+            verify_candidate(path)
+        report.update(passed=selected is not None, selected_budget_s=selected,
+                      qualification_complete=selected is not None,
+                      release_freeze_pending=selected is not None)
+        save(run_id, {'candidates': candidates}, [], report,
+             'success' if report['passed'] else 'failed',
+             None if report['passed'] else 'all registered budgets failed qualification')
+        return 0 if report['passed'] else 1
+    except Exception as exc:
+        save(run_id, {'candidates': candidates}, [], report, 'failed', str(exc))
+        return 1
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('freeze', 'profile', 'diagnose', 'soak', 'episode'))
+    parser.add_argument('action', choices=(
+        'freeze', 'profile', 'gate', 'resume-audit', 'qualify', 'diagnose', 'soak', 'episode'))
     parser.add_argument('--candidate', type=Path)
+    parser.add_argument('--candidates', nargs=3, type=Path)
     parser.add_argument('--budget', type=float, choices=BUDGETS)
     parser.add_argument('--run-id')
     parser.add_argument('--output', type=Path)
@@ -229,6 +437,12 @@ def main():
         dump(args.output, build_candidate(args.budget))
         verify_candidate(args.output)
         return 0
+    if args.action == 'qualify':
+        return qualify(args.run_id, args.candidates)
+    if args.action == 'gate':
+        return gate(args.run_id, args.candidate)
+    if args.action == 'resume-audit':
+        return resume_audit(args.run_id, args.candidate)
     if args.action == 'profile':
         return profile(args.run_id, args.candidate)
     if args.action == 'episode':

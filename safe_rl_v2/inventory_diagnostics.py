@@ -15,14 +15,34 @@ from safe_rl_v2.formal_train_loop import build_train_env
 
 
 class RecordingWrapper(gym.Wrapper):
-    def __init__(self, env):
+    def __init__(self, env, *, strict=False):
         super().__init__(env)
+        self.strict = strict
+        self.failure: Exception | None = None
         self.records: list[dict[str, Any]] = []
 
     def step(self, action):
-        result = self.env.step(action)
+        try:
+            result = self.env.step(action)
+        except Exception as exc:
+            self.failure = exc
+            raise
         _, reward, _, _, info = result
         self.records.append({**info, "measured_reward": float(reward)})
+        if self.strict:
+            from evaluation.metrics import check_physical_step, step_power_from_info
+            base = self.env.unwrapped
+            physical = check_physical_step(
+                step_power_from_info(info), access_limit_kw=base.access_limit_kw,
+                soc_kwh=info["bess_energy_kWh"],
+                soc_min_kwh=base.bess_soc_min * base.bess_capacity_kWh,
+                soc_max_kwh=base.bess_soc_max * base.bess_capacity_kWh)
+            if (info["unserved_base_load_kW"] > 1e-6 or any(physical[k] > 0 for k in
+                    ("access_limit_violation", "soc_violation",
+                     "charge_discharge_exclusion_violation", "energy_conservation_violation"))):
+                error = RuntimeError("physical violation during strict diagnosis")
+                self.failure = error
+                raise error
         return result
 
 
@@ -53,15 +73,27 @@ def validation_ready(rows, *, expected_episodes, pairing_verified):
             and all(all(inventory_episode_acceptance(row).values()) for row in rows))
 
 
-def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="diagnostic"):
+def evaluate_origin(config, origin, seed, action_fn, *, terminal=True,
+                    run_id="diagnostic", strict=False):
     env, injection = build_train_env(origin, master_seed=seed, config=config)
     env.terminal_inventory_enabled = terminal
-    wrapped = RecordingWrapper(CorrectorWrapper(env, corrector_time_limit_s=float(
-        config["training"]["corrector"]["time_limit_s"])))
+    corrected = CorrectorWrapper(env, corrector_time_limit_s=float(
+        config["training"]["corrector"]["time_limit_s"]))
+    corrected.stop_on_unexecutable = strict
+    wrapped = RecordingWrapper(corrected, strict=strict)
     record, inventory = evaluate_with_inventory(
         wrapped, "safe_ppo_joint_rolling_corrector", action_fn, run_id=run_id,
         service_standard=FROZEN_PROJECT_SERVICE_STANDARD, seed=seed)
     rows = wrapped.records
+    if strict and wrapped.failure is not None:
+        from safe_rl_v2.rollout import _json_safe
+        error = wrapped.failure
+        error.evidence = {**getattr(error, "evidence", {}),  # type: ignore[attr-defined]
+                          "partial_transitions": _json_safe(rows),
+                          "injection_provenance": injection.provenance_hash}
+        raise error
+    if strict and record.failure_classification is not None:
+        raise RuntimeError(f"strict diagnosis failed: {record.failure_classification}")
     gamma = float(config["training"]["ppo"]["gamma_per_step"])
     raw = np.array([r["raw_action"][-1] for r in rows])
     delta = np.array([abs(r["raw_action"][-1] - r["exec_action"][-1]) for r in rows])
