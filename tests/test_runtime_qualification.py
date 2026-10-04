@@ -108,6 +108,7 @@ def test_qualification_stops_after_three_failed_budgets_without_training(monkeyp
 
 def test_positive_clipped_ratio_overflow_has_zero_finite_actor_gradient():
     import torch
+
     from safe_rl_v2.ppo_objective import ppo_clipped_actor_objective
     class Policy:
         value = torch.tensor([0.], requires_grad=True)
@@ -123,3 +124,25 @@ def test_positive_clipped_ratio_overflow_has_zero_finite_actor_gradient():
     out['loss'].backward()
     assert torch.isfinite(policy.value.grad).all()
     assert policy.value.grad.item() == 0.
+
+
+@pytest.mark.parametrize('sign', [-1., 0., 1.])
+def test_stable_clipping_preserves_finite_loss_and_actor_gradient(sign):
+    import torch
+
+    from safe_rl_v2.ppo_objective import clipped_surrogate, ppo_clipped_actor_objective
+    values = torch.tensor([-5., -.3, 0., .1, .3, 2.], requires_grad=True)
+    advantage = torch.full((6,), sign)
+    reference = -clipped_surrogate(values.exp(), advantage, clip_epsilon=.2).mean()
+    expected_grad = torch.autograd.grad(reference, values)[0]
+    class Policy:
+        def evaluate_raw_actions(self, observation, raw_action):
+            return values
+    result = ppo_clipped_actor_objective(
+        Policy(), observation=torch.zeros((6, 523)), raw_action=torch.zeros((6, 21)),
+        old_raw_log_prob=torch.zeros(6), adv_reward=advantage,
+        adv_business=torch.zeros(6), adv_carbon=torch.zeros(6),
+        lambda_business=0., lambda_carbon=0., clip_epsilon=.2)
+    actual_grad = torch.autograd.grad(result['loss'], values)[0]
+    assert torch.equal(result['loss'], reference)
+    assert torch.equal(actual_grad, expected_grad)

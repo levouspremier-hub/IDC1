@@ -111,11 +111,22 @@ def ppo_clipped_actor_objective(
     本函数**没有**任何传入新 log-prob 或 `exec_action` 的参数。
     """
     new_raw_log_prob = policy.evaluate_raw_actions(observation, raw_action)
-    ratio = compute_ratio(new_raw_log_prob, old_raw_log_prob)
+    # Diagnostic ratios do not need an exp gradient (which is inf on overflow).
+    ratio = compute_ratio(new_raw_log_prob.detach(), old_raw_log_prob.detach())
     advantage = effective_advantage(
         adv_reward, adv_business, adv_carbon,
         lambda_business=lambda_business, lambda_carbon=lambda_carbon)
-    surrogate = clipped_surrogate(ratio, advantage, clip_epsilon=clip_epsilon)
+    eps = _require_clip_epsilon(clip_epsilon)
+    log_ratio = new_raw_log_prob - old_raw_log_prob
+    # For nonnegative A and overflowing positive ratio, the prescribed minimum
+    # is exactly (1+eps)*A, with zero derivative w.r.t. the actor log probability.
+    # Avoid evaluating exp(inf) in that backward path: 0*inf would yield NaN.
+    # Negative-A overflow remains unbounded and must fail the finite-loss guard.
+    overflow_clipped = torch.isinf(ratio) & (log_ratio > 0) & (advantage >= 0)
+    safe_log_ratio = torch.where(overflow_clipped, torch.zeros_like(log_ratio), log_ratio)
+    differentiable_ratio = torch.exp(safe_log_ratio)
+    surrogate = clipped_surrogate(differentiable_ratio, advantage, clip_epsilon=eps)
+    surrogate = torch.where(overflow_clipped, (1.0 + eps) * advantage, surrogate)
     loss = -surrogate.mean()
 
     ratios_clipped = torch.clamp(ratio, 1.0 - float(clip_epsilon), 1.0 + float(clip_epsilon))
