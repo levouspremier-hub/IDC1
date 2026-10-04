@@ -72,3 +72,15 @@ identical and five hashes verified. Remote seed0-capsule-isolation-v1 at
 59abbeb0e855b0598801560261b607a8c05b75aa queued single-slot; remote acceptance
 pending. Detailed limitations and strict-preflight blockers recorded in
  docs/audits/M6_P2b_S0_HOST_ISOLATION.md. All original failed runs remain.
+
+## Failed capsule / exit-status repair boundary
+
+WSL capsule finishes 128 solves with one B timeout (index79); inner manifest
+failed, but CLI exit0 incorrectly makes outer job succeeded. Preserve original
+inner/outer evidence. Allowed capsule script/test only: return nonzero for any
+observed failure after writing all evidence/receipt, retain successful exit0.
+Failing specification verifies run outcome, inner failure and receipt together;
+commit before repair. No corrector, budget, GC or thread semantics changes.
+Verify all received hashes, native CPU/wall/stage remaining budget; capsule did
+not apply policy's frozen Torch setting, so its thread environment cannot qualify
+the policy host. Full strict release remains blocked by refs provenance check.
