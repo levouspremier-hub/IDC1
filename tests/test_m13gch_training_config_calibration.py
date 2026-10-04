@@ -212,12 +212,16 @@ def test_benign_and_fallback_reasons_are_disjoint_and_cover_the_enum():
     benign = set(m.BENIGN_CORRECTION_REASONS)
     fallback = set(m.ZERO_ACTION_FALLBACK_REASONS)
     assert benign == {"none", "deadline_shortfall"}, "仅这两类是「MIP 最优、可执行」"
+    degraded = set(m.EXECUTABLE_DEGRADED_REASONS)
+    assert degraded == {"stage_b_timeout_feasible"}
     assert benign.isdisjoint(fallback)
+    assert benign.isdisjoint(degraded)
+    assert fallback.isdisjoint(degraded)
     from planning.corrector import FailureClass
 
     all_reasons = {c.value for c in FailureClass}
-    assert benign | fallback == all_reasons, (
-        f"未分类的原因：{all_reasons - benign - fallback}")
+    assert benign | fallback | degraded == all_reasons, (
+        f"未分类的原因：{all_reasons - benign - fallback - degraded}")
     # `base_shortage` 是**零动作回退**，不是「求解器失败」，但同样不可执行
     assert "base_shortage" in fallback
 
