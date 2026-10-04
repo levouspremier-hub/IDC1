@@ -19,3 +19,9 @@ docs/RUNTIME_REPAIR_EXECUTION_PLAN_2026-10-05.md；整理既有证据与后续�
 ## 回滚点
 独立当前分支 p5-eval-viz-m6-p2c-runtime-repair 上
 1b007ca3786bdb56775e003ad0ae212477664b48；仅逆序 revert 本文档提交。
+
+## 验收记录
+两份文档已完成，Python 核验本地 Markdown 引用目标和必要主题通过，
+`git diff --check` 通过。主机吞吐数字已回查实际短训报告：7.549 小时为外推。
+仅文档变更；未启动运行任务。docs 根目录受忽略规则覆盖，显式强制添加这两份
+指定交接文档，不修改全局忽略规则、不添加运行产物。
