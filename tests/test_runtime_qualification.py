@@ -26,3 +26,20 @@ def test_unregistered_budget_rejected(budget):
 def test_candidate_never_grants_formal_training():
     with pytest.raises(ValueError, match='formal'):
         runtime.require_candidate_scope(short=False)
+
+
+def test_candidate_verification_rejects_changed_closure(monkeypatch, tmp_path):
+    import json
+    expected = {'config': {'runtime_budget_s': .25}, 'sources': {'model': 'original'}}
+    path = tmp_path / 'candidate.json'
+    path.write_text(json.dumps(expected))
+    monkeypatch.setattr(runtime, 'build_candidate', lambda budget: expected)
+    assert runtime.verify_candidate(path) == expected
+    path.write_text(json.dumps({**expected, 'sources': {'model': 'changed'}}))
+    with pytest.raises(ValueError, match='binding'):
+        runtime.verify_candidate(path)
+
+
+def test_qualification_cli_imports():
+    from scripts import runtime_qualification
+    assert runtime_qualification.ORIGINS == (5040, 5088, 5136, 5184, 5568, 6576)

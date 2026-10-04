@@ -133,8 +133,20 @@ def verify_written_run(folder, binding):
 
 
 def _run(args):
-    config, matrix = load_config(), load_matrix()
-    binding = checkpoint_binding()
+    candidate_path = getattr(args, "runtime_candidate", None)
+    if candidate_path:
+        from scenario.runtime_release import (
+            candidate_binding,
+            require_candidate_scope,
+            verify_candidate,
+        )
+        require_candidate_scope(short=args.short)
+        config = verify_candidate(candidate_path)["config"]
+        matrix = load_matrix()
+        binding = candidate_binding(candidate_path)
+    else:
+        config, matrix = load_config(), load_matrix()
+        binding = checkpoint_binding()
     apply_frozen_thread_setting(config)
     seed0_formal = getattr(args, "seed0_formal", False)
     if seed0_formal and (args.short or args.seed != 0):
@@ -266,7 +278,7 @@ def _run(args):
             "adam_steps": last["optimizer_steps_cumulative"],
             "lagrangian_updates": last["lagrangian_updates_cumulative"],
             "batch_records": records, "inventory_episodes": episodes,
-            "inventory_binding": binding, "config_path": CONFIG_PATH,
+            "inventory_binding": binding, "config_path": candidate_path or CONFIG_PATH,
             "batch_origin_list_digest": matrix["training_schedule"]["batch_origin_list_digest"],
             "checkpoint_sha256": sha(folder / "checkpoint_final.pt"),
             "elapsed_s": time.perf_counter() - started,
@@ -350,6 +362,7 @@ def main(argv=None):
     parser.add_argument("--seed", type=int, choices=(0, 1, 2), required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--resume-from")
+    parser.add_argument("--runtime-candidate", help="signed train-only qualification candidate")
     args = parser.parse_args(argv)
     if args.seed0_formal and (args.short or args.seed != 0):
         parser.error("--seed0-formal requires --seed 0 and full training")
