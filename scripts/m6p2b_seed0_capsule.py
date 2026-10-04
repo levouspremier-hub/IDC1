@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import gc
 import json
 import platform
 import resource
@@ -11,11 +13,13 @@ import warnings
 
 import numpy as np
 import pandas as pd
+import torch
 
 from contracts.inventory import InventorySnapshot
 from contracts.models import DispatchProposal
 from planning.corrector import correct
 from runs.writer import write_run
+from safe_rl_v2.controlled_formal_train import apply_frozen_thread_setting
 from scripts.m6p2b_seed0_diagnosis import (
     CHECKPOINT_SHA,
     ROOT,
@@ -61,14 +65,49 @@ def authenticate():
     return snapshot, proposal, baseline["exec"]
 
 
-def run(run_id):
+MODES = ("legacy", "frozen_gc_on", "frozen_gc_off")
+
+
+@contextlib.contextmanager
+def runtime_configuration(mode):
+    if mode not in MODES:
+        raise ValueError("unregistered capsule runtime mode")
+    before_gc, before_threads = gc.isenabled(), torch.get_num_threads()
+    metadata = {"mode": mode, "gc_before": before_gc,
+                "torch_threads_before": before_threads}
+    try:
+        if mode != "legacy":
+            release = json.loads(RELEASE.read_text())
+            asset = release["assets"]["training_config"]
+            path = ROOT / asset["path"]
+            assert_digest(path, asset["sha256"])
+            metadata.update(apply_frozen_thread_setting(json.loads(path.read_text())))
+            if mode == "frozen_gc_off":
+                gc.disable()
+            else:
+                gc.enable()
+        metadata.update(gc_effective=gc.isenabled(),
+                        effective_torch_num_threads=torch.get_num_threads())
+        yield metadata
+    finally:
+        if before_gc:
+            gc.enable()
+        else:
+            gc.disable()
+        if torch.get_num_threads() != before_threads:
+            torch.set_num_threads(before_threads)
+
+
+def run(run_id, runtime_mode="legacy"):
     folder = ROOT / "runs" / run_id
     if folder.exists():
         raise FileExistsError("run-id exists")
     rows = []
     config = {"scope": "contract_only_no_policy_load", "repeats": 128,
               "budget_s": .25, "capture_sha256": CAPTURE_SHA,
-              "baseline_sha256": BASELINE_SHA, "platform": platform.platform()}
+              "baseline_sha256": BASELINE_SHA, "platform": platform.platform(),
+              "runtime_mode": runtime_mode,
+              "gc_off_is_diagnostic_counterfactual": runtime_mode == "frozen_gc_off"}
     report = {"scope": config["scope"], "full_policy_qualification": False,
               "parameter_updates": 0, "train_only": True}
 
@@ -83,26 +122,28 @@ def run(run_id):
     save("running")
     try:
         snapshot, proposal, baseline = authenticate()
-        for index in range(128):
-            observer = Observer(folder)
-            before = resource.getrusage(resource.RUSAGE_SELF)
-            wall, cpu, thread = time.perf_counter(), time.process_time(), time.thread_time()
-            with observer.installed(), warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
-                result = correct(snapshot, proposal, time_limit_s=.25)
-            wall, cpu, thread = (time.perf_counter() - wall, time.process_time() - cpu,
-                                 time.thread_time() - thread)
-            after = resource.getrusage(resource.RUSAGE_SELF)
-            executed = [*result.exec_compute_actions, result.exec_storage_action]
-            row = {"index": index, "failure": str(result.failure), "wall_s": wall,
-                   "cpu_s": cpu, "thread_cpu_s": thread, "exec": executed,
-                   "timing": observer.current,
-                   "involuntary_switches": after.ru_nivcsw - before.ru_nivcsw,
-                   "control_exec_max_difference": float(np.max(np.abs(
-                       np.array(executed) - np.array(baseline))))}
-            rows.append(row)
-            with (folder / "solves.jsonl").open("a") as handle:
-                handle.write(json.dumps(row) + "\n")
+        with runtime_configuration(runtime_mode) as runtime:
+            report["runtime"] = runtime
+            for index in range(128):
+                observer = Observer(folder)
+                before = resource.getrusage(resource.RUSAGE_SELF)
+                wall, cpu, thread = time.perf_counter(), time.process_time(), time.thread_time()
+                with observer.installed(), warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    result = correct(snapshot, proposal, time_limit_s=.25)
+                wall, cpu, thread = (time.perf_counter() - wall, time.process_time() - cpu,
+                                     time.thread_time() - thread)
+                after = resource.getrusage(resource.RUSAGE_SELF)
+                executed = [*result.exec_compute_actions, result.exec_storage_action]
+                row = {"index": index, "failure": str(result.failure), "wall_s": wall,
+                       "cpu_s": cpu, "thread_cpu_s": thread, "exec": executed,
+                       "timing": observer.current,
+                       "involuntary_switches": after.ru_nivcsw - before.ru_nivcsw,
+                       "control_exec_max_difference": float(np.max(np.abs(
+                           np.array(executed) - np.array(baseline))))}
+                rows.append(row)
+                with (folder / "solves.jsonl").open("a") as handle:
+                    handle.write(json.dumps(row) + "\n")
         authenticate()
         failed = [r for r in rows if r["failure"] != "none"]
         report.update(completed_solves=len(rows), failed_solves=len(failed),
@@ -122,4 +163,6 @@ def run(run_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
-    raise SystemExit(run(parser.parse_args().run_id))
+    parser.add_argument("--runtime-mode", choices=MODES, default="legacy")
+    args = parser.parse_args()
+    raise SystemExit(run(args.run_id, args.runtime_mode))
