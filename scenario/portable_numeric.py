@@ -25,11 +25,13 @@ RECIPE_SOURCES = {
 # constants, declarations and the complete materializer script remain anchored.
 VERIFIER_FUNCTIONS = {'_assert_frames_identical', 'load_verified_v3_bundle'}
 REGISTERED_RECIPES = {
+    'mapper': 'a806599080bfd43796ba3c2ad696a19e2ba28f42',
     'refs': '577f1db4d5ca78553aa1be866f643ebeb7e8cb13',
     'splits': '577f1db4d5ca78553aa1be866f643ebeb7e8cb13',
     'forecast': '626f97f3cbd13082e14197028dd62d356b8e54e4',
 }
 REVISION_CONSUMERS = {
+    'scenario/arrival_mapper.py': {'mapper_code_revision'},
     'scenario/exogenous_drivers_b6.py': VERIFIER_FUNCTIONS,
     'scenario/b6_refs.py': {'refs_code_revision'},
     'scenario/b6_split_manifests.py': {'resolve_materializer_revision'},

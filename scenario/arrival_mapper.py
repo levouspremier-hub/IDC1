@@ -119,7 +119,10 @@ def mapper_code_revision() -> str:
                     *ARRIVAL_MAPPER_SOURCE_PATHS).strip()
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise ArrivalMapperError(f"mapper revision 无效：{revision!r}")
-    return revision
+    from scenario.portable_numeric import verified_recipe_revision
+
+    return verified_recipe_revision(
+        REPO_ROOT, ARRIVAL_MAPPER_SOURCE_PATHS, revision, "mapper")
 
 
 def _canonical_manifest_dir() -> Path:
