@@ -29,3 +29,6 @@ v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源�
 - 975cb2c：refs_v4/v5/policy-v3只在完整原SOURCE_PATHS代码与原登记配方一致时保留原生成stamp；保留原dirty集合和原Git查询。生成代码变化仍给新live revision，旧资产拒绝。缓存仅用于不可变Git blob与按源码文本键的AST，未缓存可变资产校验。
 - 当前本地120项 host portability / formal B6 / cutover 回归全绿，包括伪造revision、生成源码变更、dirty helper和协调1ULP改写hash拒绝；全链Ruff与mypy（194源）通过。25个正式checkpoint绑定源和uv.lock与9b7b59a一致。runs/m6_host_portability_v1/保存五类审计与receipt。
 - 主机Tailscale Online=false，SSH重复连接超时；原v3失败产物已完整回传。已准备新的固定SHA v4请求（本机忽略日志目录），**尚未启动**，待主机恢复后完整make check、slow重建与真实CSV模板精确等价性复核。当前不声称WSL验收全绿、不宣称seed0根因解决，不启动正式训练/新seed/held-out。
+
+## 到达映射器级联修复
+主机恢复后 v4 完整门禁：2963 passed、206 failed、20 errors，主要因 arrival_mapper 的完整 SOURCE_PATHS 覆盖前述验证器，导致 source_revision 漂移。扩大允许范围至 scenario/arrival_mapper.py::mapper_code_revision 和 portable_numeric 的注册消费者表；保留完整路径、dirty 校验和全部任务映射逻辑，仅在完整配方与原注册 a806599080bfd43796ba3c2ad696a19e2ba28f42 等价时保留原 stamp。先提交失败回归，针对性测试后再完整主机验收。另有 M54g 0.05 秒真实求解夹具 timeout，独立按原预算复测，不扩大预算。回滚点 b502fe2744a21350a78a210f555f7b923e45c689。
