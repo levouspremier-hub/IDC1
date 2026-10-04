@@ -621,6 +621,8 @@ def test_verify_uses_the_unified_bundle_entry(monkeypatch):
 @needs_assets
 def test_coordinated_one_ulp_power_tamper_is_rejected(tmp_path, monkeypatch):
     """A refreshed checksum cannot authorize even a one-ULP asset mutation."""
+    import numpy as np
+
     m = b6_module()
 
     def bump(frame):
