@@ -17,3 +17,6 @@ runs/m6_host_portability_v1/ 五类汇总及 hash；独立远端 job 的 console
 
 ## 正式加载链扩展（完整门禁捕获）
 host-portability-gate-v1：2882 passed、275 failed、20 errors；集中于 B6 重算逐位比较。允许新增 scenario/portable_numeric.py、scenario/exogenous_drivers_b6.py 的验证函数和加载函数、tests/test_host_portability.py 及 tests/test_m13feb_b6_exogenous.py 的协调篡改回归；不改生成公式。历史 materializer_revision 只可在注册原 revision、原 parquet SHA、原脚本字节以及排除上述两个验证函数后的完整 AST 一致时接受；新验证版本单独登记。保留 dirty、路径、来源、checkpoint 校验。加载返回原冻结 parquet 数值。已注册原资产不变，协调改写 parquet/hash 即使仅改变1 ULP也必须拒绝。先失败回归再实现，回滚 ada06c0。
+
+## 下游 revision 级联修复
+v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源码集合覆盖 B6 验证器，导致 revision 漂移。允许 scenario/b6_refs.py、scenario/formal_scenario_b6.py、scenario/b6_split_manifests.py 的 revision 查询函数接入注册生成配方核验。必须仍使用完整原 SOURCE_PATHS 进行 dirty 与 Git revision 查询；只在完整源代码（仅排除三个 revision 查询函数和两个已登记 B6 消费验证函数）与原注册 commit 一致时返回原生成 revision。任何生成代码变化返回新 live revision，旧资产必须拒绝；不改变 SOURCE_PATHS，不重写资产。新增失败回归先提交再实现；回滚 cb76ecc。
