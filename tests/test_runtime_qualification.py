@@ -65,3 +65,20 @@ def test_cold_input_uses_factory_validation_without_duplicate_outer_chain(monkey
     injection = loop._verified_train_input(5040, 48, 48, 'uncached-equivalence-test')
     assert injection.split == 'train'
     assert len(calls) == 2
+
+
+def test_strict_recording_keeps_original_failure_and_partial_records(monkeypatch):
+    import numpy as np
+    from safe_rl_v2.inventory_diagnostics import RecordingWrapper
+    from tests.test_m51b_rollout_collection import make_env
+    env = make_env(horizon=2)
+    wrapped = RecordingWrapper(env, strict=True)
+    error = RuntimeError('controlled solver refusal')
+    error.evidence = {'environment_step_executed': False}
+    def fail(action):
+        raise error
+    monkeypatch.setattr(env, 'step', fail)
+    with pytest.raises(RuntimeError):
+        wrapped.step(np.zeros(21))
+    assert wrapped.failure is error
+    assert wrapped.records == []
