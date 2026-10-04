@@ -16,3 +16,7 @@ runs/remote_host-throughput-seed0-v1/全部输出（包含短程checkpoint及五
 
 ## 回滚点
 工作分支p5-eval-viz-m6-p2b-s0-diagnosis，开卡前3d649caa4fa10ca6a809247e8c925b6cc3b4b394；无生产代码修改。全部文档分批提交推送，远端SHA核对，收尾工作树干净。
+
+## 实测验收
+已使用固定6d3afa2，以观测wrapper计时上述原入口子进程（命令和wrapper源码保存在远端manifest/request）；exit0，8批/1536步/128 Adam/8 Lagrangian及train预登记顺序、冻结配置、严格绑定均核对。入口墙钟436.657s，后7批均值53.031s，512批工时初估7.549h；7.443–7.643h为实测min/max情景，不是保证范围。
+18个远端文件及训练artifact_verification全部回传验签；估算五类产物与receipt在runs/host_throughput_estimate_v1/。12步回退、库存32/32和服务31/32合格完整保留，**测量完成不代表短程资格通过或正式训练放行**。未修改任何生产源码、预算/线程/GPU配置、旧final或冻结资产；未启动完整训练/seed1/2/held-out。精简审计见docs/dev_reports/HOST_THROUGHPUT_2026-10-05.md。
