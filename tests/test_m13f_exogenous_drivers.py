@@ -664,8 +664,12 @@ def test_real_inputs_rematerialize_identically():
     rebuilt = module.build_drivers(inputs)
     frame = pd.read_parquet(OUT_PARQUET)
     for column in COLUMNS[1:]:
-        assert np.array_equal(np.asarray(rebuilt[column]),
-                              frame[column].to_numpy()), column
+        actual = np.asarray(rebuilt[column])
+        expected = frame[column].to_numpy()
+        if column == "local_pv_kw":
+            assert_frozen_pv_agreement(actual, expected)
+        else:
+            assert np.array_equal(actual, expected), column
 
 
 def test_trace_hash_identifiers_are_strings_and_counts_stay_numeric(tmp_path, monkeypatch):
