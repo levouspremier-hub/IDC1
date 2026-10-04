@@ -50,3 +50,18 @@ def test_source_closure_excludes_untracked_historical_runners(monkeypatch):
     assert 'scenario/a.py' in runtime.source_paths()
     assert 'runs/writer.py' in runtime.source_paths()
     assert not any('runner.py' in p for p in runtime.source_paths())
+
+
+def test_cold_input_uses_factory_validation_without_duplicate_outer_chain(monkeypatch):
+    from safe_rl_v2 import formal_train_loop as loop
+    from scenario import arrival_mapper
+    loop.clear_verified_train_input_cache()
+    original = arrival_mapper.load_verified_mapper_chain
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append((args, kwargs))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(arrival_mapper, 'load_verified_mapper_chain', counted)
+    injection = loop._verified_train_input(5040, 48, 48, 'uncached-equivalence-test')
+    assert injection.split == 'train'
+    assert len(calls) == 2
