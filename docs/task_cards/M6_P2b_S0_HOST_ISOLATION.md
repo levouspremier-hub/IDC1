@@ -63,3 +63,12 @@ or formal training. A separate numerical-verifier/new-provenance decision is
 required before the full-policy probe can run; no source/assets relaxation here.
 Acceptance: new failing specification first; pytest capsule and observer tests,
 Ruff/mypy, strict input tamper rejection, five artifacts and full remote receipts.
+
+## Current acceptance record
+
+9ccbb53 failing input-tamper specification precedes 59abbeb implementation.
+11 focused tests, Ruff and mypy pass; Mac capsule 128/128 successful, exec
+identical and five hashes verified. Remote seed0-capsule-isolation-v1 at
+59abbeb0e855b0598801560261b607a8c05b75aa queued single-slot; remote acceptance
+pending. Detailed limitations and strict-preflight blockers recorded in
+ docs/audits/M6_P2b_S0_HOST_ISOLATION.md. All original failed runs remain.
