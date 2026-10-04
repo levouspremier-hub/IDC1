@@ -18,12 +18,13 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 import numpy as np
 import torch
 
-from safe_rl.corrector_wrapper import CorrectorWrapper
+from safe_rl.corrector_wrapper import CorrectorWrapper, UnexecutableCorrectionError
 from safe_rl_v2.buffer import ACTION_DIM, CONTRACT_VERSION, RolloutBuffer, Transition
 from safe_rl_v2.policy import SafePPOPolicy
 
@@ -54,6 +55,15 @@ CORRECTION_AUDIT_INFO_KEYS = (
 
 # `act()` 与 `evaluate_raw_actions()` 的 log-prob 允许偏差（同路径实现，实际为 0）
 _LOG_PROB_TOLERANCE = 1e-4
+
+
+class UnsafeRolloutError(RuntimeError):
+    def __init__(self, reason, buffer, evidence):
+        super().__init__(reason)
+        self.evidence = {"reason": reason, "failure_step": _json_safe(evidence),
+                         "partial_transitions": [_json_safe(asdict(t))
+                                                 for t in buffer.transitions],
+                         "parameter_updates_this_batch": 0}
 
 
 class MissingEnvInfoError(KeyError):
@@ -109,6 +119,7 @@ def collect_rollout(
     corrector_on: bool = False,
     corrector_time_limit_s: float | None = None,
     generator: torch.Generator | None = None,
+    stop_on_unsafe: bool = False,
 ) -> dict:
     """采集 `steps` 步真实 rollout 并写入 `buffer`；遇 terminated/truncated 提前停止。
 
@@ -129,6 +140,7 @@ def collect_rollout(
             )
         corrector_time_limit = float(corrector_time_limit_s)
         target_env = CorrectorWrapper(env, corrector_time_limit_s=corrector_time_limit)
+        target_env.stop_on_unexecutable = stop_on_unsafe
     else:
         if corrector_time_limit_s is not None:
             raise ValueError(
@@ -192,7 +204,16 @@ def collect_rollout(
                 f"{log_prob} vs {act_log_prob_f}（概率必须对应最终 raw 动作）"
             )
 
-        next_obs, reward, terminated, truncated, info = target_env.step(raw_action)
+        try:
+            next_obs, reward, terminated, truncated, info = target_env.step(raw_action)
+        except UnexecutableCorrectionError as exc:
+            raise UnsafeRolloutError(str(exc), buffer, {
+                **exc.evidence, "observation": obs_arr, "raw_action": raw_action,
+                "old_raw_log_prob": log_prob}) from exc
+        if stop_on_unsafe and not (np.isfinite(reward) and np.all(np.isfinite(next_obs))
+                                   and np.isfinite(log_prob)):
+            raise UnsafeRolloutError("nonfinite rollout", buffer,
+                                     {"raw_action": raw_action, "info": info})
 
         business_violation = _require_info(info, BUSINESS_VIOLATION_INFO_KEY)
         carbon_emission = _require_info(info, CARBON_EMISSION_INFO_KEY)
@@ -202,6 +223,11 @@ def collect_rollout(
             correction_info: dict[str, Any] = {"corrector_on": True}
             for key in CORRECTION_AUDIT_INFO_KEYS:
                 correction_info[key] = _json_safe(_require_info(info, key))
+            for key in ("correction_executable", "correction_execution_source",
+                        "correction_candidate_check", "correction_solver_timeout",
+                        "correction_total_wall_s", "correction_snapshot_wall_s"):
+                if key in info:
+                    correction_info[key] = _json_safe(info[key])
             if inventory_enabled:
                 for key in ("inventory_audit", "inventory_training_diagnostics"):
                     correction_info[key] = _json_safe(_require_info(info, key))
@@ -241,6 +267,12 @@ def collect_rollout(
                 soc_kwh=info["bess_energy_kWh"],
                 soc_min_kwh=unwrapped.bess_soc_min * unwrapped.bess_capacity_kWh,
                 soc_max_kwh=unwrapped.bess_soc_max * unwrapped.bess_capacity_kWh))
+            if stop_on_unsafe and (inventory_base_unserved_steps or any(
+                    inventory_physical_rows[-1][key] > 0 for key in
+                    ("access_limit_violation", "soc_violation",
+                     "charge_discharge_exclusion_violation",
+                     "energy_conservation_violation"))):
+                raise UnsafeRolloutError("physical violation", buffer, info)
         if not np.array_equal(raw_action, exec_action):
             stats["raw_exec_difference_count"] += 1
         if terminated:

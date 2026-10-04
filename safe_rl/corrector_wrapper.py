@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 
 import gymnasium as gym
 import numpy as np
@@ -26,6 +27,29 @@ COMMON_SGD_REWARD_VERSION = "common-sgd-degradation-v1"
 POTENTIAL_REWARD_VERSION = "common-sgd-potential-smooth-v1"
 
 
+class UnexecutableCorrectionError(RuntimeError):
+    """A rejected proposal is retained, not executed as a synthetic zero action."""
+    def __init__(self, snapshot, proposal, correction, *, cause=None):
+        if correction is None:
+            super().__init__(f"solver raised: {cause}")
+            self.evidence = {"snapshot": snapshot.model_dump(mode="json"),
+                             "proposal": proposal.model_dump(mode="json"),
+                             "failure": "solver_exception", "detail": str(cause),
+                             "environment_step_executed": False}
+            return
+        super().__init__(f"no executable correction: {correction.failure}")
+        self.evidence = {"snapshot": snapshot.model_dump(mode="json"),
+                         "proposal": proposal.model_dump(mode="json"),
+                         "failure": str(correction.failure),
+                         "detail": correction.reason,
+                         "stage_a_status": correction.stage_a_status,
+                         "stage_b_status": correction.stage_b_status,
+                         "audit": correction.audit,
+                         "inventory_audit": correction.inventory_audit,
+                         "candidate_check": correction.candidate_check,
+                         "environment_step_executed": False}
+
+
 class CorrectorWrapper(gym.Wrapper):
     def __init__(self, env, *, corrector_time_limit_s: float):
         """`corrector_time_limit_s` 必须显式给出（单次投影调用的全局预算，秒）。
@@ -37,6 +61,7 @@ class CorrectorWrapper(gym.Wrapper):
             raise ValueError(
                 f"corrector_time_limit_s 必须为显式正数，实际 {corrector_time_limit_s!r}"
             )
+        self.stop_on_unexecutable = False
         self.corrector_time_limit_s = float(corrector_time_limit_s)
         self._inventory_previous_context: dict | None = None
         self._inventory_audits: list[dict] = []
@@ -115,11 +140,19 @@ class CorrectorWrapper(gym.Wrapper):
             storage_action=float(raw_action[n_group]),
         )
 
+        correction_started = time.perf_counter()
         snapshot = build_snapshot(self.env)
-        correction = correct(
-            snapshot, proposal, time_limit_s=self.corrector_time_limit_s
-        )
+        snapshot_wall_s = time.perf_counter() - correction_started
+        try:
+            correction = correct(
+                snapshot, proposal, time_limit_s=self.corrector_time_limit_s)
+        except Exception as exc:
+            raise UnexecutableCorrectionError(snapshot, proposal, None, cause=exc) from exc
 
+        if getattr(self, "stop_on_unexecutable", False) and not correction.executable:
+            raise UnexecutableCorrectionError(snapshot, proposal, correction)
+
+        correction_wall_s = time.perf_counter() - correction_started
         exec_action = np.concatenate(
             [
                 np.asarray(correction.exec_compute_actions, dtype=np.float32),
@@ -170,6 +203,13 @@ class CorrectorWrapper(gym.Wrapper):
         info["exec_action"] = exec_action
         info["correction_reason"] = str(correction.failure)
         info["correction_detail"] = correction.reason
+        info["correction_executable"] = correction.executable
+        info["correction_execution_source"] = correction.execution_source
+        info["correction_candidate_check"] = correction.candidate_check
+        info["correction_solver_timeout"] = str(correction.failure) in (
+            "timeout", "stage_b_timeout_feasible")
+        info["correction_total_wall_s"] = correction_wall_s
+        info["correction_snapshot_wall_s"] = snapshot_wall_s
         info["correction_solve_time_s"] = float(correction.solve_time_s)
         info["business_gap"] = float(correction.business_gap)
         info["deadline_shortfall_work"] = float(correction.deadline_shortfall_work)

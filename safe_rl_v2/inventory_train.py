@@ -179,8 +179,8 @@ def _run(args):
         next_batch = restored["next_batch_index"]
         provenance = restored["origin_provenance"]
         journal = Path(args.resume_from).parent / "batches.jsonl"
-        records = [json.loads(line) for line in journal.read_text().splitlines()
-                   if json.loads(line)["batch_index"] < next_batch]
+        records = ([json.loads(line) for line in journal.read_text().splitlines()
+                    if json.loads(line)["batch_index"] < next_batch] if next_batch else [])
         if len(records) != next_batch:
             raise ValueError("resume journal does not match the checkpoint boundary")
     command = "python -m safe_rl_v2.inventory_train " + " ".join(sys.argv[1:])
@@ -193,7 +193,9 @@ def _run(args):
         "training_scope": scope, "artifact_role": role, "schema": schema,
     }
     try:
-        write_run(args.run_id, config=config, metrics=pd.DataFrame(),
+        write_run(args.run_id, config=config, metrics=pd.DataFrame([
+                      {"batch_index": r["batch_index"], "transitions": r["transitions"],
+                       **r["storage_signal"]} for r in records]),
                   report={"status": "running", "scope": scope, "seed": args.seed,
                           "target_batches": len(batches), "completed_batches": next_batch,
                           "inventory_binding": binding,
@@ -201,12 +203,16 @@ def _run(args):
                   base_dir=str(ROOT / "runs"), seed=args.seed, command=command,
                   status="running", dependency_lock_hash=sha(ROOT / "uv.lock"))
         for index in range(next_batch, len(batches)):
+            save_bound(folder / "checkpoint_before_batch.pt", binding=binding,
+                       origin_provenance=provenance, next_batch_index=index,
+                       **checkpoint_kwargs)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
                 batch = run_training_batch(
                     policy, optimizer, lagrangian, sampling, shuffle, config=config,
                     origins=batches[index], batch_index=index, env_seed=args.seed,
-                    corrector_time_limit_s=.25, master_seed=args.seed)
+                    corrector_time_limit_s=float(config["training"]["corrector"]["time_limit_s"]),
+                    master_seed=args.seed)
             provenance.update({int(k): v for k, v in batch["origin_provenance"].items()})
             records.append(batch)
             (folder / "batches.jsonl").write_text(
@@ -214,6 +220,10 @@ def _run(args):
             save_bound(folder / "checkpoint_latest.pt", binding=binding,
                        origin_provenance=provenance, next_batch_index=index + 1,
                        **checkpoint_kwargs)
+            if (index + 1) % 16 == 0:
+                save_bound(folder / f"checkpoint_batch_{index + 1:04d}.pt", binding=binding,
+                           origin_provenance=provenance, next_batch_index=index + 1,
+                           **checkpoint_kwargs)
             if args.short and index == 1:
                 save_bound(folder / "checkpoint_batch2.pt", binding=binding,
                            origin_provenance=provenance, next_batch_index=2,
@@ -290,11 +300,21 @@ def _run(args):
         verify_written_run(folder, binding)
         return 0
     except Exception as exc:
+        evidence = dict(getattr(exc, "evidence", {"reason": str(exc)}))
+        evidence["adam_steps_at_failure"] = max(
+            (int(s["step"]) for s in optimizer.state.values() if "step" in s), default=0)
+        evidence["multiplier_updates_at_failure"] = int(getattr(lagrangian, "_updates", 0))
+        (folder / "failed_batch.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        provenance.update({int(k): v for k, v in evidence.get("origin_provenance", {}).items()})
         ledger = training_source_ledger(provenance) if provenance else {
             "dependency_lock_hash": sha(ROOT / "uv.lock"),
             "data_hash": None, "scenario_hash": None}
-        write_run(args.run_id, config=config, metrics=pd.DataFrame(),
+        write_run(args.run_id, config=config, metrics=pd.DataFrame([
+                      {"batch_index": r["batch_index"], "transitions": r["transitions"],
+                       **r["storage_signal"]} for r in records]),
                   report={"failure": f"{type(exc).__name__}: {exc}",
+                          "failed_batch_evidence": "failed_batch.json",
+                          "last_safe_checkpoint": "checkpoint_before_batch.pt",
                           "batches_completed": len(records), "inventory_binding": binding},
                   base_dir=str(ROOT / "runs"), seed=args.seed, command=command,
                   status="failed", failure_classification=type(exc).__name__, **ledger)

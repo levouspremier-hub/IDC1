@@ -279,6 +279,8 @@ class _FakeMilp:
     """记录每次调用收到的 options.time_limit，并按脚本返回状态。"""
 
     def __init__(self, statuses, clock):
+        from scipy.optimize import milp
+        self.real_milp = milp
         self.statuses = list(statuses)
         self.clock = clock
         self.calls: list[float | None] = []
@@ -292,6 +294,11 @@ class _FakeMilp:
 
         r = _R()
         r.status = self.statuses.pop(0) if self.statuses else 0
+        if r.status == 0:
+            # Controlled clock/status test: use an actually feasible optimal vector.
+            # The recorded caller budget is tested separately, not benchmarked here.
+            options = {k: v for k, v in opts.items() if k != "time_limit"}
+            return self.real_milp(**{**kw, "options": options})
         r.success = r.status == 0
         r.message = f"fake {r.status}"
         r.fun = 0.0
@@ -322,10 +329,9 @@ def test_stage_b_timeout_is_faithfully_reported(monkeypatch):
     assert res.stage_a_status == "optimal"
     assert res.stage_b_status == "time_limit"
     assert res.solver_status == "time_limit"
-    assert res.failure_class == FAILURE_TIMEOUT      # 不得被改写为 solver_failure
-    assert all(v == 0.0 for v in res.exec_compute_actions)
-    assert res.exec_storage_action == 0.0
-    assert res.business_gap_work > 0.0
+    assert res.failure_class == "stage_b_timeout_feasible"
+    assert res.execution_source == "stage_a"
+    assert res.candidate_check["passed"] is True
 
 
 def test_timeout_does_not_run_base_diagnostic(monkeypatch):
@@ -342,7 +348,7 @@ def test_timeout_does_not_run_base_diagnostic(monkeypatch):
     res = solve_time_indexed_mip_raw_projection(
         snap, _proposal([0.5] * N_GROUP, 0.0), time_limit_s=10.0
     )
-    assert res.failure_class == FAILURE_TIMEOUT
+    assert res.failure_class == "stage_b_timeout_feasible"
     assert called["n"] == 0
 
 
@@ -375,7 +381,7 @@ def test_stage_b_not_started_when_budget_exhausted(monkeypatch):
     )
     assert len(fake.calls) == 1                  # 阶段 B 根本未被调用
     assert res.solver_status == "time_limit"
-    assert res.failure_class == FAILURE_TIMEOUT
+    assert res.failure_class == "stage_b_timeout_feasible"
     assert res.stage_b_status == "not_run"
 
 
@@ -432,7 +438,7 @@ def test_wrapper_passes_explicit_budget(monkeypatch):
     assert seen["budget"] == 2.5
 
 
-def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
+def test_wrapper_timeout_retains_valid_a_and_raw_preserved(monkeypatch):
     monkeypatch.setattr("scipy.optimize.milp", _FakeMilp([0, 1], None))
     env = CorrectorWrapper(
         IDCPriceEnv20D(horizon=HORIZON, access_limit_kw=1000.0),
@@ -443,13 +449,14 @@ def test_wrapper_timeout_zero_action_and_raw_preserved(monkeypatch):
         [np.full(N_GROUP, 0.7, dtype=np.float32), np.array([0.3], dtype=np.float32)]
     )
     _, _, _, _, info = env.step(raw)
-    # 向环境发送完整 21 维零动作
+    # 向环境发送完整 21 维已检查的 A 解
     assert np.asarray(info["exec_action"]).shape == (N_GROUP + 1,)
-    assert np.allclose(np.asarray(info["exec_action"]), 0.0)
+    assert info["correction_execution_source"] == "stage_a"
+    assert info["correction_candidate_check"]["passed"]
     # raw 不被改写
     np.testing.assert_allclose(np.asarray(info["raw_action"]), raw, atol=0.0)
-    assert info["correction_reason"] == "timeout"
-    assert info["business_gap"] > 0.0
+    assert info["correction_reason"] == "stage_b_timeout_feasible"
+    assert info["stage_b_status"] == "time_limit"
 
 
 # --- 9. 诊断纳入全局 deadline（M4.4a2） ---

@@ -852,6 +852,22 @@ def _solve_time_indexed(
 RAW_STAGE_B_TOL = 1e-6  # 阶段 B 的偏移容差（无量纲）
 
 
+def check_projection_candidate(x, lb, ub, integrality, matrix, row_lb, row_ub):
+    """Independent primal check, including ranged rows and integer variables."""
+    if x is None or np.shape(x) != np.shape(lb) or not np.all(np.isfinite(x)):
+        return {"passed": False, "reason": "missing_shape_or_nonfinite"}
+    bound = float(max(np.max(np.maximum(lb - x, 0.), initial=0.),
+                      np.max(np.maximum(x - ub, 0.), initial=0.)))
+    integers = np.asarray(x)[np.asarray(integrality) != 0]
+    integer = float(np.max(np.abs(integers - np.rint(integers)), initial=0.))
+    ax = np.asarray(matrix @ x).ravel()
+    row = float(max(np.max(np.maximum(row_lb - ax, 0.), initial=0.),
+                    np.max(np.maximum(ax - row_ub, 0.), initial=0.)))
+    return {"passed": bool(max(bound, integer, row) <= _TOL),
+            "bound_residual": bound, "integer_residual": integer,
+            "row_residual": row, "tolerance": _TOL}
+
+
 @dataclass
 class RawProjectionResult:
     """第 0 步原始动作投影结果（全部单位显式、可审计）。"""
@@ -901,6 +917,8 @@ class RawProjectionResult:
     stage_a_task_step0_work: list[float] = field(default_factory=list)
     stage_a_deadline_slack: list[float] = field(default_factory=list)
     inventory_audit: dict = field(default_factory=dict)
+    execution_source: str = "none"
+    candidate_check: dict = field(default_factory=dict)
 
 
 def _projection_empty(
@@ -1539,6 +1557,15 @@ def solve_time_indexed_mip_raw_projection(
             {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA, **diag_audit},
         )
 
+    initial_check = check_projection_candidate(
+        res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
+    if not initial_check["passed"]:
+        rejected = _projection_empty(
+            snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA})
+        rejected.candidate_check = initial_check
+        return rejected
+
     offset_a = float(c_off @ res_a.x)
 
     # 只读审计：阶段 A 自身解的逐组 u（与最终 exec 公式逐字相同）
@@ -1558,47 +1585,53 @@ def solve_time_indexed_mip_raw_projection(
     if inventory_audit:
         inventory_audit["stage_a_terminal_kwh"] = float(res_a.x[off_soc + H])
 
-    # 阶段 A 后预算已耗尽 → 不启动阶段 B，直接 timeout
-    rem_b = _remaining()
-    if rem_b is not None and rem_b <= 0.0:
-        return _projection_empty(
-            snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT,
-            {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA,
-             "stage_b_status": "not_run"},
-        )
-
-    # --- 阶段 B：固定偏移上界，再以经济/服务目标 tie-break ---
+    # B only adds the primary-offset bound; A itself satisfies that bound.
     rows_b = list(rows) + [offset_row]
     lbs_b = list(lbs) + [-np.inf]
     ubs_b = list(ubs) + [offset_a + stage_b_tolerance]
-    if inventory_enabled:
-        A_b = _append_sparse_row(A_csr, offset_row)
+    A_b = _append_sparse_row(A_csr, offset_row)
+    check_a = check_projection_candidate(
+        res_a.x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
+    if not check_a["passed"]:
+        rejected = _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                     {**_audit, "stage_a_status": status_a})
+        rejected.candidate_check = check_a
+        return rejected
+
+    rem_b = _remaining()
+    tB = 0.0
+    if rem_b is not None and rem_b <= 0.0:
+        status_b = "not_run"
+        x = res_a.x
+        execution_source = "stage_a"
     else:
-        row_mat_b = lil_matrix((len(rows_b), n_vars))
-        for r, row in enumerate(rows_b):
-            for col, val in row.items():
-                row_mat_b[r, col] = val
-        A_b = csr_matrix(row_mat_b)
+        tB0 = time.perf_counter()
+        res_b = _milp(
+            c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
+            integrality=integrality, bounds=bounds_vec, options=_options())
+        tB = time.perf_counter() - tB0
+        status_b = _status(res_b)
+        if status_b == SOLVER_OPTIMAL:
+            x = res_b.x
+            execution_source = "stage_b"
+        elif status_b == SOLVER_TIME_LIMIT:
+            x = res_a.x
+            execution_source = "stage_a"
+        else:
+            return _projection_empty(
+                snapshot, status_b, FAILURE_SOLVER_FAILURE,
+                {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
+                 "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+    candidate_check = check_projection_candidate(
+        x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
+    if not candidate_check["passed"]:
+        rejected = _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                     {**_audit, "stage_a_status": status_a,
+                                      "stage_b_status": status_b,
+                                      "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+        rejected.candidate_check = candidate_check
+        return rejected
 
-    tB0 = time.perf_counter()
-    res_b = _milp(
-        c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
-        integrality=integrality, bounds=bounds_vec, options=_options(),
-    )
-    tB = time.perf_counter() - tB0
-    status_b = _status(res_b)
-    if status_b != SOLVER_OPTIMAL:
-        # 保真分类：stage-B time_limit 不得被改写为 solver_failure
-        failure = (
-            FAILURE_TIMEOUT if status_b == SOLVER_TIME_LIMIT else FAILURE_SOLVER_FAILURE
-        )
-        return _projection_empty(
-            snapshot, status_b, failure,
-            {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
-             "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB},
-        )
-
-    x = res_b.x
     allocation = np.zeros((n_task, n_group, H))
     for i in range(n_task):
         for g in range(n_group):
@@ -1623,16 +1656,9 @@ def solve_time_indexed_mip_raw_projection(
     deadline_slack = [float(x[off_dls + i]) for i in range(n_task)]
 
     ax = np.asarray(A_b.dot(x)).ravel()
-    residuals = {}
-    for r, name in enumerate(names):
-        value = float(ax[r])
-        if np.isneginf(lbs[r]):
-            residuals[name] = max(value - ubs[r], 0.0)
-        elif np.isposinf(ubs[r]):
-            residuals[name] = max(lbs[r] - value, 0.0)
-        else:
-            residuals[name] = abs(value - lbs[r])
-    max_residual = max(residuals.values()) if residuals else 0.0
+    residuals = {name: float(max(lbs_b[r] - ax[r], ax[r] - ubs_b[r], 0.))
+                 for r, name in enumerate([*names, "projection_offset_bound"])}
+    max_residual = max(residuals.values(), default=0.)
 
     total_business = float(sum(business_slack))
     total_deadline = float(sum(deadline_slack))
@@ -1658,8 +1684,12 @@ def solve_time_indexed_mip_raw_projection(
             planned_step0_task_work={str(task.task_id): float(allocation[i, :, 0].sum())
                                      for i, task in enumerate(snapshot.tasks)})
 
+    if execution_source == "stage_a":
+        failure = "stage_b_timeout_feasible"
     return RawProjectionResult(
-        backend="mip", solver_status=SOLVER_OPTIMAL, failure_class=failure,
+        backend="mip", solver_status=(SOLVER_OPTIMAL if execution_source == "stage_b"
+                                      else SOLVER_TIME_LIMIT), failure_class=failure,
+        execution_source=execution_source, candidate_check=candidate_check,
         horizon_steps=H, n_variables=n_vars,
         n_integer_variables=int(np.count_nonzero(integrality)), n_constraints=len(rows_b),
         stage_a_status=status_a, stage_b_status=status_b,

@@ -5,8 +5,11 @@ H 步 MIP 的物理可行域，并把**第 0 步**映射为 exec action。
 
 失败语义（保真）：
 - `none` / `deadline_shortfall`：MIP 最优，可执行第 0 步候选（期限缺口仅为业务风险）；
+- `stage_b_timeout_feasible`：A 最优且完整约束复核通过，可执行；B 未达经济最优；
 - `timeout` / `base_shortage` / `solver_failure`：**零动作回退**，不执行候选解；
 - `proposal_invalid`：raw proposal 维度/范围非法，**零动作回退**并记录原因。
+
+正式训练遇到无可执行候选时在 wrapper 中抛错，零动作占位不进入环境。
 
 红线：不修改 raw action；不把 LP 解作为执行候选；功率为规划近似，最终执行约束仍由
 环境 M3 物理链承担。
@@ -30,7 +33,7 @@ from planning.model import (
 )
 
 # 可执行（第 0 步候选可进入环境）的失败类别
-_EXECUTABLE = {FAILURE_NONE, FAILURE_DEADLINE_SHORTFALL}
+_EXECUTABLE = {FAILURE_NONE, FAILURE_DEADLINE_SHORTFALL, "stage_b_timeout_feasible"}
 
 # --- M5.4i：corrector 生产默认预算的**唯一**来源 -----------------------------
 # 依据：0.05 s 在受控负载（hogs4/hogs8）下跨进程 digest 可分叉，release gate 因此
@@ -81,6 +84,7 @@ def resolve_corrector_budget(
 class FailureClass(StrEnum):
     NONE = "none"
     TIMEOUT = "timeout"
+    TIMEOUT_FEASIBLE = "stage_b_timeout_feasible"
     BASE_SHORTAGE = "base_shortage"
     SOLVER_FAILURE = "solver_failure"
     PROPOSAL_INVALID = "proposal_invalid"
@@ -88,6 +92,7 @@ class FailureClass(StrEnum):
 
 
 _FAILURE_MAP = {
+    "stage_b_timeout_feasible": FailureClass.TIMEOUT_FEASIBLE,
     FAILURE_NONE: FailureClass.NONE,
     FAILURE_TIMEOUT: FailureClass.TIMEOUT,
     FAILURE_BASE_SHORTAGE: FailureClass.BASE_SHORTAGE,
@@ -117,6 +122,12 @@ class Correction:
     solve_time_s: float = 0.0
     audit: dict = field(default_factory=dict)
     inventory_audit: dict = field(default_factory=dict)
+    execution_source: str = "none"
+    candidate_check: dict = field(default_factory=dict)
+
+    @property
+    def executable(self) -> bool:
+        return self.failure in _EXECUTABLE
 
 
 def _zero_action(
@@ -143,6 +154,7 @@ def _zero_action(
         projection_offset=float(stage.get("projection_offset", 0.0)),
         solve_time_s=float(stage.get("solve_time_s", 0.0)),
         inventory_audit=dict(stage.get("inventory_audit", {})),
+        candidate_check=dict(stage.get("candidate_check", {})), audit=dict(stage),
     )
 
 
@@ -196,6 +208,7 @@ def correct(
         projection_offset=res.projection_offset,
         solve_time_s=solve_time,
         inventory_audit=res.inventory_audit,
+        execution_source=res.execution_source, candidate_check=res.candidate_check,
     )
 
     if failure not in _EXECUTABLE:
@@ -221,4 +234,5 @@ def correct(
         projection_offset=float(res.projection_offset),
         solve_time_s=float(solve_time),
         inventory_audit=dict(res.inventory_audit),
+        execution_source=res.execution_source, candidate_check=res.candidate_check,
     )

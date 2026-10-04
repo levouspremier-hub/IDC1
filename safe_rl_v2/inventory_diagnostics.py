@@ -56,7 +56,8 @@ def validation_ready(rows, *, expected_episodes, pairing_verified):
 def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="diagnostic"):
     env, injection = build_train_env(origin, master_seed=seed, config=config)
     env.terminal_inventory_enabled = terminal
-    wrapped = RecordingWrapper(CorrectorWrapper(env, corrector_time_limit_s=0.25))
+    wrapped = RecordingWrapper(CorrectorWrapper(env, corrector_time_limit_s=float(
+        config["training"]["corrector"]["time_limit_s"])))
     record, inventory = evaluate_with_inventory(
         wrapped, "safe_ppo_joint_rolling_corrector", action_fn, run_id=run_id,
         service_standard=FROZEN_PROJECT_SERVICE_STANDARD, seed=seed)
@@ -112,7 +113,9 @@ def evaluate_origin(config, origin, seed, action_fn, *, terminal=True, run_id="d
         "fallbacks": sum(r["correction_reason"] in
                          ("timeout", "solver_failure", "proposal_invalid", "base_shortage")
                          for r in rows),
-        "timeouts": sum(r["correction_reason"] == "timeout" for r in rows),
+        "timeouts": sum(r.get("correction_solver_timeout", False) for r in rows),
+        "stage_a_retained_steps": sum(r.get("correction_execution_source") == "stage_a"
+                                      for r in rows),
         "inventory_unproven_steps": sum(a.get("target_reachable") is None for a in audit)
         if terminal else None,
         "inventory_unreachable_steps": sum(a.get("target_reachable") is False for a in audit)

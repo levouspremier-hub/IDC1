@@ -638,6 +638,9 @@ def run_training_batch(
         "deadline_shortfall_steps": sum(
             1 for t in buffer.transitions
             if str(t.correction_info.get("correction_reason")) == "deadline_shortfall"),
+        "stage_a_retained_steps": sum(
+            t.correction_info.get("correction_execution_source") == "stage_a"
+            for t in buffer.transitions),
         "zero_action_fallback_steps": sum(
             1 for t in buffer.transitions
             if str(t.correction_info.get("correction_reason")) in
@@ -663,6 +666,11 @@ def run_training_batch(
             "分项为独立计时器读数；`residual_unattributed_s` 是**差值**（整批减去三项），"
             "**不是**独立测量值。checkpoint 写入耗时由入口单独测量。"),
         "corrector_solve_stats": corrector_solve_stats(buffer),
+        "corrector_stage_timing_s": {
+            key: [float(t.correction_info[key]) for t in buffer.transitions
+                  if key in t.correction_info]
+            for key in ("stage_a_solve_time_s", "stage_b_solve_time_s",
+                        "correction_total_wall_s", "correction_snapshot_wall_s")},
         "peak_rss_bytes": peak_rss_bytes(),
         "origin_provenance": {str(o): p for o, p in sorted(origin_provenance.items())},
         # 该批**关键 transition**摘要的覆盖范围（如实说明，不夸大为「全部字段」）：
@@ -754,10 +762,21 @@ def _collect_with_config(policy, sampling_generator, *, origins, horizon, env_se
             raise FormalTrainLoopError(
                 f"环境 horizon={env.horizon} 与冻结配置 {horizon} 不一致")
         provenance[int(origin)] = str(injection.provenance_hash)
-        stats = collect_rollout(
-            env, policy, buffer, steps=int(horizon), seed=int(env_seed),
-            corrector_on=True, corrector_time_limit_s=float(corrector_time_limit_s),
-            generator=sampling_generator)
+        try:
+            stats = collect_rollout(
+                env, policy, buffer, steps=int(horizon), seed=int(env_seed),
+                corrector_on=True, corrector_time_limit_s=float(corrector_time_limit_s),
+                generator=sampling_generator, stop_on_unsafe=True)
+        except Exception as exc:
+            from safe_rl_v2.rollout import UnsafeRolloutError
+            if isinstance(exc, UnsafeRolloutError):
+                exc.evidence.update(origin=int(origin), origin_provenance=provenance,
+                                    env_seeds=train_env_seeds(config, master_seed=master_seed))
+                raise
+            failure = UnsafeRolloutError(str(exc), buffer, {"origin": int(origin)})
+            failure.evidence.update(origin=int(origin), origin_provenance=provenance,
+                                    env_seeds=train_env_seeds(config, master_seed=master_seed))
+            raise failure from exc
         if int(stats["transitions"]) != int(horizon):
             raise FormalTrainLoopError(
                 f"origin {origin} 只采到 {stats['transitions']} 条 transition，"
@@ -802,6 +821,12 @@ def save_resume_checkpoint(
     from checkpointing import CURRENT_CONTRACT_VERSION, VersionedCheckpoint
 
     training = config["training"]
+    if not origin_provenance and next_batch_index != 0:
+        raise FormalTrainLoopError("noninitial checkpoint requires actual origin provenance")
+    ledger = (training_source_ledger(origin_provenance) if origin_provenance else {
+        "dependency_lock_hash": hashlib.sha256((REPO_ROOT / "uv.lock").read_bytes()).hexdigest(),
+        "data_hash": None, "scenario_hash": None,
+    })
     state = {
         "policy": {k: v.detach().clone() for k, v in policy.state_dict().items()},
         "optimizer": optimizer.state_dict(),
@@ -817,7 +842,7 @@ def save_resume_checkpoint(
         "training_scope": str(training_scope),
         "artifact_role": str(artifact_role),
         "source_ledger": {
-            **training_source_ledger(origin_provenance),
+            **ledger,
             "env_seeds": train_env_seeds(config, master_seed=master_seed),
             "master_seed": int(master_seed),
         },

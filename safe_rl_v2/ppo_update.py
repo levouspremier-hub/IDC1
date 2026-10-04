@@ -187,6 +187,10 @@ def minibatch_ppo_step(
     params_before = [p.detach().clone() for p in policy.parameters()]
     optimizer.zero_grad()
     loss.backward()
+    if any(p.grad is not None and not torch.isfinite(p.grad).all()
+           for p in policy.parameters()):
+        optimizer.zero_grad()
+        raise ValueError("nonfinite gradient; optimizer and multiplier updates blocked")
     actor_params = [(name, p) for name, p in policy.named_parameters()
                     if name.startswith("actor") or name == "log_std"]
     grad_norm_actor = float(torch.sqrt(sum(
@@ -196,6 +200,8 @@ def minibatch_ppo_step(
         (p.grad.detach() ** 2).sum() for p in policy.parameters()
         if p.grad is not None)).item())
     optimizer.step()
+    if any(not torch.isfinite(p).all() for p in policy.parameters()):
+        raise ValueError("nonfinite parameter after Adam; stop and retain prebatch checkpoint")
 
     delta = sum(float(((p.detach() - b) ** 2).sum().item())
                 for p, b in zip(policy.parameters(), params_before, strict=True))
@@ -290,6 +296,10 @@ def _single_update(
     params_before = [p.detach().clone() for p in policy.parameters()]
     optimizer.zero_grad()
     loss.backward()
+    if any(p.grad is not None and not torch.isfinite(p.grad).all()
+           for p in policy.parameters()):
+        optimizer.zero_grad()
+        raise ValueError("nonfinite gradient; optimizer and multiplier updates blocked")
     # **R1 / §ca.2**：`grad_norm_actor` 必须**只**覆盖 actor 与 `log_std`；
     # 全参数（含 critic）的范数如实命名为 `grad_norm_total`。
     # 改前把「全参数范数」误标成 actor 梯度，属证据误标。
@@ -302,6 +312,8 @@ def _single_update(
         (p.grad.detach() ** 2).sum() for p in policy.parameters()
         if p.grad is not None)).item())
     optimizer.step()
+    if any(not torch.isfinite(p).all() for p in policy.parameters()):
+        raise ValueError("nonfinite parameter after Adam; stop and retain prebatch checkpoint")
 
     delta = sum(float(((p.detach() - b) ** 2).sum().item())
                 for p, b in zip(policy.parameters(), params_before, strict=True))
