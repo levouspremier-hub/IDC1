@@ -77,6 +77,8 @@ def test_historical_bridge_rejects_changed_generator(tmp_path):
     script = tmp_path / 'scripts/materialize_singapore_exogenous_b6.py'
     script.write_text(script.read_text() + '\nraise RuntimeError("changed generator")\n')
     # Use the real repo for history via a gitdir pointer, without copying its contents.
-    (tmp_path / '.git').write_text('gitdir: ' + str(ROOT / '.git') + '\n')
+    git_dir = subprocess.check_output(
+        ['git', 'rev-parse', '--absolute-git-dir'], cwd=ROOT, text=True).strip()
+    (tmp_path / '.git').write_text('gitdir: ' + git_dir + '\n')
     with pytest.raises(ValueError, match='recipe changed'):
         verify_frozen_recipe(tmp_path, FROZEN_RECIPE_REVISION, PARQUET)
