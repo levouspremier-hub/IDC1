@@ -111,6 +111,7 @@ def run(run_id):
                           (r["control_exec_max_difference"] for r in rows
                            if r["failure"] == "none"), default=None))
         save("failed" if failed else "success", "solver_failure_observed" if failed else None)
+        return 1 if failed else 0
     except BaseException as exc:
         save("failed", f"{type(exc).__name__}: {exc}")
         raise
@@ -121,4 +122,4 @@ def run(run_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-id", required=True)
-    run(parser.parse_args().run_id)
+    raise SystemExit(run(parser.parse_args().run_id))
