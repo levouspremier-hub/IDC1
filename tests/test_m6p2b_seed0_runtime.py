@@ -41,3 +41,34 @@ def test_observer_cpu_timer_preserves_model_caller(monkeypatch, tmp_path):
         with observer.unobserved():
             model_caller()
         assert len(observer.current["solver_calls"]) == 1
+
+
+def test_contemporaneous_probe_keeps_original_output_and_runs_once(tmp_path, monkeypatch):
+    import contextlib
+    from types import SimpleNamespace
+
+    from scripts import m6p2b_seed0_scheduling as scheduling
+
+    steps = []
+    probes = []
+    observer = SimpleNamespace(folder=tmp_path, rows=[],
+                               unobserved=contextlib.nullcontext)
+
+    def original_record(self, info):
+        steps.append(dict(info))
+        self.rows.append({"correction_reason": "timeout"})
+        (tmp_path / "first_failure.json").write_text("{}")
+
+    monkeypatch.setattr(scheduling.Observer, "record", original_record)
+    monkeypatch.setattr(scheduling, "replay_capture", lambda *args: probes.append("old"))
+    monkeypatch.setattr(scheduling.subprocess, "run", lambda *args, **kw: probes.append("fresh"))
+
+    def mock_run(run_id, **kwargs):
+        for _ in range(2):
+            scheduling.Observer.record(observer, {"exec": [0.], "failure": "timeout"})
+        assert kwargs["metadata"]["solver_options"].startswith("original")
+
+    monkeypatch.setattr(scheduling.soak, "run", mock_run)
+    scheduling.run("mock")
+    assert probes == ["old", "fresh"]
+    assert steps == [{"exec": [0.], "failure": "timeout"}] * 2

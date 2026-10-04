@@ -51,8 +51,6 @@ def thread_count():
 
 
 def worker(folder, arm, repeats):
-    import scipy.optimize as optimize
-
     import planning.model as model
 
     verify_release()
@@ -84,28 +82,17 @@ def worker(folder, arm, repeats):
                 observer = Observer(folder)
                 calls = []
                 with observer.installed():
-                    wrapped = optimize.milp
-
-                    def measured(*args, _wrapped=wrapped, _calls=calls, **kwargs):
-                        wall, cpu, thread = (time.perf_counter(), time.process_time(),
-                                             time.thread_time())
-                        result = _wrapped(*args, **kwargs)
-                        _calls.append({"wall_s": time.perf_counter() - wall,
-                                      "cpu_s": time.process_time() - cpu,
-                                      "thread_cpu_s": time.thread_time() - thread,
-                                      "options": kwargs["options"]})
-                        return result
-
                     before = resource.getrusage(resource.RUSAGE_SELF)
                     wall, cpu, thread = (time.perf_counter(), time.process_time(),
                                          time.thread_time())
-                    with patch.object(optimize, "milp", measured), warnings.catch_warnings():
+                    with warnings.catch_warnings():
                         warnings.simplefilter("ignore", RuntimeWarning)
                         result = correct(snapshot, proposal, time_limit_s=.25)
                     wall, cpu, thread = (time.perf_counter() - wall,
                                          time.process_time() - cpu,
                                          time.thread_time() - thread)
                     after = resource.getrusage(resource.RUSAGE_SELF)
+                calls = observer.current["solver_calls"]
                 row = {"arm": arm, "index": index, "pid": os.getpid(),
                        "failure": str(result.failure), "wall_s": wall, "cpu_s": cpu,
                        "thread_cpu_s": thread, "calls": calls, "timing": observer.current,

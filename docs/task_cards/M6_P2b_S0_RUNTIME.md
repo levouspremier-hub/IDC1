@@ -66,3 +66,8 @@ Post-failure timings/trajectory are explicitly affected by the probes. Capture
 top CPU process names/PIDs locally; do not publish unrelated app activity in Git.
 No changed planning semantics, no training. Long observation auto-follow-up
 continues root investigation; no semantic fix is claimed from a normal short probe.
+
+The soak script may also receive optional diagnostic metadata and include the
+scheduling observer source hash in its existing drift check; default protocol
+is unchanged. On-timeout old/fresh probes run only once globally and are never
+used to replace the failed action or relabel its failure.

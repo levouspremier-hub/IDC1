@@ -111,7 +111,7 @@ class HostMonitor:
             self.thread.join(timeout=25)
 
 
-def run(run_id):
+def run(run_id, *, metadata=None):
     folder = ROOT / "runs" / run_id
     if folder.exists():
         raise FileExistsError("run-id exists; no overwrite or implicit resume")
@@ -120,7 +120,8 @@ def run(run_id):
               "checkpoint_sha256": CHECKPOINT_SHA, "budget_s": .25,
               "host_sample_interval_s": 60, "ac_required": True,
               "boundary": "finish current episode; fresh 24 before and after",
-              "shared_policy": "one strictly loaded object retained for entire shared phase"}
+              "shared_policy": "one strictly loaded object retained for entire shared phase",
+              "diagnostic_metadata": metadata or {}}
     rows = []
     report = {"started_at": now(), "pid": os.getpid(), "phase": "preflight",
               "validation_run": False, "test_run": False, "parameter_updates": 0}
@@ -158,8 +159,10 @@ def run(run_id):
             record(row, arm, index)
 
     def observer_hashes():
-        return {name: sha(ROOT / "scripts" / name) for name in (
-            "m6p2b_seed0_soak.py", "m6p2b_seed0_diagnosis.py")}
+        names = ["m6p2b_seed0_soak.py", "m6p2b_seed0_diagnosis.py"]
+        if metadata:
+            names.extend(metadata.get("additional_observer_files", []))
+        return {name: sha(ROOT / "scripts" / name) for name in names}
 
     save("running")
     try:

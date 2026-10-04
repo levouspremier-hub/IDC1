@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import hashlib
 import inspect
 import json
 import os
+import resource
 import subprocess
 import sys
 import time
@@ -184,6 +186,7 @@ class Observer:
             deadline = local.get("deadline")
             event = {
                 "stage": stage,
+                "solver_options": dict(kwargs.get("options", {})),
                 "passed_time_limit_s": kwargs.get("options", {}).get("time_limit"),
                 "remaining_at_observer_entry_s": None if deadline is None else
                 deadline - time.monotonic(),
@@ -194,23 +197,51 @@ class Observer:
                 if key in local:
                     self.current[key] = float(local[key])
             del local, caller
+            cpu_start = time.process_time()
+            thread_start = time.thread_time()
+            usage_start = resource.getrusage(resource.RUSAGE_SELF)
             start = time.perf_counter()
             result = original_milp(*args, **kwargs)
             end = time.perf_counter()
             event.update(status=int(result.status), message=str(result.message),
-                         wall_s=end - start, start_perf=start, end_perf=end)
+                         wall_s=end - start, start_perf=start, end_perf=end,
+                         cpu_s=time.process_time() - cpu_start,
+                         thread_cpu_s=time.thread_time() - thread_start,
+                         involuntary_switches=resource.getrusage(resource.RUSAGE_SELF).ru_nivcsw
+                         - usage_start.ru_nivcsw)
             self.current["solver_calls"].append(event)
             return result
 
         def solve(snapshot, proposal, **kwargs):
             self.snapshot, self.proposal = snapshot, proposal
             self.current.setdefault("solver_calls", [])
+            gc_started = {}
+            gc_wall = {}
+
+            def gc_event(phase, info):
+                generation = info["generation"]
+                if phase == "start":
+                    gc_started[generation] = time.perf_counter()
+                elif generation in gc_started:
+                    gc_wall[generation] = gc_wall.get(generation, 0.) + (
+                        time.perf_counter() - gc_started.pop(generation))
+
+            gc.callbacks.append(gc_event)
+            cpu_start = time.process_time()
+            thread_start = time.thread_time()
             start = time.perf_counter()
-            result = original_model(snapshot, proposal, **kwargs)
-            end = time.perf_counter()
+            try:
+                result = original_model(snapshot, proposal, **kwargs)
+            finally:
+                end = time.perf_counter()
+                gc.callbacks.remove(gc_event)
             events = self.current["solver_calls"]
             timing = self.current
-            timing.update(model_call_s=end - start, budget_s=kwargs["time_limit_s"],
+            timing.update(model_call_s=end - start,
+                          model_gc_wall_s_by_generation=gc_wall,
+                          model_cpu_s=time.process_time() - cpu_start,
+                          model_thread_cpu_s=time.thread_time() - thread_start,
+                          budget_s=kwargs["time_limit_s"],
                           failure_stage=timing.get("observed_failure_phase",
                                                    failure_stage(result, events)),
                           variables=result.n_variables, constraints=result.n_constraints,
@@ -233,6 +264,16 @@ class Observer:
             self.record(info)
             return output
 
+        self.restore_targets = [
+            (wrapper, "build_snapshot", original_snapshot),
+            (guard, "build_service_guard", original_guard),
+            (model, "validate_inventory_snapshot", original_validate),
+            (model, "_base_only_terminal_certificate", original_certificate),
+            (model, "_projection_empty", original_empty),
+            (optimize, "milp", original_milp),
+            (corrector, "solve_time_indexed_mip_raw_projection", original_model),
+            (wrapper.CorrectorWrapper, "step", original_step),
+        ]
         with contextlib.ExitStack() as stack:
             for obj, name, replacement in (
                 (wrapper, "build_snapshot", make_snapshot),
@@ -245,6 +286,14 @@ class Observer:
                 (wrapper.CorrectorWrapper, "step", step),
             ):
                 stack.enter_context(patch.object(obj, name, replacement))
+            yield
+
+    @contextlib.contextmanager
+    def unobserved(self):
+        """Suspend this observer for separate probes after persisting original output."""
+        with contextlib.ExitStack() as stack:
+            for obj, name, original in self.restore_targets:
+                stack.enter_context(patch.object(obj, name, original))
             yield
 
     def record(self, info):
