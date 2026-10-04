@@ -654,3 +654,49 @@ def test_real_inputs_rematerialize_identically():
     for column in COLUMNS[1:]:
         assert np.array_equal(np.asarray(rebuilt[column]),
                               frame[column].to_numpy()), column
+
+
+def test_trace_hash_identifiers_are_strings_and_counts_stay_numeric(tmp_path, monkeypatch):
+    import io
+    import tarfile
+
+    module = materializer()
+    columns = ['HashOwner', 'HashApp', 'HashFunction', 'Trigger',
+               *map(str, range(1, 1441))]
+    rows = [','.join(columns),
+            ','.join(['owner', '81e3104049863b72', 'function', 'http', *(['2'] * 1440)]),
+            ','.join(['owner', 'other', 'function', 'http', *(['3'] * 1440)])]
+    body = ('\n'.join(rows) + '\n').encode()
+    path = tmp_path / 'trace.tar.xz'
+    with tarfile.open(path, 'w:xz') as archive:
+        member = tarfile.TarInfo(module.INVOCATION_MEMBER_PREFIX + '01.csv')
+        member.size = len(body)
+        archive.addfile(member, io.BytesIO(body))
+    original = pd.read_csv
+
+    def checked_read(*args, **kwargs):
+        assert kwargs.get('dtype') == {
+            'HashOwner': str, 'HashApp': str, 'HashFunction': str, 'Trigger': str}
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(pd, 'read_csv', checked_read)
+    totals = module.trace_minute_totals(path)
+    assert np.array_equal(totals.to_numpy(), np.full(1440, 5.0))
+
+
+@pytest.mark.parametrize('case', ['roundoff', 'material_change', 'night_change', 'nonfinite'])
+def test_frozen_pv_comparison_only_allows_machine_scale_roundoff(case):
+    expected = np.array([0., 2., 400.])
+    actual = expected.copy()
+    if case == 'roundoff':
+        actual[1] = np.nextafter(actual[1], np.inf)
+        assert_frozen_pv_agreement(actual, expected)
+    else:
+        if case == 'material_change':
+            actual[2] += 1e-9
+        elif case == 'night_change':
+            actual[0] = 1e-15
+        else:
+            actual[1] = np.nan
+        with pytest.raises(AssertionError):
+            assert_frozen_pv_agreement(actual, expected)
