@@ -71,3 +71,17 @@ The soak script may also receive optional diagnostic metadata and include the
 scheduling observer source hash in its existing drift check; default protocol
 is unchanged. On-timeout old/fresh probes run only once globally and are never
 used to replace the failed action or relabel its failure.
+
+## Completed bounded checks / continued investigation
+
+- c20e8f5 card, d0fabeb initial failing spec, e3d981a bounded probe.
+- Runtime v1: 1024 solves, all optimal and exactly exec-identical. Single-thread
+  lowered CPU median .09950→.08350 s, not wall median .08327→.08358 s.
+  Do not change production thread options on this evidence.
+- 9730fb0 failing CPU/caller regression; d9cbfe1 diagnostic correction and
+  contemporaneous-control runner. Fifteen focused tests, Ruff/mypy passed.
+- Four real CPU observer acceptance solves passed, with correct A/B/11079-variable
+  metadata. Both run receipts verified. Original probe's concealed-caller stage
+  labels are declared unreliable; original evidence is retained unchanged.
+- Audit docs/audits/M6_P2b_S0_RUNTIME.md records uncertainty and next protocol.
+  No semantic repair or root-cause closure claimed; no training started.
