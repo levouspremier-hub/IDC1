@@ -616,3 +616,21 @@ def test_verify_uses_the_unified_bundle_entry(monkeypatch):
     monkeypatch.setattr(mod, "load_verified_v3_bundle", spy)
     assert mod.main(["--verify"]) == 0
     assert called["bundle"] == 1
+
+
+@needs_assets
+def test_coordinated_one_ulp_power_tamper_is_rejected(tmp_path, monkeypatch):
+    """A refreshed checksum cannot authorize even a one-ULP asset mutation."""
+    m = b6_module()
+
+    def bump(frame):
+        i = frame.index[frame.local_pv_kw > 0][0]
+        frame.loc[i, 'local_pv_kw'] = np.nextafter(frame.loc[i, 'local_pv_kw'], np.inf)
+
+    bundle = _bundle(tmp_path, tamper_parquet=bump)
+    payload = json.loads(bundle['manifest_path'].read_text(encoding='utf-8'))
+    payload['output']['sha256'] = _sha256(bundle['parquet_path'])
+    bundle['manifest_path'].write_text(_canonical_json(payload))
+    _patch_v3_roots(monkeypatch, bundle)
+    with pytest.raises(m.B6ExogenousError, match='registered frozen parquet SHA'):
+        m.load_verified_v3_bundle()

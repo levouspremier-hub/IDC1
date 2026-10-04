@@ -63,3 +63,20 @@ def test_verified_loader_returns_exact_frozen_values_after_roundoff(monkeypatch)
     monkeypatch.setattr(b6, 'build_v3_frame', drift)
     bundle = b6.load_verified_v3_bundle()
     pd.testing.assert_frame_equal(bundle['frame'], pd.read_parquet(PARQUET), check_exact=True)
+
+
+def test_historical_bridge_rejects_changed_generator(tmp_path):
+    from scenario.portable_numeric import RECIPE_SOURCES
+
+    for name in RECIPE_SOURCES:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(subprocess.check_output(
+            ['git', 'show', FROZEN_RECIPE_REVISION + ':' + name], cwd=ROOT))
+    # Git lookup must remain the actual repository; only candidate source reads change.
+    script = tmp_path / 'scripts/materialize_singapore_exogenous_b6.py'
+    script.write_text(script.read_text() + '\nraise RuntimeError("changed generator")\n')
+    # Use the real repo for history via a gitdir pointer, without copying its contents.
+    (tmp_path / '.git').write_text('gitdir: ' + str(ROOT / '.git') + '\n')
+    with pytest.raises(ValueError, match='recipe changed'):
+        verify_frozen_recipe(tmp_path, FROZEN_RECIPE_REVISION, PARQUET)
