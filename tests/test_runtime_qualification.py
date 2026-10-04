@@ -43,3 +43,10 @@ def test_candidate_verification_rejects_changed_closure(monkeypatch, tmp_path):
 def test_qualification_cli_imports():
     from scripts import runtime_qualification
     assert runtime_qualification.ORIGINS == (5040, 5088, 5136, 5184, 5568, 6576)
+
+
+def test_source_closure_excludes_untracked_historical_runners(monkeypatch):
+    monkeypatch.setattr(runtime, '_git', lambda *args: 'scenario/a.py\nscripts/b.py\n')
+    assert 'scenario/a.py' in runtime.source_paths()
+    assert 'runs/writer.py' in runtime.source_paths()
+    assert not any('runner.py' in p for p in runtime.source_paths())

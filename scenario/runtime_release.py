@@ -32,10 +32,11 @@ def candidate_config(budget):
 
 def source_paths():
     folders = ('scenario', 'contracts', 'checkpointing', 'planning', 'safe_rl_v2',
-               'evaluation', 'viz', 'scripts', 'runs', 'envs', 'idc_model')
-    return sorted({str(p.relative_to(ROOT)) for folder in folders
-                   for p in (ROOT / folder).rglob('*.py') if '__pycache__' not in p.parts}
-                  | {'safe_rl/corrector_wrapper.py', 'pyproject.toml', 'uv.lock', 'Makefile'})
+               'evaluation', 'viz', 'scripts', 'envs', 'idc_model')
+    tracked = _git('ls-files', '--', *folders).splitlines()
+    return sorted({p for p in tracked if p.endswith('.py')}
+                  | {'runs/writer.py', 'safe_rl/corrector_wrapper.py',
+                     'pyproject.toml', 'uv.lock', 'Makefile'})
 
 
 def asset_binding():
