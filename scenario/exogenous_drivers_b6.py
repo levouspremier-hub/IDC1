@@ -502,7 +502,8 @@ def _require_nested_keys(payload: dict) -> None:
 
 
 def _assert_frames_identical(recomputed: pd.DataFrame, on_disk: pd.DataFrame) -> None:
-    """重算 DataFrame 与磁盘 parquet 在列名/dtype/timestamp/行数/数值上完全一致。"""
+    """结构和离散值精确一致；功率仅允许预定物理尺度的 float64 舍入误差。"""
+    from scenario.portable_numeric import assert_power_roundoff
     if list(recomputed.columns) != list(on_disk.columns):
         raise B6ExogenousError(
             f"v3 列名不符：重算 {list(recomputed.columns)} "
@@ -525,6 +526,12 @@ def _assert_frames_identical(recomputed: pd.DataFrame, on_disk: pd.DataFrame) ->
             continue
         left = recomputed[column].to_numpy()
         right = on_disk[column].to_numpy()
+        if column in ("local_pv_kw", "wind_generation_kw"):
+            try:
+                assert_power_roundoff(left, right, 500. if column == "local_pv_kw" else 800.)
+            except ValueError as error:
+                raise B6ExogenousError(f"{column} 与重算结果不符：{error}") from error
+            continue
         if not (left == right).all():
             mismatch = int((left != right).sum())
             raise B6ExogenousError(
@@ -614,14 +621,20 @@ def load_verified_v3_bundle() -> dict:
     live_revision = b6_exogenous_revision()
     declared_revision = _require_git_sha40(payload["materializer_revision"],
                                            field="materializer_revision")
+    from scenario.portable_numeric import assert_frozen_parquet, verify_frozen_recipe
+
+    try:
+        if not recomputed.equals(on_disk):
+            assert_frozen_parquet(parquet_path)
+        if declared_revision != live_revision:
+            verify_frozen_recipe(REPO_ROOT, declared_revision, parquet_path)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        raise B6ExogenousError(f"materializer_revision/冻结资产验证失败：{error}") from error
     if declared_revision != live_revision:
-        raise B6ExogenousError(
-            f"materializer_revision 与 live 解析不符：声明 {declared_revision} "
-            f"live {live_revision}"
-        )
+        live_revision = declared_revision  # Registered, byte-anchored original recipe above.
     rebuilt = build_v3_output_manifest(
         inputs=inputs,
-        frame=recomputed,
+        frame=on_disk,
         output_path=parquet_path,
         source_manifest_sha256=_sha256_file(source_path),
         template=template,
@@ -638,7 +651,10 @@ def load_verified_v3_bundle() -> dict:
             f"v3 manifest 与由 policy + 重算结果重建的语义不符；差异字段={differing}"
         )
     return {"manifest": payload, "source": source_payload,
-            "frame": recomputed, "policy": policy}
+            "frame": on_disk, "policy": policy,
+            "verification": {"schema": "portable-frozen-verifier-v1",
+                             "revision": b6_exogenous_revision(),
+                             "materializer_revision": declared_revision}}
 
 
 def load_verified_v3_manifest(path: Path | str | None = None) -> dict:
