@@ -96,3 +96,17 @@ used to replace the failed action or relabel its failure.
 - Automatic root-investigation follow-up seed-0 reactivated every 30 minutes;
   quiet while normal, no concurrent heavy checks/source edits. Completion of this
   launch does not satisfy the user's root-cause/repair goal.
+
+## Scheduling closure and isolation continuation
+
+- Shared 478.395 s, 82 episodes; ordinal 81 origin 5136 sample_0 first timeout
+  step1 in B. All 48 fresh controls pass; total 130 episodes/6240 steps.
+- All 403 receipt entries verified; parameters and source hashes unchanged.
+  Other 129 raw/exec trajectories exactly equal to their pre-control.
+- Immediate old/fresh replay each has one timeout in six calls. First-failure GC
+  only .002855 s; fresh replay also exhibits a separate .095571 s gen2 GC pause.
+- XProtect activation at 13:12:47.154 is adjacent to first failure; samples
+  show 546.4% CPU. Resource contention strongly implicated, exclusive AV cause
+  and exact historical batch503 cause remain unproven. Do not disable security.
+- No further local four-hour rerun, planning/reward/optimizer or budget changes.
+  Continue bounded isolated-host acceptance per M6_P2b_S0_HOST_ISOLATION.md.
