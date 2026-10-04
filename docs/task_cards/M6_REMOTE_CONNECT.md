@@ -41,3 +41,11 @@ SSH 公钥本机文件及指纹（允许发送主机追加 authorized_keys），
 - GNU Make 4.4.1 实测可用。host-check-v2 请求未发布 c20e8f5，GitHub not our ref，未进入测试；完整回传验签。提交入口已补已发布历史预检查（584c4d6 失败规格、c1f14e5 修复），14 项 runner 测试、Ruff/mypy 通过；证据 runs/m6_remote_publication_preflight_v1/，25 个正式绑定源与 c12aa45 一致。
 - c1f14e5 完整 SHA 已普通推送并与 origin 分支 SHA 核对一致；doctor 已部署。host-check-v3 请求该 SHA，在主机 fetch 阶段遇 GnuTLS recv error (-110)，未进入测试；失败产物及 receipt 已完整回传验签。独立 WSL IPv4 curl GitHub 连接 8 秒超时，SSH/回传正常。
 - runs/m6_remote_connect_v1/ 更新为 waiting_host_github_network。需修复 WSL GitHub HTTPS，再用新 job-id 完整门禁；保留三次失败。未改算法、发布配置、预算或 checkpoint；未启动正式训练、held-out 或诊断。
+
+## 网络恢复后的真实工程门禁
+
+- 用户报告网络修好后，Mac 经 SSH 实测 WSL GitHub ls-remote 返回已发布 456c26abd18c71783a1de136343300f056ee8b0b，doctor 正常；按该 SHA 提交新 job host-check-v4。
+- Ruff、mypy（191 个源文件）通过。pytest 约30%处出现失败，随后 pandas C CSV parser 段错误；make exit2，内层 pytest exit139。未产生完整 pytest XML，不伪造完整测试计数。
+- host-check-data-v1 同 SHA、独立工作目录 -x -vv：16 passed、1 failed；test_pv_chain_is_deterministic_and_matches_the_frozen_parameters 的逐位比较失败。host-check-data-probe-v1 记录520个不同值、最大绝对差3.765876499528531e-13 kW、同机重算逐位一致。不能通过改写冻结数据或默默放宽测试来宣称门禁通过。
+- 同一 probe 在独立 pytest 子进程仅运行 test_first_freeze_failure_leaves_no_partial_artifacts，依然在 pandas c_parser_wrapper.read 段错误（exit -11）；证明无需完整测试序列即可复现，尚未确定底层缺陷。
+- 三个任务产物均完整回传、逐文件验签；runs/m6_remote_host_gate_v4/ 保存五类汇总证据及 receipt。runs/m6_remote_connect_v1/ 状态 waiting_host_platform_test_fixes。网络与传输通过，完整工程门禁失败；这不解释 seed0 历史突变，不启动正式训练/多seed/held-out，不改变业务、预算、锁或冻结资产。

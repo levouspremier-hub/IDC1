@@ -159,3 +159,8 @@ GitHub HTTPS TLS 中断均保留失败产物；三次都未进入 pytest，完�
 WSL IPv4 访问 GitHub 独立检查连接超时。需先恢复主机 GitHub HTTPS，再使用
 新 job-id 运行 make check；不关闭 TLS 校验、不修改依赖锁或求解预算。
 Mac 断网重试与 Windows 重启恢复仍未实测，不据此宣称正式训练准备完成。
+
+后续实测：WSL GitHub HTTPS 已恢复，host-check-v4 按 456c26a 启动真实门禁。
+Ruff/mypy 通过，pytest 因冻结 PV 逐位比较失败及 pandas C CSV parser 段错误未完成。
+独立复测见 docs/task_cards/M6_REMOTE_CONNECT.md 与 runs/m6_remote_host_gate_v4/；
+三项新任务均已全部回传验签。当前待解决跨平台测试问题，不能据此启动正式训练。
