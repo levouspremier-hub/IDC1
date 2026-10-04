@@ -231,3 +231,26 @@ def test_noninteractive_task_path_contains_resolved_uv_directory(tmp_path, monke
     assert env['IDC_JOB_ID'] == 'job'
     assert env['IDC_JOB_REVISION'] == 'a' * 40
     assert env['IDC_JOB_OUTPUT'] == str(tmp_path)
+
+
+def test_unpublished_revision_is_rejected_before_remote_launch(monkeypatch):
+    import subprocess
+
+    calls = []
+    monkeypatch.setattr(remote, 'run', lambda argv, **kwargs: calls.append(argv))
+    monkeypatch.setattr(remote, 'capture', lambda *args, **kwargs: 'b' * 40 + '\trefs/heads/work')
+    monkeypatch.setattr(remote.subprocess, 'run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 1))
+    with pytest.raises(ValueError, match='Push'):
+        remote.ensure_published_revision('a' * 40)
+    assert calls == [['git', 'fetch', 'origin']]
+
+
+def test_published_historical_revision_is_allowed(monkeypatch):
+    import subprocess
+
+    monkeypatch.setattr(remote, 'run', lambda *args, **kwargs: None)
+    monkeypatch.setattr(remote, 'capture', lambda *args, **kwargs: 'b' * 40 + '\trefs/heads/work')
+    monkeypatch.setattr(remote.subprocess, 'run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0))
+    remote.ensure_published_revision('a' * 40)
