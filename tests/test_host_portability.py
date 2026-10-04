@@ -82,3 +82,16 @@ def test_historical_bridge_rejects_changed_generator(tmp_path):
     (tmp_path / '.git').write_text('gitdir: ' + git_dir + '\n')
     with pytest.raises(ValueError, match='recipe changed'):
         verify_frozen_recipe(tmp_path, FROZEN_RECIPE_REVISION, PARQUET)
+
+
+def test_portable_verifier_dirty_source_is_rejected(monkeypatch):
+    original = b6._git
+
+    def git(*args):
+        if args[:2] == ('status', '--porcelain') and 'scenario/portable_numeric.py' in args:
+            return ' M scenario/portable_numeric.py\n'
+        return original(*args)
+
+    monkeypatch.setattr(b6, '_git', git)
+    with pytest.raises(b6.B6ExogenousError, match='portable.*未提交'):
+        b6.load_verified_v3_bundle()
