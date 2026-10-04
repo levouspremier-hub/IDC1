@@ -557,6 +557,9 @@ def load_verified_v3_bundle() -> dict:
         raise B6ExogenousError(
             "B6 实现文件有未提交修改：verified 入口拒绝用旧 revision 为未提交代码背书"
         )
+    verifier_path = "scenario/portable_numeric.py"
+    if _git("status", "--porcelain", "--", verifier_path).strip():
+        raise B6ExogenousError("portable verifier 有未提交修改：拒绝验证")
 
     manifest_path = canonical_v3_manifest_path()
     source_path = canonical_v3_source_path()
@@ -653,7 +656,10 @@ def load_verified_v3_bundle() -> dict:
     return {"manifest": payload, "source": source_payload,
             "frame": on_disk, "policy": policy,
             "verification": {"schema": "portable-frozen-verifier-v1",
-                             "revision": b6_exogenous_revision(),
+                             "revision": _git("log", "-1", "--format=%H", "--",
+                                              *B6_EXOGENOUS_SOURCE_PATHS,
+                                              verifier_path).strip(),
+                             "source_sha256": _sha256_file(REPO_ROOT / verifier_path),
                              "materializer_revision": declared_revision}}
 
 
