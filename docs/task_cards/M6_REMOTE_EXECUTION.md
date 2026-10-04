@@ -29,3 +29,7 @@
 ## 联机验收返修边界
 
 真实 WSL host-check-v1 退出127，console 明确 make 未安装；SSH 非交互 PATH 还需覆盖 uv 位于 ~/.local/bin 的情况。允许 scripts/idc_remote.py 新增 task_environment 将已解析 uv 的父目录加入子任务 PATH，并新增失败规格；只改执行层，不改正式源/锁/预算。主机安装 make 属已授权环境准备，失败任务不覆盖，重测使用 host-check-v2。验收仍为本地 runner 测试/静态检查及真实主机 make check。回滚点 a5d5322。
+
+## 发布预检查返修
+
+host-check-v2 在取 Git SHA 时失败：本机新任务卡 c20e8f5 尚未推送，远端 not our ref；未进入测试。保留失败产物。允许提交前 fetch/核对 requested revision 是否在 origin 实际已发布 heads 的祖先中，拒绝未发布 SHA，禁止创建远端任务；不自动提交或推送用户未提交内容。新增失败回归后实现，原层边界不变，回滚点 c20e8f5。
