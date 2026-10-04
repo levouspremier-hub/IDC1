@@ -105,3 +105,9 @@ def test_downstream_recipe_revisions_stay_anchored_for_verifier_only_changes():
     assert refs_code_revision() == '577f1db4d5ca78553aa1be866f643ebeb7e8cb13'
     assert resolve_materializer_revision() == '577f1db4d5ca78553aa1be866f643ebeb7e8cb13'
     assert b6_formal_code_revision() == '626f97f3cbd13082e14197028dd62d356b8e54e4'
+
+
+def test_mapper_recipe_revision_stays_anchored_for_verifier_only_changes():
+    from scenario.arrival_mapper import mapper_code_revision
+
+    assert mapper_code_revision() == 'a806599080bfd43796ba3c2ad696a19e2ba28f42'
