@@ -25,3 +25,7 @@
 - 用户主机已有 WSL2 和 GPT；主机准备指令已写入 docs/REMOTE_EXECUTION.md，待返回 SSH 用户名、Tailscale 地址、端口、远端根路径和 host key 指纹后，才在 Mac 配置并完成首次联机 check/回传验收。
 - 默认单槽执行，全部新 runs/checkpoint/失败证据与显式输出自动回传；Mac 重启后需 watch 恢复；Windows 重启会中断计算，保留证据，不自动重跑。
 - 所有实现与文档提交普通推送至当前工作分支；不合并 paper-baseline。最终远端 SHA 在交付消息中核对。
+
+## 联机验收返修边界
+
+真实 WSL host-check-v1 退出127，console 明确 make 未安装；SSH 非交互 PATH 还需覆盖 uv 位于 ~/.local/bin 的情况。允许 scripts/idc_remote.py 新增 task_environment 将已解析 uv 的父目录加入子任务 PATH，并新增失败规格；只改执行层，不改正式源/锁/预算。主机安装 make 属已授权环境准备，失败任务不覆盖，重测使用 host-check-v2。验收仍为本地 runner 测试/静态检查及真实主机 make check。回滚点 a5d5322。
