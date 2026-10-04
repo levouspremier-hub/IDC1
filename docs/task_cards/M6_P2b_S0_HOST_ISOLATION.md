@@ -98,3 +98,14 @@ seed0-capsule-frozen-gc-on-v1 and seed0-capsule-frozen-gc-off-v1 use default sin
 slot/new output IDs. Differences may localize GC-sensitive budget consumption,
 not establish historical cause or authorize disabling GC in training. 256 solves
 only; no policy load, environment run, long soak, short training or held-out.
+
+## Follow-up result / external blocker
+
+WSL capsule127/128 successful, index79 B timeout with .116919s generation2 GC;
+all14 outer and five inner receipt hashes verified. Original CLI exit0 defect
+fixed after failing regression;13 focused tests/Ruff/mypy pass. Two registered
+frozen Torch GC discriminator submissions fail SSH connect (no acknowledgement,
+no watcher, no asserted remote execution). Independent 8s SSH probe also times
+out. Follow-up paused pending host connectivity, then query both job IDs before
+submitting to avoid duplicates. Strict loading remains separately blocked; no
+full-policy qualification, solver fix or training readiness claimed.

@@ -51,3 +51,45 @@ WSL outcome and receipts remain pending. Automation has been updated to this
 job and the strict-preflight limitations. After the authentic loading chain
 passes, a newly registered full-policy probe is required before any longer
 host qualification or short training. No formal training or held-out run starts.
+
+## Completed WSL capsule / 2026-10-04 follow-up
+
+Original remote job completed all 128 solves, but inner diagnosis FAILED:
+index79 is B timeout; other127 optimal, maximum successful exec difference
+3.327511877149192e-13. Reverified all14 outer receipt files and five inner
+artifact hashes; local transfer receipt all_files_verified=true. Original
+outer state succeeded/exit0 is a diagnostic CLI defect, not solver acceptance.
+No historical evidence is overwritten or relabeled.
+
+WSL wall median/P95/max .241579/.294944/.319371 s, process CPU
+6.927133/7.222455/7.363023 s, thread CPU .238399/.294913/.319325 s.
+The large process/thread CPU gap indicates substantial additional process CPU,
+but no recorded pool inventory identifies which library/threads caused it.
+The capsule did not apply original policy's frozen Torch setting, limiting host
+comparison; this run does not qualify the original policy's execution environment.
+
+First failed input is unchanged from adjacent successes. GC generation2 consumed
+.116919 s (plus generation0 .002685 and generation1 .003006).
+Pre-R build/validation .125005 s; R .004550; A optimal .034741 s with
+.074687 budget; B timeout .069335 s with actual passed remainder .030667 s.
+Adjacent index78 and80 are successful. Total correction wall >.25 alone is not
+evidence that budget propagation is broken; native per-stage options show shared
+remainder. This GC pause is an additional budget-consumption mechanism,
+not a proof of historical503 cause or a production fix recommendation.
+
+CLI result propagation: failing specification05b6a1f committed first; repair
+17d3c11 returns exit1 after retaining all failed data/receipt. Restoration
+specification1f5600f precedes a7180b7 diagnostic runtime modes; 13 focused tests,
+Ruff and mypy pass. No solver, reward, physical constraints or update logic edited.
+Full make gate/strict release remain blocked by separately owned provenance repair.
+
+Two registered new128-solve counterfactual arms use original frozen Torch config,
+GC-on/off in separate processes, same authenticated capsule/options/.25 budget.
+GC-off is diagnostic only, never a production change. Submission attempts for
+seed0-capsule-frozen-gc-on-v1 and seed0-capsule-frozen-gc-off-v1 at a7180b7 fail
+SSH connection before reaching the remote submit command (exit255/port22 timeout).
+No remote acknowledgement or watcher exists; these runs are NOT claimed started.
+Preserve ambiguity if later recovery reveals requests; query status before any
+submission and do not overwrite evidence. Bounded independent BatchMode SSH check
+also times out. User must restore host/tailnet/SSH reachability; automated root
+follow-up is paused for this external blocker. No training has started.
