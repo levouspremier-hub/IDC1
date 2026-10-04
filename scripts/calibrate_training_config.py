@@ -66,6 +66,7 @@ if CORRECTOR_TIME_LIMIT_S != PRODUCTION_CORRECTOR_TIME_LIMIT_S:
 #   - `timeout` / `base_shortage` / `solver_failure`：**零动作回退**，候选解**不执行**；
 #   - `proposal_invalid`：raw proposal 非法，同样**零动作回退**。
 BENIGN_CORRECTION_REASONS = frozenset({"none", "deadline_shortfall"})
+EXECUTABLE_DEGRADED_REASONS = frozenset({"stage_b_timeout_feasible"})
 ZERO_ACTION_FALLBACK_REASONS = frozenset({"timeout", "base_shortage",
                                           "solver_failure", "proposal_invalid"})
 
@@ -181,6 +182,7 @@ def run_reference_proposal(compute_value: float, origins: tuple[int, ...]) -> di
         o_carbon = 0.0
         o_fallbacks = 0
         o_deadline_shortfall = 0
+        o_stage_a_retained = 0
         o_reasons: dict[str, int] = {}
 
         for _step in range(HORIZON):
@@ -191,6 +193,8 @@ def run_reference_proposal(compute_value: float, origins: tuple[int, ...]) -> di
                 o_fallbacks += 1
             elif reason == "deadline_shortfall":
                 o_deadline_shortfall += 1
+            elif reason in EXECUTABLE_DEGRADED_REASONS:
+                o_stage_a_retained += 1
             elif reason not in BENIGN_CORRECTION_REASONS:
                 raise CalibrationError(f"未知 correction_reason：{reason!r}")
             o_business += float(info[BUSINESS_VIOLATION_INFO_KEY])
@@ -207,6 +211,7 @@ def run_reference_proposal(compute_value: float, origins: tuple[int, ...]) -> di
             "carbon_sum": o_carbon,
             "zero_action_fallbacks": o_fallbacks,
             "deadline_shortfall": o_deadline_shortfall,
+            "stage_a_retained_steps": o_stage_a_retained,
             "reasons": dict(sorted(o_reasons.items())),
             "ledger_micro_sum": int(sum(injection.ledger_micro)),
         })
@@ -232,6 +237,7 @@ def run_reference_proposal(compute_value: float, origins: tuple[int, ...]) -> di
         "zero_action_fallbacks": failures,
         "timeouts": timeouts,
         "deadline_shortfall": sum(p["deadline_shortfall"] for p in per_origin),
+        "stage_a_retained_steps": sum(p["stage_a_retained_steps"] for p in per_origin),
         "reasons": dict(sorted(
             collections.Counter(
                 k for p in per_origin for k, v in p["reasons"].items()
