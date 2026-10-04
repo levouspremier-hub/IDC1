@@ -14,13 +14,29 @@ FORMAL_SCHEMA = "m6p2b-formal-train-resume-v2"
 SHORT_SCHEMA = "m6p2b-controlled-resume-v2"
 
 
-def load_policy(path, *, formal=True):
-    config = load_config()
+def _runtime_context(runtime_release):
+    if runtime_release is None:
+        return load_config(), checkpoint_binding()
+    from scenario.runtime_release import (
+        ROOT,
+        runtime_checkpoint_binding,
+        verify_candidate,
+        verify_runtime_release,
+    )
+    release = verify_runtime_release(runtime_release)
+    return (verify_candidate(ROOT / release["candidate_path"])["config"],
+            runtime_checkpoint_binding(runtime_release))
+
+
+def load_policy(path, *, formal=True, runtime_release=None):
+    if runtime_release is not None and not formal:
+        raise ValueError("formal runtime release cannot export a candidate short policy")
+    config, binding = _runtime_context(runtime_release)
     obs_dim = int(config["training"]["policy"]["obs_dim"])
     ckpt = VersionedCheckpoint.load(
         path, expected_action_dim=21, expected_obs_dim=obs_dim, expected_schema_hash=SCHEMA)
     role = "formal_training_policy" if formal else "controlled_short_run_eval_input"
-    if ckpt.extras != {"inventory_binding": checkpoint_binding(), "artifact_role": role}:
+    if ckpt.extras != {"inventory_binding": binding, "artifact_role": role}:
         raise ValueError("evaluation input inventory semantics/role mismatch")
     if set(ckpt.state) != {"policy"}:
         raise ValueError("evaluation input must contain only policy weights")
@@ -30,14 +46,15 @@ def load_policy(path, *, formal=True):
     return policy
 
 
-def export_policy(source, destination, *, formal=True):
-    config = load_config()
+def export_policy(source, destination, *, formal=True, runtime_release=None):
+    if runtime_release is not None and not formal:
+        raise ValueError("formal runtime release cannot export a candidate short policy")
+    config, binding = _runtime_context(runtime_release)
     obs_dim = int(config["training"]["policy"]["obs_dim"])
     expected_schema = FORMAL_SCHEMA if formal else SHORT_SCHEMA
     ckpt = VersionedCheckpoint.load(
         source, expected_action_dim=21, expected_obs_dim=obs_dim,
         expected_schema_hash=expected_schema)
-    binding = checkpoint_binding()
     if ckpt.extras != {"inventory_binding": binding}:
         raise ValueError("training checkpoint lacks matching inventory semantics")
     if ckpt.state["frozen_config"] != config:
@@ -57,7 +74,7 @@ def export_policy(source, destination, *, formal=True):
         schema_hash=SCHEMA, code_revision=ckpt.code_revision,
         state={"policy": ckpt.state["policy"]},
         extras={"inventory_binding": binding, "artifact_role": role}).save(output)
-    loaded = load_policy(output, formal=formal)
+    loaded = load_policy(output, formal=formal, runtime_release=runtime_release)
     original = read_checkpoint_payload(source)["state"]["policy"]
     if any(not original[k].equal(v) for k, v in loaded.state_dict().items()):
         raise ValueError("export changed policy weights")

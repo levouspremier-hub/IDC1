@@ -146,3 +146,20 @@ def test_stable_clipping_preserves_finite_loss_and_actor_gradient(sign):
     actual_grad = torch.autograd.grad(result['loss'], values)[0]
     assert torch.equal(result['loss'], reference)
     assert torch.equal(actual_grad, expected_grad)
+
+
+def test_formal_release_refuses_partial_qualification(monkeypatch, tmp_path):
+    import json
+    monkeypatch.setattr(runtime, 'verify_candidate',
+                        lambda p: {'config': {'runtime_budget_s': .25}})
+    (tmp_path / 'report.json').write_text(json.dumps({
+        'passed': True, 'qualification_complete': False, 'selected_budget_s': .25,
+        'formal_512_started': False}))
+    with pytest.raises(ValueError, match='complete'):
+        runtime.qualification_evidence(tmp_path, 'candidate')
+
+
+def test_formal_release_cannot_load_short_evaluation_role():
+    from checkpointing.inventory_eval_input import load_policy
+    with pytest.raises(ValueError, match='short'):
+        load_policy('missing-policy', formal=False, runtime_release='unverified-release')

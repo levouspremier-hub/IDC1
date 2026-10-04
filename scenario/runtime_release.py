@@ -105,3 +105,96 @@ def candidate_binding(path):
     return {'runtime_candidate_sha256': sha(path), 'execution_version': VERSION,
             'sources': candidate['sources'], 'assets': candidate['assets'],
             'config': candidate['config'], 'formal_training_ready': False}
+
+
+def qualification_evidence(folder, candidate_path):
+    """Reopen all mandatory phases, not a caller-supplied ready Boolean."""
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
+    from safe_rl_v2.inventory_train import verify_written_run
+    candidate = verify_candidate(candidate_path)
+    folder = Path(folder)
+    report = json.loads((folder / 'report.json').read_text())
+    if (report.get('passed') is not True or report.get('qualification_complete') is not True
+            or report.get('formal_512_started') is not False
+            or report.get('selected_budget_s') != candidate['config']['runtime_budget_s']):
+        raise ValueError('formal release requires complete matching host qualification')
+    evidence = {str((folder / name).relative_to(ROOT)): sha(folder / name)
+                for name in ('report.json', 'manifest.json')}
+    phases = report['preflight']
+    if [(p['action'], p['exit_code']) for p in phases] != [('gate', 0), ('resume-audit', 0)]:
+        raise ValueError('formal release requires host gate and real recovery audit')
+    attempts = report['attempts']
+    if [a['budget_s'] for a in attempts] != list(BUDGETS[:len(attempts)]):
+        raise ValueError('budget selection differs from preregistered order')
+    passed = [a for a in attempts if a.get('passed') is True]
+    if (len(passed) != 1 or passed[0] is not attempts[-1]
+            or passed[0]['candidate_sha256'] != sha(candidate_path)):
+        raise ValueError('qualification must select first fully passing budget')
+    phases = phases + passed[0]['phases']
+    expected = ['gate', 'resume-audit', 'diagnose', 'short', 'short', 'short', 'soak']
+    if [p['action'] for p in phases] != expected:
+        raise ValueError('qualification phase sequence incomplete')
+    for phase in phases:
+        child = folder.parent / phase['run_id']
+        manifest = json.loads((child / 'manifest.json').read_text())
+        result = json.loads((child / 'report.json').read_text())
+        if phase['exit_code'] != 0 or manifest['status'] != 'success':
+            raise ValueError('qualification phase is not successful')
+        if phase['action'] == 'short':
+            verify_written_run(child, candidate_binding(candidate_path))
+            if (result['seed'] != phase['seed'] or result['batches'] != 8
+                    or result['transitions'] != 1536 or result['adam_steps'] != 128
+                    or result['lagrangian_updates'] != 8
+                    or len(result['inventory_episodes']) != 32):
+                raise ValueError('short training workload differs')
+            episodes = result['inventory_episodes']
+        elif phase['action'] in ('diagnose', 'soak'):
+            if result.get('candidate_sha256') != sha(candidate_path):
+                raise ValueError('diagnostic candidate binding mismatch')
+            if result['passed'] is not True or result['parameter_updates'] != 0:
+                raise ValueError('fixed-policy diagnosis did not pass')
+            episodes = result['episodes']
+            if (phase['action'] == 'diagnose' and len(episodes) != 48) or (
+                    phase['action'] == 'soak' and result['shared_elapsed_s'] < 14400):
+                raise ValueError('diagnostic or shared soak duration incomplete')
+            if any(e['parameter_hash_before'] != e['parameter_hash_after'] for e in episodes):
+                raise ValueError('diagnostic policy was updated')
+        else:
+            if result['passed'] is not True:
+                raise ValueError('gate/recovery evidence did not pass')
+            episodes = []
+        if any(not all(inventory_episode_acceptance(e).values())
+               or e['target_qualified'] is not True for e in episodes):
+            raise ValueError('phase failed frozen service/physics/uniform target standards')
+        for path in child.rglob('*'):
+            if path.is_file():
+                evidence[str(path.relative_to(ROOT))] = sha(path)
+    if [p['seed'] for p in phases if p['action'] == 'short'] != [0, 1, 2]:
+        raise ValueError('three short seeds required')
+    return evidence
+
+
+def build_runtime_release(candidate_path, qualification_folder):
+    evidence = qualification_evidence(qualification_folder, candidate_path)
+    return {'schema': 'idc-runtime-formal-release-v1', 'status': 'frozen',
+            'execution_version': VERSION, 'formal_training_ready': True,
+            'candidate_path': str(Path(candidate_path).relative_to(ROOT)),
+            'candidate_sha256': sha(candidate_path),
+            'qualification_folder': str(Path(qualification_folder).relative_to(ROOT)),
+            'evidence': evidence, 'allowed_seeds': [0], 'fresh_initialization_required': True,
+            'formal_512_automatically_started': False}
+
+
+def verify_runtime_release(path):
+    recorded = json.loads(Path(path).read_text())
+    expected = build_runtime_release(ROOT / recorded['candidate_path'],
+                                     ROOT / recorded['qualification_folder'])
+    if recorded != expected:
+        raise ValueError('formal runtime release evidence/code/config mismatch')
+    return recorded
+
+
+def runtime_checkpoint_binding(path):
+    release = verify_runtime_release(path)
+    binding = candidate_binding(ROOT / release['candidate_path'])
+    return {**binding, 'runtime_release_sha256': sha(path), 'formal_training_ready': True}

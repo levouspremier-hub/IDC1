@@ -134,7 +134,24 @@ def verify_written_run(folder, binding):
 
 def _run(args):
     candidate_path = getattr(args, "runtime_candidate", None)
-    if candidate_path:
+    runtime_release_path = getattr(args, "runtime_release", None)
+    if candidate_path and runtime_release_path:
+        raise ValueError("select either a runtime candidate or a qualified runtime release")
+    if runtime_release_path:
+        from scenario.runtime_release import (
+            runtime_checkpoint_binding,
+            verify_candidate,
+            verify_runtime_release,
+        )
+        release = verify_runtime_release(runtime_release_path)
+        if args.short or args.seed not in release["allowed_seeds"]:
+            raise ValueError("runtime formal launch requires qualified seed0; "
+                             "old resume bindings are rejected")
+        candidate_path = str(ROOT / release["candidate_path"])
+        config = verify_candidate(candidate_path)["config"]
+        matrix = load_matrix()
+        binding = runtime_checkpoint_binding(runtime_release_path)
+    elif candidate_path:
         from scenario.runtime_release import (
             candidate_binding,
             require_candidate_scope,
@@ -153,7 +170,9 @@ def _run(args):
         raise ValueError("seed0 formal authorization requires seed 0 and full training")
     authorization = None
     if not args.short:
-        if seed0_formal:
+        if runtime_release_path:
+            authorization = release
+        elif seed0_formal:
             authorization = require_seed0_launch_gate(binding, seed=args.seed)
         else:
             require_short_gate(binding)
@@ -363,6 +382,7 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--resume-from")
     parser.add_argument("--runtime-candidate", help="signed train-only qualification candidate")
+    parser.add_argument("--runtime-release", help="new frozen host-qualified seed0 release")
     args = parser.parse_args(argv)
     if args.seed0_formal and (args.short or args.seed != 0):
         parser.error("--seed0-formal requires --seed 0 and full training")
