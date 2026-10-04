@@ -716,3 +716,21 @@ def test_frozen_pv_comparison_only_allows_machine_scale_roundoff(case):
             actual[1] = np.nan
         with pytest.raises(AssertionError):
             assert_frozen_pv_agreement(actual, expected)
+
+
+@pytest.mark.parametrize('case', ['roundoff', 'material_change', 'night_change', 'nonfinite'])
+def test_wind_frozen_comparison_only_allows_machine_scale_roundoff(case):
+    expected = np.array([0., 2., 700.])
+    actual = expected.copy()
+    if case == 'roundoff':
+        actual[1] = np.nextafter(actual[1], np.inf)
+        assert_frozen_power_agreement(actual, expected, RATED_CAPACITY_KW)
+    else:
+        if case == 'material_change':
+            actual[2] += 1e-9
+        elif case == 'night_change':
+            actual[0] = 1e-15
+        else:
+            actual[1] = np.nan
+        with pytest.raises(AssertionError):
+            assert_frozen_power_agreement(actual, expected, RATED_CAPACITY_KW)
