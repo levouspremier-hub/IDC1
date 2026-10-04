@@ -169,11 +169,13 @@ def _generator_is_dirty() -> bool:
 
 
 def resolve_materializer_revision() -> str:
+    from scenario.portable_numeric import verified_recipe_revision
+
     revision = _git("log", "-1", "--format=%H", "--",
                     *B6_SPLIT_SOURCE_PATHS).strip()
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise SplitManifestV5Error(f"materializer revision 无效：{revision!r}")
-    return revision
+    return verified_recipe_revision(REPO_ROOT, B6_SPLIT_SOURCE_PATHS, revision, 'splits')
 
 
 def sha256_file(path: Path | str) -> str:

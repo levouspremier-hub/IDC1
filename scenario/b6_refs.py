@@ -192,11 +192,13 @@ def _generator_is_dirty() -> bool:
 
 def refs_code_revision() -> str:
     """本冻结实现的 revision（由 Git 解析，不用漂移的 HEAD）。"""
+    from scenario.portable_numeric import verified_recipe_revision
+
     revision = _git("log", "-1", "--format=%H", "--",
                     *B6_REFS_SOURCE_PATHS).strip()
     if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
         raise RefsV4Error(f"materializer revision 无效：{revision!r}")
-    return revision
+    return verified_recipe_revision(REPO_ROOT, B6_REFS_SOURCE_PATHS, revision, 'refs')
 
 
 def _now_utc() -> str:

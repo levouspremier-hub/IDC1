@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import subprocess
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -23,13 +24,52 @@ RECIPE_SOURCES = {
 # These two consumers verify an existing artifact; all generator code, imports,
 # constants, declarations and the complete materializer script remain anchored.
 VERIFIER_FUNCTIONS = {'_assert_frames_identical', 'load_verified_v3_bundle'}
+REGISTERED_RECIPES = {
+    'refs': '577f1db4d5ca78553aa1be866f643ebeb7e8cb13',
+    'splits': '577f1db4d5ca78553aa1be866f643ebeb7e8cb13',
+    'forecast': '626f97f3cbd13082e14197028dd62d356b8e54e4',
+}
+REVISION_CONSUMERS = {
+    'scenario/exogenous_drivers_b6.py': VERIFIER_FUNCTIONS,
+    'scenario/b6_refs.py': {'refs_code_revision'},
+    'scenario/b6_split_manifests.py': {'resolve_materializer_revision'},
+    'scenario/formal_scenario_b6.py': {'b6_formal_code_revision'},
+}
 
 
-def recipe_ast(source):
+@lru_cache(maxsize=128)
+def recipe_ast(source, excluded=('_assert_frames_identical', 'load_verified_v3_bundle')):
     tree = ast.parse(source)
     tree.body = [node for node in tree.body
-                 if not (isinstance(node, ast.FunctionDef) and node.name in VERIFIER_FUNCTIONS)]
+                 if not (isinstance(node, ast.FunctionDef) and node.name in excluded)]
     return ast.dump(tree, include_attributes=False)
+
+
+@lru_cache(maxsize=128)
+def historical_source(root, revision, name):
+    return subprocess.check_output(['git', 'show', revision + ':' + name], cwd=root)
+
+
+def verified_recipe_revision(root, paths, live_revision, kind):
+    """Preserve a registered generator stamp only for byte/AST-proven equivalent recipes."""
+    registered = REGISTERED_RECIPES[kind]
+    actual = subprocess.check_output(
+        ['git', 'log', '-1', '--format=%H', '--', *paths], cwd=root, text=True).strip()
+    # Retain the caller's fail-closed behavior for a forged or simulated live revision.
+    if actual != live_revision:
+        return live_revision
+    for name in paths:
+        original = historical_source(str(root), registered, name)
+        current = (Path(root) / name).read_bytes()
+        if name in REVISION_CONSUMERS:
+            excluded = tuple(sorted(REVISION_CONSUMERS[name]))
+            equal = (recipe_ast(current.decode(), excluded)
+                     == recipe_ast(original.decode(), excluded))
+        else:
+            equal = current == original
+        if not equal:
+            return live_revision  # Changed generator must use new assets and a new recipe stamp.
+    return registered
 
 
 def assert_frozen_parquet(path):

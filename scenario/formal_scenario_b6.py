@@ -216,9 +216,12 @@ def _git(*args: str) -> str:
 def b6_formal_code_revision() -> str:
     """本候选实现的冻结 revision（由 `B6_FORMAL_SOURCE_PATHS` 解析）。"""
     try:
+        from scenario.portable_numeric import verified_recipe_revision
+
         revision = _git("log", "-1", "--format=%H", "--",
                         *B6_FORMAL_SOURCE_PATHS).strip()
-        return _require_git_sha40(revision, field="b6 formal code_revision")
+        revision = _require_git_sha40(revision, field="b6 formal code_revision")
+        return verified_recipe_revision(REPO_ROOT, B6_FORMAL_SOURCE_PATHS, revision, 'forecast')
     except ValueError as error:
         raise FormalB6Error(f"b6 formal code_revision 无法解析：{error}") from error
 
