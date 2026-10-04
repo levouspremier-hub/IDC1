@@ -84,3 +84,17 @@ commit before repair. No corrector, budget, GC or thread semantics changes.
 Verify all received hashes, native CPU/wall/stage remaining budget; capsule did
 not apply policy's frozen Torch setting, so its thread environment cannot qualify
 the policy host. Full strict release remains blocked by refs provenance check.
+
+## Preregistered bounded GC discriminator (contract only)
+
+After retaining WSL index79 failure, allow capsule runtime modes frozen_gc_on
+and frozen_gc_off, each in a new isolated process, 128 unchanged-input solves.
+Both apply the already published Torch thread count from authenticated training
+config; GC-off is explicitly a diagnostic counterfactual, never a production
+repair. Do not force collection or alter HiGHS/BLAS options. Record mode, prior
+GC/Torch state and effective thread count; restore process settings on failure.
+Failing restoration regression precedes implementation. Jobs
+seed0-capsule-frozen-gc-on-v1 and seed0-capsule-frozen-gc-off-v1 use default single
+slot/new output IDs. Differences may localize GC-sensitive budget consumption,
+not establish historical cause or authorize disabling GC in training. 256 solves
+only; no policy load, environment run, long soak, short training or held-out.

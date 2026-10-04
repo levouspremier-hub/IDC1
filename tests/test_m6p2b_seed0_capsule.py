@@ -39,3 +39,20 @@ def test_failed_capsule_propagates_nonzero_after_preserving_artifacts(tmp_path, 
     assert json.loads((folder / "report.json").read_text())["failed_solves"] == 128
     assert json.loads((folder / "manifest.json").read_text())["status"] == "failed"
     assert (folder / "artifact_verification.json").is_file()
+
+
+def test_diagnostic_runtime_restores_process_state_on_exception():
+    import gc
+
+    import torch
+
+    from scripts.m6p2b_seed0_capsule import runtime_configuration
+
+    before_gc, before_threads = gc.isenabled(), torch.get_num_threads()
+    with pytest.raises(RuntimeError, match="probe failure"):
+        with runtime_configuration("frozen_gc_off") as metadata:
+            assert not gc.isenabled()
+            assert torch.get_num_threads() == metadata["effective_torch_num_threads"] == 1
+            raise RuntimeError("probe failure")
+    assert gc.isenabled() == before_gc
+    assert torch.get_num_threads() == before_threads
