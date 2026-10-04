@@ -394,7 +394,12 @@ def trace_minute_totals(path: Path = ARRIVAL_ARCHIVE) -> pd.Series:
             extracted = archive.extractfile(member)
             if extracted is None:
                 raise MaterializationError(f"无法读取成员 {member.name}")
-            frame = pd.read_csv(io.BytesIO(extracted.read()))
+            # Identifiers are text, not scientific-notation numbers. In pandas 2.3.3,
+            # inferring a hash such as 81e3104049863b72 can crash the C parser
+            # (pandas-dev/pandas#62617). Minute counts retain numeric inference.
+            frame = pd.read_csv(io.BytesIO(extracted.read()), dtype={
+                "HashOwner": str, "HashApp": str, "HashFunction": str, "Trigger": str,
+            })
             minute_columns = [c for c in frame.columns if str(c).isdigit()]
             if len(minute_columns) != 1440:
                 raise MaterializationError(

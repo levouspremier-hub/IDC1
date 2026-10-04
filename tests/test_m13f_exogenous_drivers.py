@@ -227,11 +227,23 @@ def test_pv_is_positive_at_some_daytime_steps(frame):
     assert (frame["local_pv_kw"].to_numpy(dtype=float) > 0.0).sum() > 1000
 
 
+def assert_frozen_pv_agreement(actual, expected):
+    assert actual.shape == expected.shape
+    assert np.isfinite(actual).all() and np.isfinite(expected).all()
+    # libm implementations differ across arm64/macOS and x86_64/Linux.
+    # Bound only cross-platform roundoff to eight float64 eps at the frozen
+    # 500 kW physical scale (8.89e-13 kW), with no relative tolerance.
+    assert np.array_equal(actual == 0., expected == 0.)
+    np.testing.assert_allclose(actual, expected, rtol=0.,
+                               atol=8 * np.finfo(np.float64).eps * PV_CAPACITY_KW)
+
+
 def test_pv_chain_is_deterministic_and_matches_the_frozen_parameters(frame, pv_inputs):
     module = drivers()
     times, ghi, temp, wind = pv_inputs
     recomputed = module.local_pv_kw(times, ghi, temp, wind)
-    assert np.array_equal(recomputed, frame["local_pv_kw"].to_numpy(dtype=float))
+    assert np.array_equal(recomputed, module.local_pv_kw(times, ghi, temp, wind))
+    assert_frozen_pv_agreement(recomputed, frame["local_pv_kw"].to_numpy(dtype=float))
 
 
 def test_pv_does_not_use_the_bell_curve_or_the_2026_profile():
