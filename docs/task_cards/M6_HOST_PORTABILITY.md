@@ -20,3 +20,12 @@ host-portability-gate-v1：2882 passed、275 failed、20 errors；集中于 B6 �
 
 ## 下游 revision 级联修复
 v2 门禁已消除 B6 数值重算失败，但 refs_v4 / policy-v3 / v5 的源码集合覆盖 B6 验证器，导致 revision 漂移。允许 scenario/b6_refs.py、scenario/formal_scenario_b6.py、scenario/b6_split_manifests.py 的 revision 查询函数接入注册生成配方核验。必须仍使用完整原 SOURCE_PATHS 进行 dirty 与 Git revision 查询；只在完整源代码（仅排除三个 revision 查询函数和两个已登记 B6 消费验证函数）与原注册 commit 一致时返回原生成 revision。任何生成代码变化返回新 live revision，旧资产必须拒绝；不改变 SOURCE_PATHS，不重写资产。新增失败回归先提交再实现；回滚 cb76ecc。
+
+## 归因、实现与当前验收
+- 原锁 pandas2.3.3 的哈希自动推断缺陷：最小公开输入 `81e3104049863b72` 在 WSL inferred exit -11、显式 str exit0；上游 https://github.com/pandas-dev/pandas/issues/62617。ea81708 失败规格，1ee90e5 只固定四个标识列字符串类型，分钟数值列与排序/求和不变。
+- PV max abs 3.765876499528531e-13 kW（520行、最多424 ULP）；wind max abs 5.684341886080802e-14 kW（366行）。carbon/arrival 逐位一致。以冻结500/800kW物理尺度的8×float64 epsilon绝对界限验证，保留零位置、finite、shape/dtype/timestamp及离散量精确性；1e-9kW和零位置变更回归必须拒绝。
+- d4361a9/cb76ecc：新 portable-frozen-verifier-v1 仅接受原注册 parquet SHA 与原配方commit；校验原源码SHA、完整AST（仅排除两个已登记消费验证函数）和原materializer脚本字节。返回原磁盘frame；验证版本/revision/source hash另记，未重发任何冻结资产。
+- v1完整门禁2882 passed/275 failed/20 errors，均受B6逐位比较级联；v2为2894 passed/270 failed/20 errors，主要为下游 live revision 漂移；v3在Ruff因同时期capsule测试import排序失败，未进入pytest。所有失败完整保留、回传验签；capsule lint已由其任务修复，当前全链Ruff通过。首次host-portability-tests-v1误以文件作为命令，uv仅运行定义，虽exit0但**无pytest**，不计为通过；正确v2为56通过、1个slow浮点比较失败，原始失败保留。
+- 975cb2c：refs_v4/v5/policy-v3只在完整原SOURCE_PATHS代码与原登记配方一致时保留原生成stamp；保留原dirty集合和原Git查询。生成代码变化仍给新live revision，旧资产拒绝。缓存仅用于不可变Git blob与按源码文本键的AST，未缓存可变资产校验。
+- 当前本地120项 host portability / formal B6 / cutover 回归全绿，包括伪造revision、生成源码变更、dirty helper和协调1ULP改写hash拒绝；全链Ruff与mypy（194源）通过。25个正式checkpoint绑定源和uv.lock与9b7b59a一致。runs/m6_host_portability_v1/保存五类审计与receipt。
+- 主机Tailscale Online=false，SSH重复连接超时；原v3失败产物已完整回传。已准备新的固定SHA v4请求（本机忽略日志目录），**尚未启动**，待主机恢复后完整make check、slow重建与真实CSV模板精确等价性复核。当前不声称WSL验收全绿、不宣称seed0根因解决，不启动正式训练/新seed/held-out。

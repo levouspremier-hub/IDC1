@@ -164,3 +164,5 @@ Mac 断网重试与 Windows 重启恢复仍未实测，不据此宣称正式训�
 Ruff/mypy 通过，pytest 因冻结 PV 逐位比较失败及 pandas C CSV parser 段错误未完成。
 独立复测见 docs/task_cards/M6_REMOTE_CONNECT.md 与 runs/m6_remote_host_gate_v4/；
 三项新任务均已全部回传验签。当前待解决跨平台测试问题，不能据此启动正式训练。
+
+跨平台修复已见 docs/task_cards/M6_HOST_PORTABILITY.md：保留原冻结文件与checkpoint绑定，注册生成配方与新验证器版本分别核验。本地120项相关回归和全链静态检查通过；当前主机离线，修复后的WSL完整门禁仍待恢复连接后以新任务验收。
