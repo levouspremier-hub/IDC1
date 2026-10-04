@@ -260,11 +260,11 @@ def _train_input_fingerprint() -> str:
 
 @lru_cache(maxsize=256)
 def _verified_train_input(origin: int, horizon: int, cutoff: int, fingerprint: str):
-    from scenario.arrival_mapper import load_verified_mapper_chain
     from scenario.env_injection import build_verified_formal_env_injection
     from scripts.calibrate_training_config import start_for_origin
 
-    load_verified_mapper_chain("train")
+    # The factory verifies the mapper chain itself (including its task stream).
+    # Keep every factory check and the full-byte fingerprint on every cache lookup.
     return build_verified_formal_env_injection(
         "train", start=start_for_origin(origin), horizon=horizon, forecast_cutoff=cutoff)
 
