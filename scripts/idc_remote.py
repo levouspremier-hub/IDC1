@@ -296,6 +296,20 @@ def gather_runs(job):
             shutil.move(str(p), target / p.name)
 
 
+def ensure_published_revision(revision):
+    run(['git', 'fetch', 'origin'], cwd=ROOT)
+    advertised = capture(['git', 'ls-remote', '--heads', 'origin'], cwd=ROOT)
+    for line in advertised.splitlines():
+        tip = line.split()[0]
+        result = subprocess.run(
+            ['git', 'merge-base', '--is-ancestor', revision, tip], cwd=ROOT,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        if result.returncode == 0:
+            return
+    raise ValueError('Push requested revision to origin before submitting; no remote job created')
+
+
 def task_environment(uv, output, job_id, revision):
     return {**os.environ, 'PATH': str(Path(uv).parent) + os.pathsep
             + os.environ.get('PATH', ''), 'IDC_JOB_OUTPUT': str(output),
@@ -457,6 +471,7 @@ def main():
         if capture(['git', 'status', '--porcelain'], cwd=ROOT):
             raise ValueError('Commit/push changes before submitting')
         revision = capture(['git', 'rev-parse', args.revision + '^{commit}'], cwd=ROOT)
+        ensure_published_revision(revision)
         command = args.command[1:] if args.command[:1] == ['--'] else args.command
         request = {'job': args.job, 'revision': revision, 'argv': command,
                    'asset_set': config.get('asset_set'),
