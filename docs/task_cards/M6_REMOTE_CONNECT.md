@@ -23,3 +23,5 @@ SSH 公钥本机文件及指纹（允许发送主机追加 authorized_keys），
 - 初次 host key 扫描未得到公钥（连接被关闭）；没有写入未经核验的 known_hosts，没有关闭安全校验。
 - runs/m6_remote_connect_v1/ 五类产物状态 waiting_user_setup；不宣称 SSH、主机执行或回传验收已通过。待用户确认主机已装公钥及 Mac 网络授权后继续。
 - 未启动任何远端训练、诊断或完整检查；未改源、锁文件、模型及预算。
+
+- 更新：用户已完成 Mac Tailscale 权限与同一网络登录；客户端 Connected、主机在线。主机 ED25519 实测指纹与用户给定值完全一致，已钉扎 known_hosts。SSH BatchMode 到达认证阶段，但返回 Permission denied (publickey,password)，仍待主机追加/核对 Mac 公钥及 authorized_keys 权限。运行状态更新为 waiting_remote_public_key；没有启动远端任务。
