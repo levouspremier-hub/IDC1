@@ -1,6 +1,6 @@
 # IDC runtime修复、提速与主机放行审核
 
-主机资格已完整通过，选定0.50秒；交付包验签尚未结束，当前formal_training_ready=false，512批未启动。所有重型检查、性能对照、恢复和资格任务由SSH主机单槽串行执行；Mac仅开发、轻量验证和回传审核。未使用validation/test进行策略评估或选择。
+修复、性能优化和主机资格验收已完成，选定0.50秒；正式release两端验签通过，formal_training_ready=true，仅放行seed0新初始化。512批未启动。所有重型检查、性能对照、恢复和资格任务由SSH主机单槽串行执行；Mac仅开发、轻量验证和回传审核。未使用validation/test进行策略评估或选择。
 
 ## 版本与输入冻结
 
@@ -11,6 +11,8 @@
 - 半小时数据：dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd。
 - train manifest：077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865。
 - 资产集合：5005eb32bc2b9971c3153d3d6be0999039572bfa25694fcadffef4af9fce7eed。
+
+资格主机为idc-y9000p，i9-14900HX / WSL2，冻结torch单线程；代码、venv和工作数据位于/home/w1877/idc-host的Linux文件系统。旧资产集合用于原资格，保持封存；新的交付集合和两端验签记录见下文。
 
 |预算秒|候选文件|候选SHA256|
 |---|---|---|
@@ -49,7 +51,7 @@
 
 ## 最终资格结果与放行条件
 
-runtime-qualification-v8已成功终止，exit_code=0；完整回传receipt和主机交付预检完成前仍不生成正式ready文件。
+runtime-qualification-v8已成功终止，exit_code=0；完整回传receipt核验和独立主机交付预检均已通过，随后生成正式ready文件。原资格报告的ready=false/release_freeze_pending保留为该阶段事实，不回写历史产物；正式放行以新冻结release及审核run为准。
 
 |阶段|实测结果|
 |---|---|
@@ -70,9 +72,19 @@ runtime-qualification-v8已成功终止，exit_code=0；完整回传receipt和�
 
 soak前后24个配对案例：购电成本均651.077145674 SGD，碳排均1910.365607115 kg，逐案例最大绝对差均0。共享1649回合因末轮未凑满24而不可直接用总平均比较；按24个origin/mode组合等权后，每回合成本27.128214403 SGD、碳排79.598566963 kg，和前后对照等权值相同。每组合68或69次，未删去末轮案例。共享总成本44714.733557581 SGD、碳排131264.920767382 kg只是重复诊断汇总，不是实际运营账单。未建立本次修复的因果降本/减排结论。
 
-## 交付预检与产物审核（进行中）
+## 交付预检与产物审核
 
-等待完整回传逐文件大小/SHA256验签。资格完成后将保留旧5005集合，建立包含新资格证据的不可变输入集合，在独立主机worktree只读构建并验证正式release。执行源码138文件和原95项输入必须保持与资格完全一致，元数据需在Mac再次验签；该预检不运行环境、PPO或512批。最终标准审核产物、交付job和正式release摘要将在此补齐。
+原资格回传5488文件全部通过大小/SHA256核验，receipt SHA256为1aad14760348e16b731ec7821d82d2f5ffc0d8e99e1d07e0ce223f1dfd69e4a6。回传时冗余手动同步与自动watcher同时写同一目录，一个本地steps.jsonl未通过checksum；停止冗余同步后单次重同步全部通过。原主机封存产物和资格案例未改变，也没有重跑资格。
+
+已登记添加15个零字节figures/.gitkeep，仅解决既有files-only资产打包丢失必需空目录的问题，原5488文件和receipt不改。新不可变交付资产集合f20ffe34f6db6cb7f3f31e38fa4f1169f92e4292bb3d43f8521028b74143fb71，共10115文件，两端全部校验；旧5005集合保留。新asset_receipt文件SHA256为08de61eb1f23df2b8200eee6d02340e502e5d24c3689619beb73d8eaaa8a0fcb，记录字典规范化摘要也与集合ID一致。本机.idc_remote.json已选择新集合。
+
+独立主机job runtime-release-evidence-preflight-v1固定revision 036551ed1c95ab9a9d463483650059e041dc85d9，终态succeeded/exit0。它以新输入包重读完整门禁、真实恢复、48回合、三种子短训及4h原始证据，构建并验签release；只做文件/签名审核，环境与PPO均未运行、训练更新0。执行源码138文件及原95项输入与资格完全相同；新增文档、目录占位和签名元数据不改变执行路径，不继承不同源码的资格。
+
+正式文件configs/release/idc_runtime_formal_release_v1.json与主机已验签文件逐字节相同，SHA256为5bec763e700c040054e3ba620289ac7888c173ac69d8263fb3f550057453917d，绑定5294项必要证据。Mac重新build/verify_runtime_release通过。主机预检回传9文件全部验签，receipt SHA256为109285adbbd1f865f1fa20cdebbf0b77cfbdb411f59bc6722b4ba18c90fae675。
+
+标准审核产物：runs/m6p2c_release_review_v1/，包含config.yaml、metrics.parquet、report.json、manifest.json、figures/，并保存可复核脚本、完整经济账、交付资产receipt及目录补充receipt。manifest记录本地revision、资格revision、锁/数据/场景、命令与go决策；report记录formal_512_started=false。artifact_receipt SHA256为120d594f46b903d31d550fe73493e129ff35c87e12296bf5b7f0af30b8f903c3。全部历史性能与资格job receipt也已重新核对，失败证据保留。
+
+正式release仅允许seed0、新初始化及当前执行闭包；旧r7训练状态不能恢复。后续若获启动授权，应使用新唯一job/run ID，在主机沿用单槽执行和每批前/每16批checkpoint，不使用旧final初始化正式策略。当前放行是运行资格，不等于后期策略质量或论文经济结论成立。
 
 本次停止边界固定为放行报告；即使资格通过也不自动启动512批。
 
