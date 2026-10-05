@@ -27,3 +27,9 @@ seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已�
 第一小时实际快照时间unix 1791193445.9203272，最新单批34.708371秒，峰值RSS1244172288 bytes；主机磁盘852GB可用/使用11%，内存12319MiB可用、swap203MiB已用，未见资源压力。更新runs/m6p2c_formal_campaign_v1/监督五类产物及逐文件receipt，明确区分v8实际111批与v9三种子全部未启动。
 
 后续完整资格回传后先逐文件receipt验签，再注册必要空目录元数据、新封存资产和独立只读主机交付验签；用新authorization构建及验证v2发布，两端同一原始文件hash一致才推进v9三种子。旧v8 seed0终态审核须使用其原132c833工作树/原release；当前v9源拒绝旧source绑定属于预期，不得改旧发布或迁移checkpoint。小时automation idc已保留原每小时/本对话绑定，并补充本卡固定队列、真实SHA和版本一致性要求。当前本地开发与轻量回归完成，主机资格及最终放行仍待执行，不能标记本卡全部完成。
+
+## 第二小时巡检（2026-10-05 18:33 Asia/Shanghai）
+
+实际SSH时间unix 1791196399.993374：原v8 seed0 job仍running、Python PID911060，完成194/512批、37248 transitions、3104 Adam、194乘子更新；776/776回合服务/物理/统一终点合格，A降级0、fallback0，无failed_batch.json，批前和latest checkpoint存在，已核对第192批历史checkpoint及持续更新的journal。最新批35.990237秒，峰值RSS1286258688 bytes；console明确记录192批/7265秒，与journal更新一致。
+
+v9资格job仍queued，固定9d04a52931cb7a7b1a8d2cb8bf102c264811560d，controller PID968641等待既有执行锁，未运行重型资格；无重复提交。自动回传watcher PID9040/13488均存活，训练未终态故尚无终态receipt可审核。主机磁盘852GB可用/使用11%、内存12303MiB可用、swap219MiB使用，未见阻碍。已更新监督五类产物、小时检查记录并逐文件验签；v9三种子仍全部未提交，新release仍未放行。源码、运行worktree、预算、训练工作量及队列均未改变。本轮正常进展只记账，无修复或重启。
