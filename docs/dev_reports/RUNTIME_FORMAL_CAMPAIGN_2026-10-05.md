@@ -53,3 +53,9 @@ v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed
 实际SSH快照unix1791207855.3273804：v9资格仍running，门禁、真实边界恢复、0.50诊断48回合及seed0/1/2各8批已各自成功终止；三短训各1536 transitions/128 Adam/8乘子更新。当前soak Python1154455存活，本轮核对before24/24及shared72/72合格，A降级/fallback/参数更新均0，after尚0；共享阶段刚开始，未满14400秒，不认定完整资格通过。只读失败快照probe仍queued、controller1113176，等待现有单槽，未重复提交。watcher13488/20077均存活。
 
 原v8正式seed0仍failed，371成功批终态与封存39文件receipt及本地失败审核receipt再次核验通过，原checkpoint/RNG/partial未更改。晚批超时根因仍待已排队主机诊断，不能以目前短训/旧策略soak进展替代修复或重新启动正式训练。主机磁盘842GB可用/12%、内存12231MiB可用、swap444MiB使用，无资源阻碍；监督产物/小时记录及receipt已更新。未改源码/预算/工作量、未恢复正式训练、未新建job；当前新版ready保持false。
+
+## 互动修复 v10：主机连接阻碍
+
+用户要求直接修复后恢复，已中断并保留未完成v9资格，原终态failed是明确人工SIGINT、不作为自然solver失败或4h通过。原失败求解计时全0，定位为共享预算在求解前耗尽；准确历史耗时来源无法由原日志确定。修复04a4007减少每非零元tuple/GC压力并正确标记求解前阶段，52e2589先红，24项本地回归/Ruff/mypy通过；任何物理/服务、raw、优化器、.50共享预算均不变。
+
+8389f89冻结v10，runtime-timeout-heap-repair-v1与runtime-campaign-qualification-v10各唯一提交且单槽串行；随后Tailscale peer离线/SSH超时，现有任务实际状态待连接恢复核对。新release尚未生成，正式ready=false，原v8 371批失败不改，三种子新发布freshinit尚未启动。具体证据与恢复步骤见RUNTIME_TIMEOUT_REPAIR_2026-10-05.md；小时任务只读辅助不替代互动闭环。

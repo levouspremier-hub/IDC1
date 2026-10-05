@@ -9,3 +9,7 @@
 交互修复诊断结果：原源码的固定5次快照冷重放及保留371批journal的5次heap诊断均通过，heap调用.3324—.3695秒；124412 nnz稀疏构模.0488—.0603秒。所有观察均未出现generation2 GC，所谓due_major诊断的阈值设置并未真正触发major，因此不能据此宣称复现或排除major GC。确认的是原现场deadline在任何实际求解之前耗尽；历史缺少阶段/GC计时，无法倒推出唯一耗时来源。安全停止行为正确，保留原失败。
 
 红回归52e2589：稀疏装配25000 nnz导致36次GC、求解前超时错误标A=time_limit，两项明确失败；旧COO到CSR字节等价参考通过。最小修复使用NumPy CSR缓冲避免每非零元tuple，保留规范列排序、float64、全部系数；原共享预算起点/限额、solver选项、可行域/证书、raw/Adam均不改。分别标注model_assembly、inventory_certificate、inventory_reachability、before_stage_a，实际A/B结果语义不改。24项轻量回归转绿，Ruff及model mypy通过；主机比较/完整验收尚待，不宣称正式ready。
+
+修复候选v10冻结提交8389f89bfaced4c04c2c9846520e5a679ac72bfe，执行源码04a4007；三档候选只供注册，实际资格仍固定.50。原冷probe、heap baseline、人工中断v9三个job的终态receipt全部逐文件验签。Mac标准证据runs/m6p2c_timeout_csr_local_v1/含red/green原日志、精确主机probe代码及receipt。主机新比较job runtime-timeout-heap-repair-v1/controller1178269/watcher25717，真实快照124412 nnz逐行比较旧COO的data/indices/indptr，比较在测量correct调用之后执行，不偷预算。新完整资格runtime-campaign-qualification-v10/controller1178390/watcher25756，源8389f89，run runtime_campaign_qualification_v10，依序gate/真实resume/48/三种子8批/完整4h；各只提交一次，串行同一锁。
+
+22:36起新增外部阻碍：两个新job均成功提交并返回queued后，Tailscale把100.73.26.18/localhost-0标记offline；本地tailnet在线，两个5秒peer ping无回复，多次SSH连接超时。因此无法确认新job是否取得锁、开始或终止，更不能说主机已验收或正式训练已恢复。未重复投递、不修改原job/worktree、不追加正式任务。已请用户确认主机开机、WSL/Tailscale及睡眠状态；机器端离线无可用远程修复入口。小时heartbeat保留ACTIVE辅助只读，互动任务仍负责修复/验收/发布/恢复。
