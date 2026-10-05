@@ -19,3 +19,9 @@
 Windows独立控制PID2364迁移进行中，脚本和标准运行状态runs/m6p2c_host_storage_repair_v1/；Windows日志D:\IDC-host-repair-20261005\。按先shutdown→全VHD SHA→官方move D:\WSL\Ubuntu-IDC→启动前SHA/长度完全一致→C/D30GiB余量→Ubuntu服务/二进制可读/写fsync验收执行；不对挂载的ext4强行remount/fsck，不注销发行版、不删任何失败证据。SSH在停机阶段不可用，未据此宣布迁移成功。若恢复后仍需离线fsck，要先备份与具体方案，不能跳过；原正式训练仍未恢复。
 
 23:04—23:05重复SSH限时检查仍连接超时。Windows控制进程确实曾成功创建，但停机后没有独立Windows远程通道，因此不能确认其当前存活/phase，更不能把已发起迁移说成迁移完成。已请求用户在Windows读取D:\IDC-host-repair-20261005\status.json中的phase/error；若脚本停于hash_original/moving/hash_moved可据真实状态继续等待，若blocked须读日志定位；不重复启动迁移、不重复投递任务。当前主机修复验收仍待结果，正式ready=false、正式三种子尚未恢复，小时巡检继续只读辅助。
+
+2026-10-06重验：主机当前C约144GB/D97GB、D上Ubuntu rw/错误0，迁移全SHA相同，旧length条件是停机前后量测混用误报；存储验收见RUNTIME_HOST_REACCEPTANCE_2026-10-06.md。随后Git URL-specific global proxy旧12451端口不可达；当前网关未变，已仅本任务裸仓库覆盖为经现有SSH的127.0.0.1:19065 SOCKS，实测精确URL ls-remote和固定8389f89 fetch通过，未改训练源码/Windows全局设置。v3/r3只Git setup失败全部保留验签。
+
+v4/run m6p2c_timeout_heap_repair_v4已终态succeeded/exit0且全部回传验签，固定五次原failed snapshot/371 journal观察全部executable、A/B optimal，10个实际CSR矩阵（含B附加行）data/indices/indptr与旧COO完全相同；wall .162652/.153210/.165832/.153181/.209204秒，124412nnz主矩阵装配约.0097—.0103秒。最后一次带profile，不把不同时刻/重启后的旧baseline .33—.37秒与此次值当作因果速度实验；并未复现原major GC或唯一历史延迟原因。无env.step/PPO更新，原失败输入哈希不变。
+
+完整runtime-campaign-qualification-v10-r4/controller3856同源码8389f89/.50运行，gate至46%，后续真实resume/48/3x8/4h仍待。另按G扩展提交runtime-formal-late-cache-probe-v1/controller42692/watcher35272，排在完整资格之后：保留旧371 checkpoint/journal对象，按212原train-origin逐项重建当前正式verified缓存并核对provenance，保持默认GC、固定五次原失败快照correct、无环境执行/PPO或旧checkpoint重绑；新release同时需要该晚批缓存验收与完整资格。纯诊断warm_elapsed_s记录从缓存预热开始直到最后输入复核（包含后续五次观察），不作为独立工厂性能指标。互动任务继续负责全部闭环，小时任务仅辅助只读。Mac本任务网络relay PID34510，临时idle-sleep assertion PID35335随relay结束退出（显示器不保持唤醒），重型任务均主机单槽。
