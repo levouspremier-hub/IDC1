@@ -224,7 +224,8 @@ def test_campaign_release_grants_only_bound_three_seed_authorization(campaign_re
     {'runtime_budget_s': .25}, {'fresh_initialization_required': False},
     {'matrix_sha256': 'changed'}, {'base_release_sha256': 'changed'}, {'user_request': ''},
 ])
-def test_campaign_authorization_rejects_unapproved_or_changed_inputs(campaign_release_files, change):
+def test_campaign_authorization_rejects_unapproved_or_changed_inputs(
+        campaign_release_files, change):
     import json
     candidate, qualification, authorization = campaign_release_files
     value = json.loads(authorization.read_text())
@@ -234,7 +235,8 @@ def test_campaign_authorization_rejects_unapproved_or_changed_inputs(campaign_re
                                       campaign_authorization_path=authorization)
 
 
-def test_campaign_permission_never_replaces_complete_qualification(monkeypatch, campaign_release_files):
+def test_campaign_permission_never_replaces_complete_qualification(
+        monkeypatch, campaign_release_files):
     candidate, qualification, authorization = campaign_release_files
     def incomplete(*args):
         raise ValueError('complete qualification required')
@@ -259,6 +261,7 @@ def test_campaign_verifier_rejects_changed_allowlist(campaign_release_files):
 
 def test_fixed_budget_qualification_keeps_full_gate_and_workload(monkeypatch, tmp_path):
     from types import SimpleNamespace
+
     from scripts import runtime_qualification as q
     monkeypatch.setattr(q, 'ROOT', tmp_path)
     monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': p}})
@@ -283,6 +286,7 @@ def test_fixed_budget_qualification_keeps_full_gate_and_workload(monkeypatch, tm
 
 def test_fixed_budget_failure_does_not_search_or_replace_samples(monkeypatch, tmp_path):
     from types import SimpleNamespace
+
     from scripts import runtime_qualification as q
     monkeypatch.setattr(q, 'ROOT', tmp_path)
     monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': p}})
@@ -297,3 +301,30 @@ def test_fixed_budget_failure_does_not_search_or_replace_samples(monkeypatch, tm
     assert q.qualify('fixed_failed', [.25, .5, 1.], budget=.5) == 1
     assert len(calls) == 3
     assert [a['budget_s'] for a in saves[-1][3]['attempts']] == [.5]
+
+
+@pytest.mark.parametrize('registered,scope,error', [
+    ([.5], 'fixed_approved_budget', 'phase sequence'),
+    ([.25], 'fixed_approved_budget', 'fixed qualification'),
+    ([.5], 'unregistered_scope', 'fixed qualification'),
+    (None, None, 'preregistered order'),
+])
+def test_fixed_budget_evidence_still_requires_all_phases(
+        monkeypatch, tmp_path, registered, scope, error):
+    import json
+    candidate = tmp_path / 'candidate.json'
+    candidate.write_text('{}')
+    monkeypatch.setattr(runtime, 'ROOT', tmp_path)
+    monkeypatch.setattr(runtime, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': .5}})
+    report = {'passed': True, 'qualification_complete': True, 'formal_512_started': False,
+              'selected_budget_s': .5,
+              'preflight': [{'action': 'gate', 'exit_code': 0},
+                            {'action': 'resume-audit', 'exit_code': 0}],
+              'attempts': [{'budget_s': .5, 'passed': True,
+                            'candidate_sha256': runtime.sha(candidate), 'phases': []}]}
+    if registered is not None:
+        report.update(registered_budgets=registered, qualification_scope=scope)
+    (tmp_path / 'report.json').write_text(json.dumps(report))
+    (tmp_path / 'manifest.json').write_text('{}')
+    with pytest.raises(ValueError, match=error):
+        runtime.qualification_evidence(tmp_path, candidate)

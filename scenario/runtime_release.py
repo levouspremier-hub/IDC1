@@ -5,7 +5,7 @@ import copy
 import json
 from pathlib import Path
 
-from scenario.inventory_release import ROOT, _git, load_config, load_matrix, sha
+from scenario.inventory_release import MATRIX_PATH, ROOT, _git, load_config, load_matrix, sha
 
 VERSION = 'verified-a-stop-batch-v1'
 BUDGETS = (.25, .50, 1.00)
@@ -124,7 +124,16 @@ def qualification_evidence(folder, candidate_path):
     if [(p['action'], p['exit_code']) for p in phases] != [('gate', 0), ('resume-audit', 0)]:
         raise ValueError('formal release requires host gate and real recovery audit')
     attempts = report['attempts']
-    if [a['budget_s'] for a in attempts] != list(BUDGETS[:len(attempts)]):
+    registered = report.get('registered_budgets')
+    if registered is not None:
+        if (report.get('qualification_scope') != 'fixed_approved_budget'
+                or registered not in [[b] for b in BUDGETS]
+                or type(registered[0]) not in (float, int)
+                or registered != [candidate['config']['runtime_budget_s']]):
+            raise ValueError('fixed qualification budget differs from registered campaign')
+    else:
+        registered = list(BUDGETS)
+    if [a['budget_s'] for a in attempts] != registered[:len(attempts)]:
         raise ValueError('budget selection differs from preregistered order')
     passed = [a for a in attempts if a.get('passed') is True]
     if (len(passed) != 1 or passed[0] is not attempts[-1]
@@ -174,21 +183,61 @@ def qualification_evidence(folder, candidate_path):
     return evidence
 
 
-def build_runtime_release(candidate_path, qualification_folder):
+def _campaign_authorization(path, budget):
+    path = Path(path).resolve()
+    if not path.is_relative_to(ROOT.resolve()):
+        raise ValueError('campaign authorization must be inside the repository')
+    authorization = json.loads(path.read_text())
+    seeds = authorization.get('approved_seeds')
+    base_path = ROOT / authorization.get('base_release_path', '')
+    if (authorization.get('schema') != 'idc-runtime-campaign-authorization-v1'
+            or seeds != [0, 1, 2] or any(type(s) is not int for s in seeds)
+            or authorization.get('runtime_budget_s') != budget
+            or authorization.get('fresh_initialization_required') is not True
+            or authorization.get('matrix_sha256') != sha(ROOT / MATRIX_PATH)
+            or not isinstance(authorization.get('user_request'), str)
+            or not authorization['user_request'].strip()
+            or not base_path.resolve().is_relative_to(ROOT.resolve())
+            or not base_path.is_file()
+            or authorization.get('base_release_sha256') != sha(base_path)):
+        raise ValueError('campaign authorization seed/budget/matrix/base binding mismatch')
+    base = json.loads(base_path.read_text())
+    if (base.get('schema') != 'idc-runtime-formal-release-v1'
+            or base.get('formal_training_ready') is not True or base.get('allowed_seeds') != [0]):
+        raise ValueError('campaign authorization requires the historical seed0 release reference')
+    return path
+
+
+def build_runtime_release(candidate_path, qualification_folder, *,
+                          campaign_authorization_path=None):
     evidence = qualification_evidence(qualification_folder, candidate_path)
-    return {'schema': 'idc-runtime-formal-release-v1', 'status': 'frozen',
+    release = {'schema': 'idc-runtime-formal-release-v1', 'status': 'frozen',
             'execution_version': VERSION, 'formal_training_ready': True,
             'candidate_path': str(Path(candidate_path).relative_to(ROOT)),
             'candidate_sha256': sha(candidate_path),
             'qualification_folder': str(Path(qualification_folder).relative_to(ROOT)),
             'evidence': evidence, 'allowed_seeds': [0], 'fresh_initialization_required': True,
             'formal_512_automatically_started': False}
+    if campaign_authorization_path is not None:
+        budget = verify_candidate(candidate_path)['config']['runtime_budget_s']
+        authorization = _campaign_authorization(campaign_authorization_path, budget)
+        release.update(schema='idc-runtime-formal-release-v2', allowed_seeds=[0, 1, 2],
+                       campaign_authorization_path=str(authorization.relative_to(ROOT)),
+                       campaign_authorization_sha256=sha(authorization))
+    return release
 
 
 def verify_runtime_release(path):
     recorded = json.loads(Path(path).read_text())
+    schema = recorded.get('schema')
+    if schema not in ('idc-runtime-formal-release-v1', 'idc-runtime-formal-release-v2'):
+        raise ValueError('unregistered runtime formal release schema')
+    kwargs = {}
+    if schema == 'idc-runtime-formal-release-v2':
+        authorization = ROOT / recorded['campaign_authorization_path']
+        kwargs['campaign_authorization_path'] = authorization
     expected = build_runtime_release(ROOT / recorded['candidate_path'],
-                                     ROOT / recorded['qualification_folder'])
+                                     ROOT / recorded['qualification_folder'], **kwargs)
     if recorded != expected:
         raise ValueError('formal runtime release evidence/code/config mismatch')
     return recorded

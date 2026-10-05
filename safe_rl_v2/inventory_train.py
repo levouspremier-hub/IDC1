@@ -145,7 +145,7 @@ def _run(args):
         )
         release = verify_runtime_release(runtime_release_path)
         if args.short or args.seed not in release["allowed_seeds"]:
-            raise ValueError("runtime formal launch requires qualified seed0; "
+            raise ValueError("runtime formal launch requires a release-authorized seed; "
                              "old resume bindings are rejected")
         candidate_path = str(ROOT / release["candidate_path"])
         config = verify_candidate(candidate_path)["config"]
@@ -382,7 +382,7 @@ def main(argv=None):
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--resume-from")
     parser.add_argument("--runtime-candidate", help="signed train-only qualification candidate")
-    parser.add_argument("--runtime-release", help="new frozen host-qualified seed0 release")
+    parser.add_argument("--runtime-release", help="frozen host-qualified runtime release")
     args = parser.parse_args(argv)
     if args.seed0_formal and (args.short or args.seed != 0):
         parser.error("--seed0-formal requires --seed 0 and full training")

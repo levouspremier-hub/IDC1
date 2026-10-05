@@ -350,15 +350,21 @@ def short_run_qualified(folder, path):
                     for b in report['batch_records']))
 
 
-def qualify(run_id, paths):
+def qualify(run_id, paths, *, budget=None):
     candidates = [verify_candidate(path) for path in paths]
     if [c['config']['runtime_budget_s'] for c in candidates] != list(BUDGETS):
         raise ValueError('qualification must preregister exactly .25/.50/1.00 in order')
+    if budget is not None and (type(budget) not in (int, float) or budget not in BUDGETS):
+        raise ValueError('fixed qualification requires a registered budget')
+    selected_pairs = [(p, c) for p, c in zip(paths, candidates, strict=True)
+                      if budget is None or c['config']['runtime_budget_s'] == budget]
     folder = ROOT / 'runs' / run_id
     folder.mkdir(exist_ok=False)
     rows = []
     report = {'passed': False, 'train_only': True, 'formal_training_ready': False,
               'attempts': rows, 'formal_512_started': False}
+    if budget is not None:
+        report.update(qualification_scope='fixed_approved_budget', registered_budgets=[budget])
     save(run_id, {'candidates': candidates}, [], report, 'running')
     selected = None
     try:
@@ -366,12 +372,13 @@ def qualify(run_id, paths):
         for action in ('gate', 'resume-audit'):
             child = run_id + '_' + action.replace('-', '_')
             status = subprocess.run([sys.executable, '-m', 'scripts.runtime_qualification',
-                action, '--candidate', str(paths[0]), '--run-id', child], cwd=ROOT).returncode
+                action, '--candidate', str(selected_pairs[0][0]), '--run-id', child],
+                cwd=ROOT).returncode
             report['preflight'].append({'action': action, 'run_id': child, 'exit_code': status})
             save(run_id, {'candidates': candidates}, [], report, 'running')
             if status != 0:
                 raise ValueError('qualification preflight failed: ' + action)
-        for path, candidate in zip(paths, candidates, strict=True):
+        for path, candidate in selected_pairs:
             budget = candidate['config']['runtime_budget_s']
             label = str(round(budget*100)).zfill(3)
             attempt = {'budget_s': budget, 'candidate_sha256': sha(path), 'passed': False,
@@ -438,7 +445,7 @@ def main():
         verify_candidate(args.output)
         return 0
     if args.action == 'qualify':
-        return qualify(args.run_id, args.candidates)
+        return qualify(args.run_id, args.candidates, budget=args.budget)
     if args.action == 'gate':
         return gate(args.run_id, args.candidate)
     if args.action == 'resume-audit':
