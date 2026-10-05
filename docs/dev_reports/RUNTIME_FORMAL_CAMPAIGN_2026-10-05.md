@@ -61,3 +61,5 @@ v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed
 8389f89冻结v10，runtime-timeout-heap-repair-v1与runtime-campaign-qualification-v10各唯一提交且单槽串行；随后Tailscale peer离线/SSH超时，现有任务实际状态待连接恢复核对。新release尚未生成，正式ready=false，原v8 371批失败不改，三种子新发布freshinit尚未启动。具体证据与恢复步骤见RUNTIME_TIMEOUT_REPAIR_2026-10-05.md；小时任务只读辅助不替代互动闭环。
 
 2026-10-06用户再次授权继续：主机当前C144GB/D97GB、D上的Ubuntu root rw/ext4错误0/服务与fsync读回通过；旧迁移length误报已更正并保留日志。新唯一probe-v3及qualification-v10-r3同源8389f89/.50单槽串行已提交，当前等待完整资格及放行；原371批失败保留，新正式三种子依冻结campaign freshinit约定，尚未启动。小时任务仅只读辅助，本互动继续执行修复验收发布流程。
+
+2026-10-06当前对话继续：主机实际容量、根rw及Git交付修复已验收；新版v10-r4 gate3245及真实resume通过、48诊断通过，seed0短训8批/32回合/128Adam通过，A降级0/fallback0、326.7265秒；seed1执行中，seed2/完整4h/晚批212缓存验收待，不提前放行。I卡直接控制器独立等待两验收及完整回传后发布/交付/串行三seed，新正式job尚未提交。小时旧automation已不存在（update明确报not exist），按仍有效用户授权恢复idc ACTIVE hourly至当前对话01a10c70-b4e5-7f10-9b8f-9b70f01c4e53；仅辅助当前直接流程，正常安静，正式新阻碍先修复无法处理再报，旧seed-0 PAUSED未改。
