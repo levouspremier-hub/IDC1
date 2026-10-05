@@ -39,3 +39,11 @@ v9资格job仍queued，固定9d04a52931cb7a7b1a8d2cb8bf102c264811560d，controll
 实际SSH时间unix 1791199962.1507971：原v8 seed0仍running，唯一训练Python PID911060，完成293/512批、56256 transitions、4688 Adam、293乘子更新；1172/1172回合服务/物理/统一终点合格，A降级0、fallback0，无failed_batch.json，批前和latest checkpoint持续更新，历史checkpoint已到第288批。最新批35.013618秒，峰值RSS1356185600 bytes；console记录288批/10717秒，journal已推进至293批。
 
 v9资格仍queued，原controller PID968641等待单槽执行锁，无重复提交及并行重型执行。自动回传watcher PID9040/13488均存活；当前训练未终态，不提前认定回传完整或质量通过。主机磁盘852GB可用/使用11%、内存12249MiB可用、swap225MiB使用，未见阻碍。监督五类产物和检查记录已更新并逐文件receipt验签。v9三种子未启动、新release未放行；本轮无源码修复、重启、工作量或预算调整，仅记录正常进展。
+
+## 第四轮巡检（2026-10-05 20:45—20:49 Asia/Shanghai）
+
+原v8 seed0终态failed/exit1，实际结束unix1791202777.475543（20:19:37）；巡检unix1791204446.2872007。完成371批、71232 transitions、5936 Adam、371乘子，1484/1484完成回合合格，A降级0/fallback0；下一批origin48 step20 A=time_limit/B=not_run，原audit solve_time_s=.5665697420045035，reachability unproven。失败步未执行环境、失败批参数更新0、20条partial及原snapshot/proposal/raw/logprob保留，不能补采或把未完成141批算通过。原39文件回传receipt全部核验，receipt SHA c0ac8e07c9deacd3f50883032b2f21e8d27088baf16e100034597696d0eb805b，failed_batch SHA 1d2b97f270ce00253dcaee6cd5605d390cd925a81fe988818a8e2436e12ad749。before/latest checkpoint都next_batch_index371、旧release匹配、采样/洗牌RNG相同，日期来源账本仍在；没有重启、换签或跨绑定恢复。
+
+已开M6.P2C-G诊断卡；Mac仅一次轻量原快照profile，约.132535秒可执行，但不能据此称主机问题解决；失败前无证明可执行A，现有安全停止行为正确，根因未确定。已固定132c833单次提交runtime-formal-seed0-failure-probe-v1/run m6p2c_formal_seed0_failure_probe_v1，controller1113176、自动watcher20077，queued在现有v9资格之后。五次预定只读.50快照重放（第五次profile）全部保留，无环境/PPO，不以成功重放替代原失败、不无限重试。标准本地失败审核runs/m6p2c_formal_seed0_failure_audit_v1/及receipt完整，原产物不改。
+
+v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed/47 deselected/439 warnings、1686.69秒，仍须完成后续真实恢复/48/3x8/4h，不能先宣称全部通过。watcher13488存活，主机磁盘843GB可用/12%、内存10130MiB可用、swap571MiB使用，无磁盘或内存阻碍。已更新监督五类产物和receipt及小时自动任务。正式阻碍未解决，新正式ready保持false；即使v9旧策略资格通过，也需先完成晚批主机根因分析和必要修复/新资格，再推进正式三种子。可自主诊断工作仍在进行，尚不是确认无法修复。
