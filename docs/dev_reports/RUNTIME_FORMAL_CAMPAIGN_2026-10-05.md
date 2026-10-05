@@ -59,3 +59,5 @@ v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed
 用户要求直接修复后恢复，已中断并保留未完成v9资格，原终态failed是明确人工SIGINT、不作为自然solver失败或4h通过。原失败求解计时全0，定位为共享预算在求解前耗尽；准确历史耗时来源无法由原日志确定。修复04a4007减少每非零元tuple/GC压力并正确标记求解前阶段，52e2589先红，24项本地回归/Ruff/mypy通过；任何物理/服务、raw、优化器、.50共享预算均不变。
 
 8389f89冻结v10，runtime-timeout-heap-repair-v1与runtime-campaign-qualification-v10各唯一提交且单槽串行；随后Tailscale peer离线/SSH超时，现有任务实际状态待连接恢复核对。新release尚未生成，正式ready=false，原v8 371批失败不改，三种子新发布freshinit尚未启动。具体证据与恢复步骤见RUNTIME_TIMEOUT_REPAIR_2026-10-05.md；小时任务只读辅助不替代互动闭环。
+
+2026-10-06用户再次授权继续：主机当前C144GB/D97GB、D上的Ubuntu root rw/ext4错误0/服务与fsync读回通过；旧迁移length误报已更正并保留日志。新唯一probe-v3及qualification-v10-r3同源8389f89/.50单槽串行已提交，当前等待完整资格及放行；原371批失败保留，新正式三种子依冻结campaign freshinit约定，尚未启动。小时任务仅只读辅助，本互动继续执行修复验收发布流程。

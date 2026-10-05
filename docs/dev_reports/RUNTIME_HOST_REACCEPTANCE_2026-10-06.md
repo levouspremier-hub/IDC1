@@ -5,3 +5,5 @@
 迁移日志中停机后原VHD与迁移后VHD完整SHA都为BD81C727F23EAEB32E297CCADD33205DDE7B47DF39B29765B0323A3668718E68。原脚本停机前取length、停机后取hash，停机时文件缩小1MiB，导致旧length条件误报blocked；这是验收脚本的量测顺序错误，不认定SHA不一致。原脚本、原Windows日志/status不覆盖，更正记录与标准五类产物位于runs/m6p2c_host_storage_repair_v1/，receipt完整。
 
 原正式failed_batch和371批journal仍分别匹配1d2b97f...749与77e075dd...c0c2。两个setup中断的v2/r2 job有0字节request/pid/status；先停止自己的旧watcher、归档损坏原件，并由原真实提交的固定revision/asset/argv/PID和幸存status重建仅操作状态，确认controller不存在后既有控制器记interrupted；不伪造验收成功、不执行原run。全量回传验签后使用新唯一ID恢复诊断与资格。每次后续提交都检查实际Windows宿主C/D余量及root读写，不依赖guest虚拟容量；重型工作仍主机单槽。v10候选code仅planning/model.py变动，配置/95资产/锁完全相同，已有本地24项回归、Ruff/mypy通过。
+
+两个损坏操作状态的原0字节文件已归档metadata_before_storage_recovery，原PID/固定argv/revision/asset重建来源写storage_recovery.json；既有控制器终态均interrupted并完成Mac回传receipt逐文件验签。新提交runtime-timeout-heap-repair-v3（controller2195/watcher34115）与runtime-campaign-qualification-v10-r3（controller2294/watcher34166），都固定8389f89/旧asset f20ffe34...fb71，实际qualification run runtime_campaign_qualification_v10_r3，预算固定.50；原v2/r2不执行，所有中断现场保留。当前probe preparing、qualification queued；完整资格不沿用任何人工中断/旧source的4h结果，必须新gate/真实恢复/48/3x8/完整4h。
