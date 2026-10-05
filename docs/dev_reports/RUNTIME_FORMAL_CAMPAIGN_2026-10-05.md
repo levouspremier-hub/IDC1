@@ -21,3 +21,9 @@ seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已�
 计划在当前训练后，沿既有单槽提交唯一job runtime-campaign-qualification-v9，run runtime_campaign_qualification_v9，固定0.50预算，完整门禁/真实恢复/48诊断/三种子各8批/共享4h和前后对照。不得重跑替换失败资格；通过后重新交付验签并生成v2 release，未通过不训练新版。
 
 发布绑定将不同于v8；不能把正在运行的v8 seed0 checkpoint换标签恢复到v9，也不能无说明混成一份同版本三种子结果。因此保留并审核本次v8 seed0作为前序独立训练，最终v9三种子campaign须在同一新release下seed0/1/2各自新初始化。额外seed0的原因是版本/绑定一致性，非成本、学习走势或碰运气重试；旧成功/失败全部保留。后续每小时任务按此最新子卡推进，具体提交和终态记录待追加。
+
+实际已单次提交runtime-campaign-qualification-v9，run runtime_campaign_qualification_v9，固定job revision 9d04a52931cb7a7b1a8d2cb8bf102c264811560d、资产f20ffe34f6db6cb7f3f31e38fa4f1169f92e4292bb3d43f8521028b74143fb71；controller PID968641、自动回传watcher PID13488。提交后及本轮结束复核均为queued，原v8 seed0为running；执行锁保证准备和重型验收都在现有训练之后。没有提交任何v9正式训练。
+
+第一小时实际快照时间unix 1791193445.9203272，最新单批34.708371秒，峰值RSS1244172288 bytes；主机磁盘852GB可用/使用11%，内存12319MiB可用、swap203MiB已用，未见资源压力。更新runs/m6p2c_formal_campaign_v1/监督五类产物及逐文件receipt，明确区分v8实际111批与v9三种子全部未启动。
+
+后续完整资格回传后先逐文件receipt验签，再注册必要空目录元数据、新封存资产和独立只读主机交付验签；用新authorization构建及验证v2发布，两端同一原始文件hash一致才推进v9三种子。旧v8 seed0终态审核须使用其原132c833工作树/原release；当前v9源拒绝旧source绑定属于预期，不得改旧发布或迁移checkpoint。小时automation idc已保留原每小时/本对话绑定，并补充本卡固定队列、真实SHA和版本一致性要求。当前本地开发与轻量回归完成，主机资格及最终放行仍待执行，不能标记本卡全部完成。
