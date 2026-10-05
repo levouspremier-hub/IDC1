@@ -94,3 +94,52 @@ def test_observed_stage_b_native_solve_error_is_repaired_without_domain_relaxati
     assert result.max_constraint_residual <= 1e-6
     assert result.inventory_audit['target_reachable'] is True
     assert abs(result.soc_kwh[-1] - 50.) <= 1e-6
+
+
+def test_sparse_assembly_does_not_allocate_gc_tracked_tuple_per_nonzero():
+    import gc
+
+    rows = [{c: float(c + 1) for c in range(500)} for _ in range(50)]
+    threshold = gc.get_threshold()
+    events = []
+    def observe(phase, info):
+        if phase == 'start':
+            events.append(info['generation'])
+    gc.collect()
+    gc.set_threshold(700, 10, 10)
+    gc.callbacks.append(observe)
+    try:
+        result = model._sparse_rows(rows, 500)
+    finally:
+        gc.callbacks.remove(observe)
+        gc.set_threshold(*threshold)
+    assert result.nnz == 25000
+    assert events == [], 'matrix construction must avoid per-coefficient GC pressure'
+
+
+def test_sparse_assembly_canonical_csr_matches_previous_coo_byte_exact():
+    from scipy.sparse import coo_matrix
+
+    rows = [{5: -1e-12, 3: 0., 0: 2.}, {}, {4: 7., 1: -3.}]
+    entries = [(r, c, v) for r, row in enumerate(rows) for c, v in row.items() if v]
+    rr, cc, vv = zip(*entries, strict=True)
+    reference = coo_matrix((vv, (rr, cc)), shape=(3, 6)).tocsr()
+    actual = model._sparse_rows(rows, 6)
+    for name in ['data', 'indices', 'indptr']:
+        np.testing.assert_array_equal(getattr(actual, name), getattr(reference, name))
+
+
+def test_model_assembly_deadline_expiry_does_not_claim_a_solver_ran(monkeypatch):
+    snapshot = build_snapshot(_env(horizon=1))
+    clock = iter([0., 1.])
+    monkeypatch.setattr(model, '_monotonic', lambda: next(clock))
+    def forbidden(**kwargs):
+        raise AssertionError('no solver may start after shared deadline')
+    monkeypatch.setattr('scipy.optimize.milp', forbidden)
+    result = model.solve_time_indexed_mip_raw_projection(
+        snapshot, DispatchProposal(compute_actions=[0.] * 20, storage_action=0.),
+        time_limit_s=.5)
+    assert result.failure_class == 'timeout'
+    assert result.stage_a_status == 'not_run'
+    assert result.stage_b_status == 'not_run'
+    assert result.inventory_audit['timeout_phase'] == 'model_assembly'
