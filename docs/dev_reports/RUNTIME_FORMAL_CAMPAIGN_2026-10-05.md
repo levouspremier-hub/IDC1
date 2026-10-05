@@ -33,3 +33,9 @@ seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已�
 实际SSH时间unix 1791196399.993374：原v8 seed0 job仍running、Python PID911060，完成194/512批、37248 transitions、3104 Adam、194乘子更新；776/776回合服务/物理/统一终点合格，A降级0、fallback0，无failed_batch.json，批前和latest checkpoint存在，已核对第192批历史checkpoint及持续更新的journal。最新批35.990237秒，峰值RSS1286258688 bytes；console明确记录192批/7265秒，与journal更新一致。
 
 v9资格job仍queued，固定9d04a52931cb7a7b1a8d2cb8bf102c264811560d，controller PID968641等待既有执行锁，未运行重型资格；无重复提交。自动回传watcher PID9040/13488均存活，训练未终态故尚无终态receipt可审核。主机磁盘852GB可用/使用11%、内存12303MiB可用、swap219MiB使用，未见阻碍。已更新监督五类产物、小时检查记录并逐文件验签；v9三种子仍全部未提交，新release仍未放行。源码、运行worktree、预算、训练工作量及队列均未改变。本轮正常进展只记账，无修复或重启。
+
+## 第三小时巡检（2026-10-05 19:32 Asia/Shanghai）
+
+实际SSH时间unix 1791199962.1507971：原v8 seed0仍running，唯一训练Python PID911060，完成293/512批、56256 transitions、4688 Adam、293乘子更新；1172/1172回合服务/物理/统一终点合格，A降级0、fallback0，无failed_batch.json，批前和latest checkpoint持续更新，历史checkpoint已到第288批。最新批35.013618秒，峰值RSS1356185600 bytes；console记录288批/10717秒，journal已推进至293批。
+
+v9资格仍queued，原controller PID968641等待单槽执行锁，无重复提交及并行重型执行。自动回传watcher PID9040/13488均存活；当前训练未终态，不提前认定回传完整或质量通过。主机磁盘852GB可用/使用11%、内存12249MiB可用、swap225MiB使用，未见阻碍。监督五类产物和检查记录已更新并逐文件receipt验签。v9三种子未启动、新release未放行；本轮无源码修复、重启、工作量或预算调整，仅记录正常进展。
