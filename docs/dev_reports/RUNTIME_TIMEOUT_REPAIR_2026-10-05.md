@@ -29,3 +29,7 @@ v4/run m6p2c_timeout_heap_repair_v4已终态succeeded/exit0且全部回传验签
 新版主机完整make check已3245 passed/47 deselected/442 warnings（1511.14秒），真实resume-audit通过，当前48回合诊断执行中，尚未认定完整4h通过。晚批v1仍queued时因缺少frozen torch线程调用受控SIGINT，0科学观察，终态interrupted和完整receipt验签保留；唯一v2/controller133761/watcher36404调用原apply_frozen_thread_setting且assert Torch1，排在完整资格之后。
 
 I卡22d6236登记直接操作控制器runs/m6p2c_v10_release_delivery_v1/controller.py及主机串行launcher，独立于小时任务：等待两次全部验收/传输验签，再规范复制、递归补验绑定、新release发布、实际容量保护、全量sealed输入验签、三seed fresh串行。import/AST/compile轻量检查通过，首次脚本路径入口缺少repo sys.path在提交任何任务前修正，实际controller现在waiting；不改冻结执行源码。三个正式run均未启动，既有.50预算和512工作量保持。
+
+02:15前置全部通过：gate3245/47、真实resume、48固定策略诊断、三seed各8批/32合格回合/1536 transitions/128 Adam/8乘子全部通过，short seed0/1/2 elapsed分别326.726532/329.352715/326.855662秒，A降级0/fallback0。完整soak流程已经启动，当前before隔离阶段；14400秒shared和after尚未完成，晚批v2仍在其后排队。正式release v2仍不存在、正式任务未提交，不能报告正式已经运行。
+
+本次直接控制器PID36855（uv36853）、标准状态runs/m6p2c_v10_release_delivery_v1/report.json目前waiting_full_qualification_and_late_cache；临时caffeinate -i -w36855 PID37588仅保持idle awake且随控制器结束退出，显示器可休眠。完整通过后控制器自行逐文件验签、规范复制/补验绑定、release验证与普通提交/push、新immutable sealed输入完整验签、实际主机容量guard和唯一parent formal job提交，并核实seed0首批。它属于本次任务直接执行，既有已知修复不委派小时重做；训练各seed只有完整产物及质量通过才顺序下seed。
