@@ -1,4 +1,4 @@
-# 主机修复后性能对照（初步）
+# 主机修复后性能对照
 
 固定同主机、同依赖、0.25秒预算、相同4次环境构造和8次历史失败快照。baseline固定8193d96，optimized固定307ebe4；均单槽且receipt验签通过。
 
@@ -14,7 +14,6 @@
 本地真实cached/uncached正式注入的价格/温度/碳/PV/风/arrival/task_specs/整数账本/refs/forecast及provenance逐项相同；独立环境reset观察逐位相同，任务对象互不共享。28项相关测试和Ruff/mypy通过。
 
 基线8批尝试在第6批A超时停止，保留5成功批，累计Adam80、乘子5，失败批更新0，144条partial transitions；不补采成功结果。优化版8批独立尝试尚在主机运行。后续完整同协议吞吐、质量和512批估计见最终放行报告；当前不宣称长期资格或效率问题完全解决。
-
 证据：runs/remote_runtime-repair-profile-baseline-v2/；runs/remote_runtime-repair-profile-optimized-v3/；runs/remote_runtime-repair-short-baseline-v2/。第一次候选清单失败 runs/remote_runtime-repair-profile-baseline-v1/ 保留。
 
 ## 已回传的端到端补充结果
@@ -28,3 +27,5 @@
 末7批均值外推512批约6.49小时，全8批外推约6.48小时。冻结512批共2048次环境构造，只有212个不同origin，适配既有256 LRU容量；假定缓存持续有效，以冷构造2.586775秒/环境、profile命中 .039584秒/环境、其余35.182627秒/批构造条件模型约5.18小时。命中时间含profile开销，学习过程、求解路径、最终预算和主机负载仍影响耗时；5.18小时不是实测长训承诺，不能把旧约7.5小时到此模型差异全部归于本次优化。
 
 短训产物未暴露单独逐步购电/碳经济账，不能从A计数推断降本、减排；最终固定策略诊断保留这些账目。上述优化短训仍只作性能对照，不替代最终源码的48回合、三种子及4h资格。新增回传证据：runs/remote_runtime-repair-short-optimized-v3/。所有四个baseline/optimized profile/short job的receipt均验签通过。最终资格结论另见RUNTIME_RELEASE_2026-10-05.md，本次512批未启动。
+
+基线8批尝试在第6批A超时停止，保留5成功批，累计Adam80、乘子5，失败批更新0，144条partial transitions；不补采成功结果。所有早期失败和旧版本门禁证据保留，不被优化版成功覆盖。
