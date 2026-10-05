@@ -1,0 +1,7 @@
+# 主机存储与连接复验
+
+2026-10-06 01:05—01:12 Asia/Shanghai，主机基本验收通过，正式训练尚待v10完整资格。当前Windows C可用144026202112字节、D97351655424字节，均高于30GiB；此前满盘测量是2026-10-05故障现场，不是当前状态。Ubuntu注册BasePath为D:\WSL\Ubuntu-IDC；SSH/Tailscale active，根ext4 rw且无emergency_ro，错误计数/最后错误时间均0；lscpu可读，i9-14900HX/32逻辑CPU；内存约14.9GB可用、swap0；独立写入fsync/读回通过，SHA88aad13db17eff891acc48355cf386db99bdbff48490d4820a135e33010c2785。
+
+迁移日志中停机后原VHD与迁移后VHD完整SHA都为BD81C727F23EAEB32E297CCADD33205DDE7B47DF39B29765B0323A3668718E68。原脚本停机前取length、停机后取hash，停机时文件缩小1MiB，导致旧length条件误报blocked；这是验收脚本的量测顺序错误，不认定SHA不一致。原脚本、原Windows日志/status不覆盖，更正记录与标准五类产物位于runs/m6p2c_host_storage_repair_v1/，receipt完整。
+
+原正式failed_batch和371批journal仍分别匹配1d2b97f...749与77e075dd...c0c2。两个setup中断的v2/r2 job有0字节request/pid/status；先停止自己的旧watcher、归档损坏原件，并由原真实提交的固定revision/asset/argv/PID和幸存status重建仅操作状态，确认controller不存在后既有控制器记interrupted；不伪造验收成功、不执行原run。全量回传验签后使用新唯一ID恢复诊断与资格。每次后续提交都检查实际Windows宿主C/D余量及root读写，不依赖guest虚拟容量；重型工作仍主机单槽。v10候选code仅planning/model.py变动，配置/95资产/锁完全相同，已有本地24项回归、Ruff/mypy通过。
