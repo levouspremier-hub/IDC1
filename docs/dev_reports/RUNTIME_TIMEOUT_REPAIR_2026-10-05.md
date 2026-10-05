@@ -25,3 +25,7 @@ Windows独立控制PID2364迁移进行中，脚本和标准运行状态runs/m6p2
 v4/run m6p2c_timeout_heap_repair_v4已终态succeeded/exit0且全部回传验签，固定五次原failed snapshot/371 journal观察全部executable、A/B optimal，10个实际CSR矩阵（含B附加行）data/indices/indptr与旧COO完全相同；wall .162652/.153210/.165832/.153181/.209204秒，124412nnz主矩阵装配约.0097—.0103秒。最后一次带profile，不把不同时刻/重启后的旧baseline .33—.37秒与此次值当作因果速度实验；并未复现原major GC或唯一历史延迟原因。无env.step/PPO更新，原失败输入哈希不变。
 
 完整runtime-campaign-qualification-v10-r4/controller3856同源码8389f89/.50运行，gate至46%，后续真实resume/48/3x8/4h仍待。另按G扩展提交runtime-formal-late-cache-probe-v1/controller42692/watcher35272，排在完整资格之后：保留旧371 checkpoint/journal对象，按212原train-origin逐项重建当前正式verified缓存并核对provenance，保持默认GC、固定五次原失败快照correct、无环境执行/PPO或旧checkpoint重绑；新release同时需要该晚批缓存验收与完整资格。纯诊断warm_elapsed_s记录从缓存预热开始直到最后输入复核（包含后续五次观察），不作为独立工厂性能指标。互动任务继续负责全部闭环，小时任务仅辅助只读。Mac本任务网络relay PID34510，临时idle-sleep assertion PID35335随relay结束退出（显示器不保持唤醒），重型任务均主机单槽。
+
+新版主机完整make check已3245 passed/47 deselected/442 warnings（1511.14秒），真实resume-audit通过，当前48回合诊断执行中，尚未认定完整4h通过。晚批v1仍queued时因缺少frozen torch线程调用受控SIGINT，0科学观察，终态interrupted和完整receipt验签保留；唯一v2/controller133761/watcher36404调用原apply_frozen_thread_setting且assert Torch1，排在完整资格之后。
+
+I卡22d6236登记直接操作控制器runs/m6p2c_v10_release_delivery_v1/controller.py及主机串行launcher，独立于小时任务：等待两次全部验收/传输验签，再规范复制、递归补验绑定、新release发布、实际容量保护、全量sealed输入验签、三seed fresh串行。import/AST/compile轻量检查通过，首次脚本路径入口缺少repo sys.path在提交任何任务前修正，实际controller现在waiting；不改冻结执行源码。三个正式run均未启动，既有.50预算和512工作量保持。
