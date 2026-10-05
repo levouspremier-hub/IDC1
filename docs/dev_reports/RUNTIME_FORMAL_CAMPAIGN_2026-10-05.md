@@ -11,3 +11,13 @@ seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已�
 完整目标为三个种子各512批、每批4回合每回合48步、98304 transitions/种子；保留批前checkpoint、每16批历史checkpoint、原raw/logprob、日志/快照和真实Adam/乘子计数。异常不跳过批次，不替换失败样本；只用匹配新语义checkpoint显式恢复到新run ID。若代码修复改变执行闭包，必须新版本和受影响主机资格，不能继续以旧签名恢复。任何学习/成本走势不能单独作为删样本或重置训练理由。
 
 巡检计划为当前对话每小时heartbeat，主机status/真实进程/最新journal/失败现场/保存进度/资源与回传情况。重型验收与训练串行；Mac只开发和轻量审核。SSH暂断不等于训练失败，先查唯一job，禁止重复提交。完成种子后核对标准产物、512批/更新/质量与所有receipt，继续下一个已授权种子。当前seed1/2的严格发布入口需先补齐并验收；如果新增执行源码，不能直接继承v8资格。
+
+## 第一小时巡检及v9授权推进
+
+2026-10-05第一小时实际SSH复核：v8 seed0仍由原PID911060运行，完成111/512批、21312 transitions、1776 Adam、111乘子更新，444/444回合合格，A降级0/fallback0，批前checkpoint存在且未有failed_batch.json。这是实际时间点计数，不代表完成。
+
+已开子卡docs/task_cards/M6.P2C-F.md，先提交12项失败回归，再完成三种子正式authorization与固定已批准0.50预算的完整再验收模式；38项本地测试及Ruff/mypy通过。新源码e6ebb6e4e195c52a1b9e4fbd2c96072cc7157aad，只涉及正式权限/资格编排及错误文字，v9_050配置和原95资产与v8逐项相同，训练/PPO/规划/环境内容不变。authorization文件只表示用户启动权限，不能替代主机资格，当前新版正式ready=false。
+
+计划在当前训练后，沿既有单槽提交唯一job runtime-campaign-qualification-v9，run runtime_campaign_qualification_v9，固定0.50预算，完整门禁/真实恢复/48诊断/三种子各8批/共享4h和前后对照。不得重跑替换失败资格；通过后重新交付验签并生成v2 release，未通过不训练新版。
+
+发布绑定将不同于v8；不能把正在运行的v8 seed0 checkpoint换标签恢复到v9，也不能无说明混成一份同版本三种子结果。因此保留并审核本次v8 seed0作为前序独立训练，最终v9三种子campaign须在同一新release下seed0/1/2各自新初始化。额外seed0的原因是版本/绑定一致性，非成本、学习走势或碰运气重试；旧成功/失败全部保留。后续每小时任务按此最新子卡推进，具体提交和终态记录待追加。

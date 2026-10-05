@@ -1,0 +1,16 @@
+{
+  "approved_seeds": [
+    0,
+    1,
+    2
+  ],
+  "authorization_context": "Current human message in this chat on 2026-10-05; fixed 0.50 budget; no scientific setting changes",
+  "base_release_path": "configs/release/idc_runtime_formal_release_v1.json",
+  "base_release_sha256": "5bec763e700c040054e3ba620289ac7888c173ac69d8263fb3f550057453917d",
+  "fresh_initialization_required": true,
+  "matrix_sha256": "eb48aa0dfcfdd82f1a1abe77849b5a876cce1582870d5a502fed1b479e516e77",
+  "note": "Permission is not qualification; a new fully qualified source closure and release are mandatory.",
+  "runtime_budget_s": 0.5,
+  "schema": "idc-runtime-campaign-authorization-v1",
+  "user_request": "让主机端开始正式训练，跑三个种子，你这边开个定时任务每一小时检验一次状态，出现阻碍正式训练的异常先行修复，修复不了再向我报告"
+}
