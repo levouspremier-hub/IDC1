@@ -17,3 +17,5 @@
 用户确认主机恢复并继续后：22:43 SSH恢复，boot_id 5d51db43-fdeb-4ced-811e-c51a8d637d7a、uptime4min，两个旧job已worker消失interrupted，终态receipt均验签；受控新IDheap-repair-v2/qualification-v10-r2各重投一次。随后发现/usr/bin/lscpu、dmesg、sudo I/O error；/dev/sdd根emergency_ro，ext4错误7次/ext4_journal_check_start；新worker均消失，尚未执行验收。Windows宿主Get-Volume确认C仅2097152字节、D233123258368字节；Ubuntu VHD位于C的AppData/wsl，145788764160字节，解释为何Linux虚拟823GB剩余并不保障宿主存储。已开H卡7715079，停止新增任务；Windows自带WSL2.7.12可用manage --move，D余量满足整VHD+30GiB。
 
 Windows独立控制PID2364迁移进行中，脚本和标准运行状态runs/m6p2c_host_storage_repair_v1/；Windows日志D:\IDC-host-repair-20261005\。按先shutdown→全VHD SHA→官方move D:\WSL\Ubuntu-IDC→启动前SHA/长度完全一致→C/D30GiB余量→Ubuntu服务/二进制可读/写fsync验收执行；不对挂载的ext4强行remount/fsck，不注销发行版、不删任何失败证据。SSH在停机阶段不可用，未据此宣布迁移成功。若恢复后仍需离线fsck，要先备份与具体方案，不能跳过；原正式训练仍未恢复。
+
+23:04—23:05重复SSH限时检查仍连接超时。Windows控制进程确实曾成功创建，但停机后没有独立Windows远程通道，因此不能确认其当前存活/phase，更不能把已发起迁移说成迁移完成。已请求用户在Windows读取D:\IDC-host-repair-20261005\status.json中的phase/error；若脚本停于hash_original/moving/hash_moved可据真实状态继续等待，若blocked须读日志定位；不重复启动迁移、不重复投递任务。当前主机修复验收仍待结果，正式ready=false、正式三种子尚未恢复，小时巡检继续只读辅助。
