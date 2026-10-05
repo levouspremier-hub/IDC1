@@ -4,6 +4,10 @@
 
 seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已核对主机无正在执行的重型job。仅提交一次，独立worktree/uv frozen/原资产/单槽。实际提交SHA及开始证据待核对后追加。seed1和seed2暂未提交：当前正式build/verify契约及入口仅允许seed0，不能简单编辑旧release的allowed_seeds或通过猴子补丁绕过入口。该授权扩展是后续推进的已知必要工作，不冒充两个种子已经排队。
 
+实际提交revision 132c833451da3f681f8ada6bafc6f3d3eeefbe17，worker PID910925，自动回传watcher PID9040。主机running并已确认真实训练Python PID911060；第一次标准巡检快照已完成4/512批、768 transitions、64 Adam、4乘子更新，16/16已完成回合服务/物理/统一终点合格，A降级0/fallback0，批前checkpoint存在，未有failed_batch.json。该计数是时间点快照而非终态，持续进展以后续账本为准。
+
+每小时heartbeat已启用，automation ID idc，绑定本对话，原其他对话的暂停seed0自动任务未改动。runs/m6p2c_formal_campaign_v1/标准五类监督产物保存实际检查、seed1/2未提交状态、固定绑定、巡检脚本和补充receipt。小时任务已明确授权优先完成三种子正式发布扩展、受影响主机资格及交付验签后自动续行seed1/2；阻碍先修复，不放松既有语义。Mac需保持开机及应用运行以执行本地巡检；主机独立训练不依赖Mac持续连接。
+
 完整目标为三个种子各512批、每批4回合每回合48步、98304 transitions/种子；保留批前checkpoint、每16批历史checkpoint、原raw/logprob、日志/快照和真实Adam/乘子计数。异常不跳过批次，不替换失败样本；只用匹配新语义checkpoint显式恢复到新run ID。若代码修复改变执行闭包，必须新版本和受影响主机资格，不能继续以旧签名恢复。任何学习/成本走势不能单独作为删样本或重置训练理由。
 
 巡检计划为当前对话每小时heartbeat，主机status/真实进程/最新journal/失败现场/保存进度/资源与回传情况。重型验收与训练串行；Mac只开发和轻量审核。SSH暂断不等于训练失败，先查唯一job，禁止重复提交。完成种子后核对标准产物、512批/更新/质量与所有receipt，继续下一个已授权种子。当前seed1/2的严格发布入口需先补齐并验收；如果新增执行源码，不能直接继承v8资格。
