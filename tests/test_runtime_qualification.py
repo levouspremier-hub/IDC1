@@ -180,3 +180,120 @@ def test_semantic_probes_exclude_only_new_pure_wall_timers():
                 'correction_snapshot_wall_s'}
     assert set(probe_corrector_repro.WALL_CLOCK_KEYS) == expected
     assert set(probe_rollout_deterministic.WALL_CLOCK_ONLY_KEYS) == expected
+
+
+@pytest.fixture
+def campaign_release_files(monkeypatch, tmp_path):
+    import json
+    monkeypatch.setattr(runtime, 'ROOT', tmp_path)
+    monkeypatch.setattr(runtime, 'MATRIX_PATH', 'matrix.json', raising=False)
+    (tmp_path / 'matrix.json').write_text('{"seeds": [0, 1, 2]}')
+    base = tmp_path / 'base.json'
+    base.write_text(json.dumps({'schema': 'idc-runtime-formal-release-v1',
+                               'formal_training_ready': True, 'allowed_seeds': [0]}))
+    authorization = {'schema': 'idc-runtime-campaign-authorization-v1',
+                     'approved_seeds': [0, 1, 2], 'runtime_budget_s': .5,
+                     'fresh_initialization_required': True,
+                     'matrix_sha256': runtime.sha(tmp_path / 'matrix.json'),
+                     'base_release_path': 'base.json', 'base_release_sha256': runtime.sha(base),
+                     'user_request': 'Run three seeds serially and repair blocking anomalies.'}
+    path = tmp_path / 'authorization.json'
+    path.write_text(json.dumps(authorization))
+    candidate = tmp_path / 'candidate.json'
+    candidate.write_text('{}')
+    qualification = tmp_path / 'qualification'
+    monkeypatch.setattr(runtime, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': .5}})
+    monkeypatch.setattr(runtime, 'qualification_evidence', lambda *a: {'qualified-proof': 'hash'})
+    return candidate, qualification, path
+
+
+def test_campaign_release_grants_only_bound_three_seed_authorization(campaign_release_files):
+    candidate, qualification, authorization = campaign_release_files
+    release = runtime.build_runtime_release(
+        candidate, qualification, campaign_authorization_path=authorization)
+    assert release['schema'] == 'idc-runtime-formal-release-v2'
+    assert release['allowed_seeds'] == [0, 1, 2]
+    assert release['campaign_authorization_sha256'] == runtime.sha(authorization)
+    assert release['evidence'] == {'qualified-proof': 'hash'}
+    assert release['formal_512_automatically_started'] is False
+    assert runtime.build_runtime_release(candidate, qualification)['allowed_seeds'] == [0]
+
+
+@pytest.mark.parametrize('change', [
+    {'approved_seeds': [0, 1]}, {'approved_seeds': [False, 1, 2]},
+    {'runtime_budget_s': .25}, {'fresh_initialization_required': False},
+    {'matrix_sha256': 'changed'}, {'base_release_sha256': 'changed'}, {'user_request': ''},
+])
+def test_campaign_authorization_rejects_unapproved_or_changed_inputs(campaign_release_files, change):
+    import json
+    candidate, qualification, authorization = campaign_release_files
+    value = json.loads(authorization.read_text())
+    authorization.write_text(json.dumps({**value, **change}))
+    with pytest.raises(ValueError, match='authorization'):
+        runtime.build_runtime_release(candidate, qualification,
+                                      campaign_authorization_path=authorization)
+
+
+def test_campaign_permission_never_replaces_complete_qualification(monkeypatch, campaign_release_files):
+    candidate, qualification, authorization = campaign_release_files
+    def incomplete(*args):
+        raise ValueError('complete qualification required')
+    monkeypatch.setattr(runtime, 'qualification_evidence', incomplete)
+    with pytest.raises(ValueError, match='complete'):
+        runtime.build_runtime_release(candidate, qualification,
+                                      campaign_authorization_path=authorization)
+
+
+def test_campaign_verifier_rejects_changed_allowlist(campaign_release_files):
+    import json
+    candidate, qualification, authorization = campaign_release_files
+    release = runtime.build_runtime_release(
+        candidate, qualification, campaign_authorization_path=authorization)
+    path = authorization.parent / 'release.json'
+    path.write_text(json.dumps(release))
+    assert runtime.verify_runtime_release(path) == release
+    path.write_text(json.dumps({**release, 'allowed_seeds': [0, 1, 2, 3]}))
+    with pytest.raises(ValueError, match='mismatch'):
+        runtime.verify_runtime_release(path)
+
+
+def test_fixed_budget_qualification_keeps_full_gate_and_workload(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from scripts import runtime_qualification as q
+    monkeypatch.setattr(q, 'ROOT', tmp_path)
+    monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': p}})
+    monkeypatch.setattr(q, 'sha', lambda p: 'test-hash')
+    monkeypatch.setattr(q, 'short_run_qualified', lambda *a: True)
+    calls, saves = [], []
+    monkeypatch.setattr(q, 'save', lambda *a, **kw: saves.append(a))
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(q.subprocess, 'run', run)
+    (tmp_path / 'runs').mkdir()
+    assert q.qualify('fixed', [.25, .5, 1.], budget=.5) == 0
+    report = saves[-1][3]
+    assert report['registered_budgets'] == [.5]
+    assert [a['budget_s'] for a in report['attempts']] == [.5]
+    assert report['formal_training_ready'] is False
+    assert len(calls) == 7
+    assert [c[c.index('--seed') + 1] for c in calls if '--seed' in c] == ['0', '1', '2']
+    assert all(c[c.index('--candidate') + 1] == '0.5' for c in calls if '--candidate' in c)
+
+
+def test_fixed_budget_failure_does_not_search_or_replace_samples(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from scripts import runtime_qualification as q
+    monkeypatch.setattr(q, 'ROOT', tmp_path)
+    monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {'runtime_budget_s': p}})
+    monkeypatch.setattr(q, 'sha', lambda p: 'test-hash')
+    saves, calls = [], []
+    monkeypatch.setattr(q, 'save', lambda *a, **kw: saves.append(a))
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return SimpleNamespace(returncode=1 if 'diagnose' in argv else 0)
+    monkeypatch.setattr(q.subprocess, 'run', run)
+    (tmp_path / 'runs').mkdir()
+    assert q.qualify('fixed_failed', [.25, .5, 1.], budget=.5) == 1
+    assert len(calls) == 3
+    assert [a['budget_s'] for a in saves[-1][3]['attempts']] == [.5]
