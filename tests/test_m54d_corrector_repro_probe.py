@@ -136,7 +136,8 @@ def test_digest_covers_every_required_field():
     for name in REQUIRED_DIGEST_FIELDS:
         assert name in probe.DIGEST_FIELDS or name in probe.DIGEST_INFO_FIELDS, name
     assert set(probe.WALL_CLOCK_KEYS) == {
-        "correction_solve_time_s", "stage_a_solve_time_s", "stage_b_solve_time_s"
+        "correction_solve_time_s", "stage_a_solve_time_s", "stage_b_solve_time_s",
+        "correction_total_wall_s", "correction_snapshot_wall_s"
     }
     assert not set(probe.DIGEST_FIELDS) & set(probe.WALL_CLOCK_KEYS)
     assert not set(probe.DIGEST_INFO_FIELDS) & set(probe.WALL_CLOCK_KEYS)

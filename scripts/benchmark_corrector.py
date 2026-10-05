@@ -34,6 +34,7 @@ SCENARIOS = {
 
 # 可执行候选的 correction_reason（其余非 timeout 者一律视为失败）
 EXECUTABLE_REASONS = {"none", "deadline_shortfall"}
+EXECUTABLE_DEGRADED_REASONS = {"stage_b_timeout_feasible"}
 # failure_counts 必须覆盖的键（未知原因也归入 non_timeout_failure 并累加到 unknown）
 FAILURE_KEYS = ("timeout", "base_shortage", "solver_failure", "proposal_invalid", "unknown")
 
@@ -68,9 +69,11 @@ def make_scenario_env(scenario: str, horizon: int):
 
 
 def classify_outcome(reason: str) -> str:
-    """把 correction_reason 分类为三类互斥结果之一。"""
+    """把 correction_reason 分类为四类互斥结果之一。"""
     if reason in EXECUTABLE_REASONS:
         return "executable_candidate"
+    if reason in EXECUTABLE_DEGRADED_REASONS:
+        return "executable_degraded"
     if reason == "timeout":
         return "timeout"
     return "non_timeout_failure"
@@ -107,6 +110,7 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
     stage_a: list[float] = []
     stage_b: list[float] = []
     failure_counts = {k: 0 for k in FAILURE_KEYS}
+    degraded_count = 0
     zero_action_count = 0
     unsafe_failure_action_count = 0
     business_gap_sum = 0.0
@@ -135,6 +139,8 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
                 )
                 if outcome == "executable_candidate":
                     executable_count += 1
+                elif outcome == "executable_degraded":
+                    degraded_count += 1
                 else:
                     failure_counts[reason if reason in failure_counts else "unknown"] += 1
                     if is_zero_action:
@@ -164,6 +170,7 @@ def _measure_budget(scenario: str, budget_s: float, seeds: list[int],
         "stage_b": _stats(stage_b),
         "steps_per_s": float(len(wrapper_times) / total),
         "executable_candidate_count": executable_count,
+        "executable_degraded_count": degraded_count,
         "timeout_count": timeout_count,
         "timeout_rate": float(timeout_count / max(n_steps, 1)),
         "non_timeout_failure_count": non_timeout_failure_count,

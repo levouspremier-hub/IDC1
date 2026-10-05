@@ -83,6 +83,7 @@ def test_timeout_not_counted_as_success(small_report):
         for entry in small_report["scenarios"][scenario]["budgets"].values():
             assert entry["n_steps"] == (
                 entry["executable_candidate_count"]
+                + entry["executable_degraded_count"]
                 + entry["timeout_count"]
                 + entry["non_timeout_failure_count"]
             )
@@ -151,6 +152,7 @@ def test_outcome_classification_table():
     cases = {
         "none": "executable_candidate",
         "deadline_shortfall": "executable_candidate",
+        "stage_b_timeout_feasible": "executable_degraded",
         "timeout": "timeout",
         "base_shortage": "non_timeout_failure",
         "solver_failure": "non_timeout_failure",
@@ -166,6 +168,7 @@ def test_accounting_identity_holds(small_report):
         for entry in small_report["scenarios"][scenario]["budgets"].values():
             assert entry["n_steps"] == (
                 entry["executable_candidate_count"]
+                + entry["executable_degraded_count"]
                 + entry["timeout_count"]
                 + entry["non_timeout_failure_count"]
             ), entry

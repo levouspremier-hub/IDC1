@@ -110,11 +110,13 @@ STAGE_FIELDS = (
     "corrector_failure", "corrector_reason", "digest",
 )
 
-# 纯墙钟字段：**只**排除这三项
+# 纯墙钟字段：只排除计时读数，保留所有决策与预算字段
 WALL_CLOCK_KEYS = (
     "correction_solve_time_s",
     "stage_a_solve_time_s",
     "stage_b_solve_time_s",
+    "correction_total_wall_s",
+    "correction_snapshot_wall_s",
 )
 
 # digest 覆盖 transition 的顶层字段

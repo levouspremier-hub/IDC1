@@ -49,6 +49,8 @@ WALL_CLOCK_ONLY_KEYS = (
     "correction_solve_time_s",
     "stage_a_solve_time_s",
     "stage_b_solve_time_s",
+    "correction_total_wall_s",
+    "correction_snapshot_wall_s",
 )
 
 
