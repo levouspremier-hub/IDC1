@@ -47,3 +47,9 @@ v9资格仍queued，原controller PID968641等待单槽执行锁，无重复提�
 已开M6.P2C-G诊断卡；Mac仅一次轻量原快照profile，约.132535秒可执行，但不能据此称主机问题解决；失败前无证明可执行A，现有安全停止行为正确，根因未确定。已固定132c833单次提交runtime-formal-seed0-failure-probe-v1/run m6p2c_formal_seed0_failure_probe_v1，controller1113176、自动watcher20077，queued在现有v9资格之后。五次预定只读.50快照重放（第五次profile）全部保留，无环境/PPO，不以成功重放替代原失败、不无限重试。标准本地失败审核runs/m6p2c_formal_seed0_failure_audit_v1/及receipt完整，原产物不改。
 
 v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed/47 deselected/439 warnings、1686.69秒，仍须完成后续真实恢复/48/3x8/4h，不能先宣称全部通过。watcher13488存活，主机磁盘843GB可用/12%、内存10130MiB可用、swap571MiB使用，无磁盘或内存阻碍。已更新监督五类产物和receipt及小时自动任务。正式阻碍未解决，新正式ready保持false；即使v9旧策略资格通过，也需先完成晚批主机根因分析和必要修复/新资格，再推进正式三种子。可自主诊断工作仍在进行，尚不是确认无法修复。
+
+## 第五轮巡检（2026-10-05 21:44 Asia/Shanghai）
+
+实际SSH快照unix1791207855.3273804：v9资格仍running，门禁、真实边界恢复、0.50诊断48回合及seed0/1/2各8批已各自成功终止；三短训各1536 transitions/128 Adam/8乘子更新。当前soak Python1154455存活，本轮核对before24/24及shared72/72合格，A降级/fallback/参数更新均0，after尚0；共享阶段刚开始，未满14400秒，不认定完整资格通过。只读失败快照probe仍queued、controller1113176，等待现有单槽，未重复提交。watcher13488/20077均存活。
+
+原v8正式seed0仍failed，371成功批终态与封存39文件receipt及本地失败审核receipt再次核验通过，原checkpoint/RNG/partial未更改。晚批超时根因仍待已排队主机诊断，不能以目前短训/旧策略soak进展替代修复或重新启动正式训练。主机磁盘842GB可用/12%、内存12231MiB可用、swap444MiB使用，无资源阻碍；监督产物/小时记录及receipt已更新。未改源码/预算/工作量、未恢复正式训练、未新建job；当前新版ready保持false。
