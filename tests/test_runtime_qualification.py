@@ -163,3 +163,20 @@ def test_formal_release_cannot_load_short_evaluation_role():
     from checkpointing.inventory_eval_input import load_policy
     with pytest.raises(ValueError, match='short'):
         load_policy('missing-policy', formal=False, runtime_release='unverified-release')
+
+
+def test_benchmark_distinguishes_retained_a_from_optimal_and_failure():
+    from scripts import benchmark_corrector as bench
+    assert bench.classify_outcome('stage_b_timeout_feasible') == 'executable_degraded'
+    assert bench.classify_outcome('none') == 'executable_candidate'
+    assert bench.classify_outcome('timeout') == 'timeout'
+    assert bench.classify_outcome('unregistered') == 'non_timeout_failure'
+
+
+def test_semantic_probes_exclude_only_new_pure_wall_timers():
+    from scripts import probe_corrector_repro, probe_rollout_deterministic
+    expected = {'correction_solve_time_s', 'stage_a_solve_time_s',
+                'stage_b_solve_time_s', 'correction_total_wall_s',
+                'correction_snapshot_wall_s'}
+    assert set(probe_corrector_repro.WALL_CLOCK_KEYS) == expected
+    assert set(probe_rollout_deterministic.WALL_CLOCK_ONLY_KEYS) == expected
