@@ -1,0 +1,9 @@
+# 三种子正式长训运行账
+
+用户2026-10-05明确授权seed0/1/2正式训练、主机单槽串行、每小时检查并先处理阻碍。冻结v8预算0.50，release SHA256 5bec763e700c040054e3ba620289ac7888c173ac69d8263fb3f550057453917d；执行闭包cb4b694ec584c6e2b46a697399fa00e234ed2982，资格job revision 99e00c218604b1fc18667398a77b2226c0925f2d。资产f20ffe34f6db6cb7f3f31e38fa4f1169f92e4292bb3d43f8521028b74143fb71。旧final不用作正式初始化，所有种子各自新初始化。
+
+seed0计划job runtime-formal-seed0-v1，run m6p2c_formal_train_seed0_v1，已核对主机无正在执行的重型job。仅提交一次，独立worktree/uv frozen/原资产/单槽。实际提交SHA及开始证据待核对后追加。seed1和seed2暂未提交：当前正式build/verify契约及入口仅允许seed0，不能简单编辑旧release的allowed_seeds或通过猴子补丁绕过入口。该授权扩展是后续推进的已知必要工作，不冒充两个种子已经排队。
+
+完整目标为三个种子各512批、每批4回合每回合48步、98304 transitions/种子；保留批前checkpoint、每16批历史checkpoint、原raw/logprob、日志/快照和真实Adam/乘子计数。异常不跳过批次，不替换失败样本；只用匹配新语义checkpoint显式恢复到新run ID。若代码修复改变执行闭包，必须新版本和受影响主机资格，不能继续以旧签名恢复。任何学习/成本走势不能单独作为删样本或重置训练理由。
+
+巡检计划为当前对话每小时heartbeat，主机status/真实进程/最新journal/失败现场/保存进度/资源与回传情况。重型验收与训练串行；Mac只开发和轻量审核。SSH暂断不等于训练失败，先查唯一job，禁止重复提交。完成种子后核对标准产物、512批/更新/质量与所有receipt，继续下一个已授权种子。当前seed1/2的严格发布入口需先补齐并验收；如果新增执行源码，不能直接继承v8资格。
