@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.optimize import Bounds, LinearConstraint, linprog
-from scipy.sparse import coo_matrix, csr_matrix, lil_matrix, vstack
+from scipy.sparse import csr_matrix, lil_matrix, vstack
 
 from contracts.inventory import InventorySnapshot, validate_inventory_snapshot
 from contracts.models import SystemSnapshot
@@ -87,12 +87,21 @@ def _monotonic() -> float:
 
 def _sparse_rows(rows: list[dict[int, float]], n_variables: int) -> csr_matrix:
     """Build the identical constraint matrix without Python sparse assignment."""
-    entries = [(r, c, v) for r, row in enumerate(rows) for c, v in row.items() if v != 0.0]
-    if not entries:
-        return csr_matrix((len(rows), n_variables), dtype=np.float64)
-    row_index, col_index, values = zip(*entries, strict=True)
-    return coo_matrix((values, (row_index, col_index)),
-                      shape=(len(rows), n_variables), dtype=np.float64).tocsr()
+    # NumPy buffers avoid one GC-tracked tuple per coefficient. Keep the
+    # canonical column ordering produced by the previous COO -> CSR path.
+    counts = np.fromiter((sum(v != 0.0 for v in row.values()) for row in rows),
+                         dtype=np.int64, count=len(rows))
+    indptr = np.empty(len(rows) + 1, dtype=np.int64)
+    indptr[0] = 0
+    np.cumsum(counts, out=indptr[1:])
+    nnz = int(indptr[-1])
+    indices = np.fromiter((c for row in rows for c, v in row.items() if v != 0.0),
+                          dtype=np.int64, count=nnz)
+    values = np.fromiter((v for row in rows for v in row.values() if v != 0.0),
+                         dtype=np.float64, count=nnz)
+    matrix = csr_matrix((values, indices, indptr), shape=(len(rows), n_variables))
+    matrix.sort_indices()
+    return matrix
 
 
 def _append_sparse_row(matrix: csr_matrix, row: dict[int, float]) -> csr_matrix:
@@ -1373,7 +1382,10 @@ def solve_time_indexed_mip_raw_projection(
     if inventory_enabled and terminal is not None:
         rem = _remaining()
         if rem is not None and rem <= 0:
-            return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
+            return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, {
+                **_audit, "stage_a_status": "not_run",
+                "inventory_audit": {"timeout_phase": "model_assembly"},
+            })
         c_inventory = np.zeros(n_vars)
         c_inventory[off_inventory_gap] = 1.0
         t_inventory = time.perf_counter()
@@ -1461,7 +1473,10 @@ def solve_time_indexed_mip_raw_projection(
         else:
             rem = _remaining()
             if rem is not None and rem <= 0:
-                return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
+                return _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, {
+                    **_audit, "stage_a_status": "not_run",
+                    "inventory_audit": {"timeout_phase": "inventory_certificate"},
+                })
             res_inventory = _milp(
                 c=c_inventory,
                 constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
@@ -1472,9 +1487,13 @@ def solve_time_indexed_mip_raw_projection(
         if inventory_status != SOLVER_OPTIMAL:
             failure = (FAILURE_TIMEOUT if inventory_status == SOLVER_TIME_LIMIT
                        else FAILURE_SOLVER_FAILURE)
-            result = _projection_empty(snapshot, inventory_status, failure, _audit)
+            result = _projection_empty(snapshot, inventory_status, failure, {
+                **_audit, "stage_a_status": "not_run",
+            })
             result.inventory_audit.update(
-                status="unproven", reachability_solve_time_s=elapsed_inventory)
+                status="unproven", reachability_solve_time_s=elapsed_inventory,
+                **({"timeout_phase": "inventory_reachability"}
+                   if inventory_status == SOLVER_TIME_LIMIT else {}))
             return result
         minimum_gap = max(float(res_inventory.x[off_inventory_gap]), 0.0)
         # Preserve the measured gap, including sub-micro-kWh positive deficits.
@@ -1510,8 +1529,10 @@ def solve_time_indexed_mip_raw_projection(
         _audit["inventory_audit"] = inventory_audit
         rem = _remaining()
         if rem is not None and rem <= 0:
-            result = _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, _audit)
-            result.inventory_audit.update(inventory_audit)
+            result = _projection_empty(snapshot, SOLVER_TIME_LIMIT, FAILURE_TIMEOUT, {
+                **_audit, "stage_a_status": "not_run",
+                "inventory_audit": {**inventory_audit, "timeout_phase": "before_stage_a"},
+            })
             return result
 
     tA0 = time.perf_counter()
