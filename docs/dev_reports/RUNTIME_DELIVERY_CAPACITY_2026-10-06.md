@@ -13,3 +13,5 @@
 外部管理员动作成功（或D实际余量达到上述预留）后，复验原release SHA、新最小资产和网络/根rw，以唯一runtime-formal-three-seed-v2-v10-r2、parent m6p2c_formal_three_seed_v2_v10_r2继续。三个seed原v2_v10名称均未创建，可首次fresh初始化；科学入口与512/更新/质量仍原样串行，不补采、不跨绑定恢复。
 
 2026-10-06 12:20重新核对：D盘实际可用147318947840字节（约147GB），C142723215360字节，根rw。外部清理已解除预留阻碍，代理未执行离线compact。完整源/release、旧sealed f20/d314及原371批失败SHA已复验，最小asset6013文件再次全SHA验签，旧三seed目录均未创建且r2尚不存在；全部条件通过后使用新r2提交，启动进度以后续真实journal为准。标准新验收runs/m6p2c_delivery_capacity_acceptance_v2/。
+
+2026-10-06 12:27恢复实训：新job runtime-formal-three-seed-v2-v10-r2/controller308291，固定revision15d65b505f0881203240be79b7b43a1f5d4d1dfe，最小asset6fa5ab...7c50ca，原release edc30e5b...666e20c不变，watcher59855自动完整回传。主机实际seed0 Python309920，已完成1/512批、192transitions、16Adam/1乘子、4/4回合通过服务/物理/库存/统一终点全部既定标准，A降级0/fallback0，批前/latest存在、无failed_batch。旧failed parent/原v8失败保留且不重用；当前三seed都从新发布fresh初始化，seed1/2由同一parent在前seed完整512/更新/质量与产物验签通过后串行启动，不独立重投。当前仅启动已核实，不宣称三seed训练完成。标准新恢复验收runs/m6p2c_delivery_capacity_acceptance_v2/及receipt。未执行管理员compact或更改科学执行源码/预算/工作量。

@@ -67,3 +67,5 @@ v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed
 最新：三seed v10短训全部通过，共96合格回合，完整4h验收流程已启动（before隔离阶段），晚批212-cache补验在其后。正式v2 release/job尚未生成；直接控制器等待验收并负责之后完整发布/交付/串行启动，不需再向用户索取已有训练授权。每seed当前短训约327—329秒；512工作量粗略外推约5.8—5.9h，不是实测长训或跨主机条件不变的因果提速证明。
 
 2026-10-06 J卡已接续容量修复：原parent正式启动0批即D14.6GB守卫失败，全receipt验签；既有资格/release有效。37.3GB已验SHA的退役输入副本共享存储而不删任何历史路径/内容；最小完整资产6013文件/8.16GB已全验签。TRIM exit0但非稀疏VHDX未归还Windows物理空间，D仍14.6GB，新投递预留需48.96GB。当前Windows非管理员，已准备管理员备份/离线compact/全验签脚本（尚未执行），详见RUNTIME_DELIVERY_CAPACITY_2026-10-06.md。没有r2投递，没有科学重复重训或降低容量门槛。
+
+2026-10-06 12:27恢复实训：新job runtime-formal-three-seed-v2-v10-r2/controller308291，固定revision15d65b505f0881203240be79b7b43a1f5d4d1dfe，最小asset6fa5ab...7c50ca，原release edc30e5b...666e20c不变，watcher59855自动完整回传。主机实际seed0 Python309920，已完成1/512批、192transitions、16Adam/1乘子、4/4回合通过服务/物理/库存/统一终点全部既定标准，A降级0/fallback0，批前/latest存在、无failed_batch。旧failed parent/原v8失败保留且不重用；当前三seed都从新发布fresh初始化，seed1/2由同一parent在前seed完整512/更新/质量与产物验签通过后串行启动，不独立重投。当前仅启动已核实，不宣称三seed训练完成。标准新恢复验收runs/m6p2c_delivery_capacity_acceptance_v2/及receipt。未执行管理员compact或更改科学执行源码/预算/工作量。
