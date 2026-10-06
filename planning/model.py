@@ -50,6 +50,7 @@ DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 # 这些选项**不改变**可行域、约束或目标函数，只影响求解路径。
 DETERMINISTIC_RANDOM_SEED = 0
 DETERMINISTIC_PARALLEL = False
+INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = 1e-9
 
 
 def deterministic_mip_options(*, time_limit_s: float | None) -> dict:
@@ -1352,12 +1353,14 @@ def solve_time_indexed_mip_raw_projection(
         # remaining-budget 算法未变；不触碰目标、约束、边界。
         options = deterministic_mip_options(time_limit_s=_remaining())
         if inventory_enabled:
-            # The tighter terminal/offset conditions expose a recorded HiGHS
-            # Stage B solve error with its default 1e-6 MIP feasibility tolerance.
-            # Tighten numerical feasibility, never physical or offset bounds.
-            options.update(mip_feasibility_tolerance=1e-8,
-                           primal_feasibility_tolerance=1e-8,
-                           dual_feasibility_tolerance=1e-8)
+            # Recorded seed1 input: A at 1e-8 returned a near-integer witness
+            # whose offset bound made B report infeasible. Tightening only B
+            # did not help; both stages at 1e-9 finish with integer residual 0.
+            # Keep all physical/offset bounds and the shared deadline unchanged.
+            tolerance = INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
+            options.update(mip_feasibility_tolerance=tolerance,
+                           primal_feasibility_tolerance=tolerance,
+                           dual_feasibility_tolerance=tolerance)
         return options
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}

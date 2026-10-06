@@ -23,6 +23,12 @@ def candidate_config(budget):
     config.update(status='qualification_candidate', runtime_execution_version=VERSION,
                   runtime_budget_s=budget)
     config['training']['corrector']['time_limit_s'] = budget
+    from planning.model import INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
+    tolerance = INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
+    config['training']['corrector']['solver_feasibility_tolerance'] = tolerance
+    config['training']['backend']['note'] = (
+        f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
+        'random_seed=0 / parallel=False')
     config['inherited_calibration_scope'] = {
         'source': 'r5', 'scales_and_research_parameters_unchanged': True,
         'measured_solver_budget_s': .25, 'candidate_budget_calibrated': False,

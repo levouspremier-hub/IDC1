@@ -8,13 +8,17 @@ from scenario import runtime_release as runtime
 
 @pytest.mark.parametrize('budget', [.25, .5, 1.])
 def test_registered_budget_preserves_research_config(monkeypatch, budget):
-    original = {'training': {'corrector': {'time_limit_s': .25}}, 'status': 'frozen'}
+    original = {'training': {
+        'corrector': {'time_limit_s': .25, 'solver_feasibility_tolerance': 1e-8},
+        'backend': {'note': 'inherited calibration'}}, 'status': 'frozen'}
     monkeypatch.setattr(runtime, 'load_config', lambda: copy.deepcopy(original))
     config = runtime.candidate_config(budget)
     assert config['training']['corrector']['time_limit_s'] == budget
     assert config['runtime_execution_version'] == runtime.VERSION
     assert config['status'] == 'qualification_candidate'
     assert original['training']['corrector']['time_limit_s'] == .25
+    assert original['training']['corrector']['solver_feasibility_tolerance'] == 1e-8
+    assert config['training']['corrector']['solver_feasibility_tolerance'] == 1e-9
 
 
 @pytest.mark.parametrize('budget', [0, .3, 2., float('nan')])
