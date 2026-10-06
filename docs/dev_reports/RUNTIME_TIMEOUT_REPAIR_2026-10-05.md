@@ -33,3 +33,5 @@ I卡22d6236登记直接操作控制器runs/m6p2c_v10_release_delivery_v1/control
 02:15前置全部通过：gate3245/47、真实resume、48固定策略诊断、三seed各8批/32合格回合/1536 transitions/128 Adam/8乘子全部通过，short seed0/1/2 elapsed分别326.726532/329.352715/326.855662秒，A降级0/fallback0。完整soak流程已经启动，当前before隔离阶段；14400秒shared和after尚未完成，晚批v2仍在其后排队。正式release v2仍不存在、正式任务未提交，不能报告正式已经运行。
 
 本次直接控制器PID36855（uv36853）、标准状态runs/m6p2c_v10_release_delivery_v1/report.json目前waiting_full_qualification_and_late_cache；临时caffeinate -i -w36855 PID37588仅保持idle awake且随控制器结束退出，显示器可休眠。完整通过后控制器自行逐文件验签、规范复制/补验绑定、release验证与普通提交/push、新immutable sealed输入完整验签、实际主机容量guard和唯一parent formal job提交，并核实seed0首批。它属于本次任务直接执行，既有已知修复不委派小时重做；训练各seed只有完整产物及质量通过才顺序下seed。
+
+2026-10-06 J卡已接续容量修复：原parent正式启动0批即D14.6GB守卫失败，全receipt验签；既有资格/release有效。37.3GB已验SHA的退役输入副本共享存储而不删任何历史路径/内容；最小完整资产6013文件/8.16GB已全验签。TRIM exit0但非稀疏VHDX未归还Windows物理空间，D仍14.6GB，新投递预留需48.96GB。当前Windows非管理员，已准备管理员备份/离线compact/全验签脚本（尚未执行），详见RUNTIME_DELIVERY_CAPACITY_2026-10-06.md。没有r2投递，没有科学重复重训或降低容量门槛。
