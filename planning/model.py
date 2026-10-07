@@ -1348,7 +1348,7 @@ def solve_time_indexed_mip_raw_projection(
             return None
         return max(deadline - _monotonic(), 0.0)
 
-    def _options() -> dict:
+    def _options(*, stage_b: bool = False) -> dict:
         # M5.4g：阶段 A/B 也必须走同一份确定性选项构造。
         # **只替换 options 构造**：time_limit 仍来自上面这个共享 deadline 的剩余预算，
         # remaining-budget 算法未变；不触碰目标、约束、边界。
@@ -1363,6 +1363,11 @@ def solve_time_indexed_mip_raw_projection(
             options.update(mip_feasibility_tolerance=tolerance,
                            primal_feasibility_tolerance=tolerance,
                            dual_feasibility_tolerance=tolerance)
+            if stage_b:
+                # An exactly integral A witness satisfies the recorded
+                # origin7584 B model, which HiGHS presolve rejects. Keep that
+                # model and remaining deadline; solve it once without presolve.
+                options['presolve'] = INVENTORY_STAGE_B_PRESOLVE
         return options
 
     offset_row = {**{off_d + g: 1.0 / max(n_group, 1) for g in range(n_group)}, off_e: 1.0}
@@ -1632,16 +1637,9 @@ def solve_time_indexed_mip_raw_projection(
         execution_source = "stage_a"
     else:
         tB0 = time.perf_counter()
-        options_b = _options()
-        if inventory_enabled:
-            # The recorded origin7584 input has an exactly integral A witness
-            # satisfying every original B row, yet HiGHS presolve reports B
-            # infeasible. Solve that same B model without presolve, once and
-            # within the original remaining deadline; do not retry or relax it.
-            options_b['presolve'] = INVENTORY_STAGE_B_PRESOLVE
         res_b = _milp(
             c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
-            integrality=integrality, bounds=bounds_vec, options=options_b)
+            integrality=integrality, bounds=bounds_vec, options=_options(stage_b=True))
         tB = time.perf_counter() - tB0
         status_b = _status(res_b)
         if status_b == SOLVER_OPTIMAL:
