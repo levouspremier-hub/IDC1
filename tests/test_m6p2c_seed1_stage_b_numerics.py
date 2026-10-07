@@ -1,5 +1,7 @@
 """Immutable seed1 failure input; no environment or optimizer updates."""
 import json
+
+import pytest
 from pathlib import Path
 
 from contracts.inventory import InventorySnapshot
@@ -7,8 +9,12 @@ from contracts.models import DispatchProposal
 from planning.corrector import correct
 
 
-def test_recorded_seed1_feasible_projection_finishes_stage_b():
-    path = Path(__file__).parent / 'fixtures/m6p2c_seed1_origin9120_step18.json'
+@pytest.mark.parametrize('case_name', [
+    'm6p2c_seed1_origin9120_step18.json',
+    'm6p2c_seed1_origin1008_step18.json',
+])
+def test_recorded_seed1_feasible_projection_finishes_stage_b(case_name):
+    path = Path(__file__).parent / 'fixtures' / case_name
     case = json.loads(path.read_text())
     snapshot = InventorySnapshot.model_validate(case['snapshot'])
     proposal = DispatchProposal.model_validate(case['proposal'])
