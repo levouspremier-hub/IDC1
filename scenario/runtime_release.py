@@ -7,8 +7,15 @@ from pathlib import Path
 
 from scenario.inventory_release import MATRIX_PATH, ROOT, _git, load_config, load_matrix, sha
 
-VERSION = 'verified-a-stop-batch-v1'
+VERSION = 'certified-lexicographic-learning-coverage-v2'
 BUDGETS = (.25, .50, 1.00)
+NUMERIC_FIXTURES = (
+    'm6p2c_seed1_origin9120_step18.json',
+    'm6p2c_seed1_origin1008_step18.json',
+    'm6p2c_seed1_origin7584_step1.json',
+)
+NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
+                    'sample0', 'sample1', 'sample2', 'sample3')
 
 
 def require_candidate_scope(*, short):
@@ -27,6 +34,21 @@ def candidate_config(budget):
     tolerance = INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
     config['training']['corrector']['solver_feasibility_tolerance'] = tolerance
     config['training']['corrector']['inventory_stage_b_presolve'] = INVENTORY_STAGE_B_PRESOLVE
+    from planning.numeric_contract import (
+        INTEGER_REPRESENTATION_ULPS,
+        NUMERIC_CONTRACT_VERSION,
+        PRIMAL_WITNESS_TOLERANCE,
+    )
+    config['training']['corrector']['primary_mip_rel_gap'] = 0.
+    config['training']['corrector']['primary_mip_abs_gap'] = 0.
+    config['numeric_contract'] = {
+        'version': NUMERIC_CONTRACT_VERSION,
+        'integer_representation_ulps': INTEGER_REPRESENTATION_ULPS,
+        'primal_witness_tolerance': PRIMAL_WITNESS_TOLERANCE,
+        'integer_normalization_requires_original_primal_certificate': True,
+        'learning_origin_cycles': 2,
+        'primary_offset_tolerance': 1e-6,
+    }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
         f'inventory B presolve={INVENTORY_STAGE_B_PRESOLVE}; '
@@ -34,7 +56,9 @@ def candidate_config(budget):
     config['inherited_calibration_scope'] = {
         'source': 'r5', 'scales_and_research_parameters_unchanged': True,
         'measured_solver_budget_s': .25, 'candidate_budget_calibrated': False,
-        'qualification_required': ['48_episodes', 'three_seed_8_batches', 'shared_4h']}
+        'qualification_required': ['numeric_witness_replay', '48_episodes',
+                                   'three_seed_8_batches', 'three_seed_two_origin_cycles',
+                                   'shared_4h']}
     return config
 
 
@@ -60,6 +84,7 @@ def asset_binding():
     paths.update(ROOT / config[k]['evidence_path'] for k in
                  ('reward_repair', 'service_temperature_reserve'))
     paths.update(ROOT / e['path'] for e in config['reward_shaping']['train_evidence'])
+    paths.update(ROOT / 'tests/fixtures' / name for name in NUMERIC_FIXTURES)
     visited = {}
 
     def references(value):
@@ -115,6 +140,108 @@ def candidate_binding(path):
             'config': candidate['config'], 'formal_training_ready': False}
 
 
+def validate_numeric_evidence(result, candidate_path):
+    """Require all registered counterexamples/variants and their actual certificates."""
+    candidate = verify_candidate(candidate_path)
+    expected = {(name, variant) for name in NUMERIC_FIXTURES for variant in NUMERIC_VARIANTS}
+    rows = result.get('observations', [])
+    if (result.get('passed') is not True or result.get('candidate_sha256') != sha(candidate_path)
+            or result.get('numeric_contract') != candidate['config']['numeric_contract']
+            or result.get('environment_steps') != 0 or result.get('parameter_updates') != 0
+            or len(rows) != len(expected)
+            or {(r['fixture'], r['variant']) for r in rows} != expected):
+        raise ValueError('complete bound numeric qualification is required')
+    for row in rows:
+        path = ROOT / 'tests/fixtures' / row['fixture']
+        fixture = json.loads(path.read_text())
+        if (row['fixture_sha256'] != sha(path)
+                or row['source_failure_sha256'] != fixture['source_failure_sha256']
+                or row['passed'] is not True or not row['candidate_check']['passed']
+                or row['candidate_check']['integer_residual'] != 0):
+            raise ValueError('numeric fixture provenance or executable witness differs')
+        audit = row['inventory_audit']
+        for key in ('stage_a_witness', 'execution_witness', 'primary_objective_certificate'):
+            if audit.get(key, {}).get('passed') is not True:
+                raise ValueError('numeric qualification lacks certified lexicographic witnesses')
+        if not row['solver_calls'] or any(
+                call['options'].get('mip_feasibility_tolerance') != 1e-10
+                or call['options'].get('random_seed') != 0
+                or call['options'].get('parallel') is not False
+                or not 0 < call['options']['time_limit'] <= candidate['config']['runtime_budget_s']
+                for call in row['solver_calls']):
+            raise ValueError('numeric qualification solver options differ')
+        primary = [c for c in row['solver_calls'] if c['options'].get('mip_rel_gap') == 0.]
+        if not primary or any(c['options'].get('mip_abs_gap') != 0. for c in primary):
+            raise ValueError('numeric qualification lacks the primary optimality contract')
+        if row['stage_b_status'] == 'optimal' and row['solver_calls'][-1]['options'].get(
+                'presolve') is not False:
+            raise ValueError('numeric qualification B presolve differs')
+    return result
+
+
+def validate_learning_coverage(folder, candidate_path):
+    """Read actual learning state, schedule and quality; a duration is insufficient."""
+    import torch
+
+    from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from checkpointing.versioned import read_checkpoint_payload
+    from safe_rl_v2.formal_train_loop import (
+        build_lagrangian,
+        build_optimizer,
+        build_seeded_policy,
+        load_resume_checkpoint,
+    )
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
+    from safe_rl_v2.inventory_train import coverage_batches, verify_written_run
+    folder = Path(folder)
+    candidate = verify_candidate(candidate_path)
+    config = candidate['config']
+    binding = candidate_binding(candidate_path)
+    report = verify_written_run(folder, binding)
+    batches = coverage_batches(load_matrix(), report['seed'])
+    count = len(batches)
+    sampling_config = config['training']['sampling']
+    adam_per_batch = (sampling_config['epochs_per_batch']
+                      * sampling_config['minibatches_per_epoch'])
+    if (report['scope'] != 'runtime_learning_qualification'
+            or type(report['seed']) is not int or report['seed'] not in (0, 1, 2)
+            or report['inventory_binding'] != binding
+            or report['resumed_from'] is not None or report['batches_newly_run'] != count
+            or report['batches'] != count or len(report['batch_records']) != count
+            or [b['origins'] for b in report['batch_records']] != batches
+            or report['transitions'] != count * sampling_config['transitions_per_batch']
+            or report['adam_steps'] != count * adam_per_batch
+            or report['lagrangian_updates'] != count
+            or len(report['inventory_episodes']) != sum(map(len, batches))
+            or report['validation_run'] or report['test_run']
+            or any(not all(inventory_episode_acceptance(e).values())
+                   or e['target_qualified'] is not True for e in report['inventory_episodes'])
+            or any(b['zero_action_fallback_steps'] != 0 for b in report['batch_records'])):
+        raise ValueError('learning coverage workload, origins or quality differs')
+    checkpoint = folder / 'checkpoint_final.pt'
+    payload = read_checkpoint_payload(checkpoint)
+    if payload['metadata'].get('inventory_binding') != binding:
+        raise ValueError('learning coverage checkpoint binding differs')
+    policy = build_seeded_policy(config, obs_dim=523, seed=report['seed'])
+    optimizer = build_optimizer(config, policy)
+    lagrangian = build_lagrangian(config)
+    restored = load_resume_checkpoint(checkpoint, policy=policy, optimizer=optimizer,
+        lagrangian=lagrangian, sampling_generator=torch.Generator(),
+        shuffle_generator=torch.Generator(), config=config, expected_obs_dim=523,
+        expected_schema=SHORT_SCHEMA, expected_scope='runtime_learning_qualification',
+        expected_role='runtime_learning_qualification_resume')
+    steps = [int(s['step']) for s in optimizer.state.values()]
+    if (restored['next_batch_index'] != count
+            or restored['origins'] != [o for b in batches for o in b]
+            or not steps or set(steps) != {count * adam_per_batch}
+            or lagrangian._updates != count
+            or any(not torch.isfinite(p).all() for p in policy.state_dict().values())
+            or any(not torch.isfinite(s[k]).all() for s in optimizer.state.values()
+                   for k in ('exp_avg', 'exp_avg_sq'))):
+        raise ValueError('learning coverage actual checkpoint state differs')
+    return report
+
+
 def qualification_evidence(folder, candidate_path):
     """Reopen all mandatory phases, not a caller-supplied ready Boolean."""
     from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
@@ -148,7 +275,10 @@ def qualification_evidence(folder, candidate_path):
             or passed[0]['candidate_sha256'] != sha(candidate_path)):
         raise ValueError('qualification must select first fully passing budget')
     phases = phases + passed[0]['phases']
-    expected = ['gate', 'resume-audit', 'diagnose', 'short', 'short', 'short', 'soak']
+    numerical = 'numeric_contract' in candidate['config']
+    expected = ['gate', 'resume-audit'] + (['numerics'] if numerical else [])
+    expected += ['diagnose', 'short', 'short', 'short']
+    expected += (['coverage', 'coverage', 'coverage'] if numerical else []) + ['soak']
     if [p['action'] for p in phases] != expected:
         raise ValueError('qualification phase sequence incomplete')
     for phase in phases:
@@ -157,7 +287,15 @@ def qualification_evidence(folder, candidate_path):
         result = json.loads((child / 'report.json').read_text())
         if phase['exit_code'] != 0 or manifest['status'] != 'success':
             raise ValueError('qualification phase is not successful')
-        if phase['action'] == 'short':
+        if phase['action'] == 'numerics':
+            validate_numeric_evidence(result, candidate_path)
+            episodes = []
+        elif phase['action'] == 'coverage':
+            result = validate_learning_coverage(child, candidate_path)
+            if result['seed'] != phase['seed']:
+                raise ValueError('learning coverage seed differs')
+            episodes = result['inventory_episodes']
+        elif phase['action'] == 'short':
             verify_written_run(child, candidate_binding(candidate_path))
             if (result['seed'] != phase['seed'] or result['batches'] != 8
                     or result['transitions'] != 1536 or result['adam_steps'] != 128
@@ -188,6 +326,8 @@ def qualification_evidence(folder, candidate_path):
                 evidence[str(path.relative_to(ROOT))] = sha(path)
     if [p['seed'] for p in phases if p['action'] == 'short'] != [0, 1, 2]:
         raise ValueError('three short seeds required')
+    if numerical and [p['seed'] for p in phases if p['action'] == 'coverage'] != [0, 1, 2]:
+        raise ValueError('three learning coverage seeds required')
     return evidence
 
 

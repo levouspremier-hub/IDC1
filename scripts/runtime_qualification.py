@@ -350,6 +350,104 @@ def short_run_qualified(folder, path):
                     for b in report['batch_records']))
 
 
+def coverage_run_qualified(folder, path):
+    from scenario.runtime_release import validate_learning_coverage
+    validate_learning_coverage(folder, path)
+    return True
+
+
+def numerics(run_id, path):
+    """Fixed failure inputs plus registered action variants, without env or PPO."""
+    import hashlib
+
+    import scipy.optimize
+
+    from contracts.inventory import InventorySnapshot
+    from contracts.models import DispatchProposal
+    from planning.corrector import correct
+    from scenario.runtime_release import (
+        NUMERIC_FIXTURES,
+        NUMERIC_VARIANTS,
+        validate_numeric_evidence,
+    )
+    candidate = verify_candidate(path)
+    apply_frozen_thread_setting(candidate['config'])
+    folder = ROOT / 'runs' / run_id
+    folder.mkdir(exist_ok=False)
+    rows = []
+    report = {'passed': False, 'candidate_sha256': sha(path),
+              'numeric_contract': candidate['config']['numeric_contract'],
+              'environment_steps': 0, 'parameter_updates': 0, 'observations': rows,
+              'formal_training_ready': False, 'train_only': True}
+    save(run_id, candidate, rows, report, 'running')
+    real_milp = scipy.optimize.milp
+    try:
+        for name in NUMERIC_FIXTURES:
+            source = ROOT / 'tests/fixtures' / name
+            fixture = json.loads(source.read_text())
+            snapshot = InventorySnapshot.model_validate(fixture['snapshot'])
+            for variant in NUMERIC_VARIANTS:
+                if variant == 'recorded':
+                    proposal = DispatchProposal.model_validate(fixture['proposal'])
+                elif variant in ('zero_charge', 'full_discharge'):
+                    full = variant == 'full_discharge'
+                    proposal = DispatchProposal(
+                        compute_actions=[float(full)] * len(snapshot.group_work_capacity),
+                        storage_action=1. if full else -1.)
+                else:
+                    generator = np.random.default_rng(int(variant[-1]))
+                    proposal = DispatchProposal(
+                        compute_actions=generator.random(len(snapshot.group_work_capacity)).tolist(),
+                        storage_action=float(generator.uniform(-1., 1.)))
+                calls = []
+                def observe(_calls=calls, **kwargs):
+                    con = kwargs['constraints'][0]
+                    matrix = con.A.tocsr()
+                    arrays = {'data': matrix.data, 'indices': matrix.indices,
+                              'indptr': matrix.indptr, 'lb': kwargs['bounds'].lb,
+                              'ub': kwargs['bounds'].ub, 'clb': con.lb, 'cub': con.ub,
+                              'objective': kwargs['c'], 'integrality': kwargs['integrality']}
+                    _calls.append({'options': dict(kwargs['options']),
+                                  'matrix_shape': list(matrix.shape),
+                                  'mathematical_input_hashes': {
+                                      key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
+                                      for key, value in arrays.items()}})
+                    return real_milp(**kwargs)
+                scipy.optimize.milp = observe
+                started = time.perf_counter()
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore', RuntimeWarning)
+                        result = correct(snapshot, proposal,
+                            time_limit_s=candidate['config']['runtime_budget_s'])
+                finally:
+                    scipy.optimize.milp = real_milp
+                row = {'fixture': name, 'fixture_sha256': sha(source), 'variant': variant,
+                       'source_failure_sha256': fixture['source_failure_sha256'],
+                       'proposal': proposal.model_dump(), 'wall_s': time.perf_counter() - started,
+                       'passed': result.executable and result.candidate_check.get('passed', False),
+                       'stage_a_status': result.stage_a_status,
+                       'stage_b_status': result.stage_b_status,
+                       'execution_source': result.execution_source,
+                       'candidate_check': result.candidate_check,
+                       'inventory_audit': result.inventory_audit, 'solver_calls': calls}
+                rows.append(row)
+                dump(folder / 'observations.json', rows)
+                save(run_id, candidate, rows, report, 'running')
+                if not row['passed']:
+                    raise ValueError(f'numeric qualification stopped at {name}/{variant}')
+        report['passed'] = True
+        validate_numeric_evidence(report, path)
+        save(run_id, candidate, rows, report, 'success')
+        return 0
+    except Exception as exc:
+        report['passed'] = False
+        save(run_id, candidate, rows, report, 'failed', str(exc))
+        return 1
+    finally:
+        scipy.optimize.milp = real_milp
+
+
 def qualify(run_id, paths, *, budget=None):
     candidates = [verify_candidate(path) for path in paths]
     if [c['config']['runtime_budget_s'] for c in candidates] != list(BUDGETS):
@@ -392,6 +490,9 @@ def qualify(run_id, paths, *, budget=None):
                     {'action': action, 'run_id': child, 'exit_code': status})
                 save(run_id, {'candidates': candidates}, [], report, 'running')
                 return status == 0
+            numerical = 'numeric_contract' in candidate['config']
+            if numerical and not phase('numerics', 'numerics'):
+                continue
             if not phase('diagnose', 'diagnose'):
                 continue
             shorts_passed = True
@@ -407,7 +508,23 @@ def qualify(run_id, paths, *, budget=None):
                 if not accepted:
                     shorts_passed = False
                     break
-            if not shorts_passed or not phase('soak', 'soak'):
+            if not shorts_passed:
+                continue
+            coverage_passed = True
+            if numerical:
+                for seed in (0, 1, 2):
+                    child = run_id + '_' + label + f'_coverage_seed{seed}'
+                    status = subprocess.run([sys.executable, '-m', 'safe_rl_v2.inventory_train',
+                        '--coverage', '--seed', str(seed), '--runtime-candidate', str(path),
+                        '--run-id', child], cwd=ROOT).returncode
+                    accepted = status == 0 and coverage_run_qualified(ROOT/'runs'/child, path)
+                    attempt['phases'].append({'action': 'coverage', 'run_id': child, 'seed': seed,
+                                             'exit_code': status, 'quality_passed': accepted})
+                    save(run_id, {'candidates': candidates}, [], report, 'running')
+                    if not accepted:
+                        coverage_passed = False
+                        break
+            if not coverage_passed or not phase('soak', 'soak'):
                 continue
             attempt['passed'] = True
             selected = budget
@@ -429,7 +546,8 @@ def qualify(run_id, paths, *, budget=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=(
-        'freeze', 'profile', 'gate', 'resume-audit', 'qualify', 'diagnose', 'soak', 'episode'))
+        'freeze', 'profile', 'gate', 'resume-audit', 'qualify', 'diagnose', 'soak',
+        'numerics', 'episode'))
     parser.add_argument('--candidate', type=Path)
     parser.add_argument('--candidates', nargs=3, type=Path)
     parser.add_argument('--budget', type=float, choices=BUDGETS)
@@ -452,6 +570,8 @@ def main():
         return resume_audit(args.run_id, args.candidate)
     if args.action == 'profile':
         return profile(args.run_id, args.candidate)
+    if args.action == 'numerics':
+        return numerics(args.run_id, args.candidate)
     if args.action == 'episode':
         episode(args.output, verify_candidate(args.candidate), args.origin, args.mode)
         return 0

@@ -1,4 +1,4 @@
-"""M6-P2b v2 train-only entry: 8 controlled batches or 512 formal batches."""
+"""Controlled short, candidate learning coverage, or authorized formal training."""
 
 from __future__ import annotations
 
@@ -132,9 +132,32 @@ def verify_written_run(folder, binding):
     return json.loads((folder / "report.json").read_text())
 
 
+def coverage_batches(matrix, seed):
+    """Two complete cycles of the unchanged, preregistered learning schedule."""
+    from collections import Counter
+    schedule = matrix['training_schedule']
+    pool = schedule['origin_pool']
+    per_batch = int(schedule['episodes_per_batch'])
+    if not pool or per_batch <= 0 or len(set(pool)) != len(pool):
+        raise ValueError('coverage requires a nonempty unique registered origin pool')
+    count = (2 * len(pool) + per_batch - 1) // per_batch
+    batches = preregistered_batches(matrix, seed)
+    if count > len(batches):
+        raise ValueError('coverage exceeds the registered training schedule')
+    selected = batches[:count]
+    visits = Counter(o for group in selected for o in group)
+    if set(visits) != set(pool) or min(visits.values()) < 2:
+        raise ValueError('coverage does not contain two complete origin cycles')
+    return selected
+
+
 def _run(args):
     candidate_path = getattr(args, "runtime_candidate", None)
     runtime_release_path = getattr(args, "runtime_release", None)
+    coverage = getattr(args, 'coverage', False)
+    if coverage and (not candidate_path or runtime_release_path or args.short
+                     or getattr(args, 'seed0_formal', False)):
+        raise ValueError('coverage requires only a bound qualification candidate')
     if candidate_path and runtime_release_path:
         raise ValueError("select either a runtime candidate or a qualified runtime release")
     if runtime_release_path:
@@ -157,7 +180,7 @@ def _run(args):
             require_candidate_scope,
             verify_candidate,
         )
-        require_candidate_scope(short=args.short)
+        require_candidate_scope(short=args.short or coverage)
         config = verify_candidate(candidate_path)["config"]
         matrix = load_matrix()
         binding = candidate_binding(candidate_path)
@@ -169,7 +192,7 @@ def _run(args):
     if seed0_formal and (args.short or args.seed != 0):
         raise ValueError("seed0 formal authorization requires seed 0 and full training")
     authorization = None
-    if not args.short:
+    if not args.short and not coverage:
         if runtime_release_path:
             authorization = release
         elif seed0_formal:
@@ -179,9 +202,13 @@ def _run(args):
     batches = preregistered_batches(matrix, args.seed)
     if args.short:
         batches = batches[:8]
-    scope = "controlled_short_run" if args.short else "formal_training"
-    role = "controlled_training_resume" if args.short else "formal_training_resume"
-    schema = SHORT_SCHEMA if args.short else FORMAL_SCHEMA
+    elif coverage:
+        batches = coverage_batches(matrix, args.seed)
+    scope = ("runtime_learning_qualification" if coverage else
+             "controlled_short_run" if args.short else "formal_training")
+    role = ("runtime_learning_qualification_resume" if coverage else
+            "controlled_training_resume" if args.short else "formal_training_resume")
+    schema = SHORT_SCHEMA if args.short or coverage else FORMAL_SCHEMA
     folder = ROOT / "runs" / args.run_id
     if folder.exists():
         raise FileExistsError("run-id already exists; choose a new run-id")
@@ -375,7 +402,10 @@ def run(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--short", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--short", action="store_true")
+    modes.add_argument("--coverage", action="store_true",
+                       help="candidate-only learning over two registered origin cycles")
     parser.add_argument("--seed0-formal", action="store_true",
                         help="explicit seed0-only launch using verified inherited qualification")
     parser.add_argument("--seed", type=int, choices=(0, 1, 2), required=True)

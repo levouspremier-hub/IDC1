@@ -28,6 +28,7 @@ from scipy.sparse import csr_matrix, lil_matrix, vstack
 
 from contracts.inventory import InventorySnapshot, validate_inventory_snapshot
 from contracts.models import SystemSnapshot
+from planning.numeric_contract import PRIMAL_WITNESS_TOLERANCE
 
 # --- 单位声明（供调用方与测试断言） ---
 WORK_UNIT = "work-unit"
@@ -50,7 +51,7 @@ DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 # 这些选项**不改变**可行域、约束或目标函数，只影响求解路径。
 DETERMINISTIC_RANDOM_SEED = 0
 DETERMINISTIC_PARALLEL = False
-INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = 1e-10
+INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = PRIMAL_WITNESS_TOLERANCE
 INVENTORY_STAGE_B_PRESOLVE = False
 
 
@@ -1348,7 +1349,7 @@ def solve_time_indexed_mip_raw_projection(
             return None
         return max(deadline - _monotonic(), 0.0)
 
-    def _options(*, stage_b: bool = False) -> dict:
+    def _options(*, stage_b: bool = False, primary: bool = False) -> dict:
         # M5.4g：阶段 A/B 也必须走同一份确定性选项构造。
         # **只替换 options 构造**：time_limit 仍来自上面这个共享 deadline 的剩余预算，
         # remaining-budget 算法未变；不触碰目标、约束、边界。
@@ -1363,6 +1364,10 @@ def solve_time_indexed_mip_raw_projection(
             options.update(mip_feasibility_tolerance=tolerance,
                            primal_feasibility_tolerance=tolerance,
                            dual_feasibility_tolerance=tolerance)
+            if primary:
+                # An economic relative MIP gap is not a certificate for the
+                # absolute 1e-6 lexicographic bound of the subsequent stage.
+                options.update(mip_rel_gap=0., mip_abs_gap=0.)
             if stage_b:
                 # An exactly integral A witness satisfies the recorded
                 # origin7584 B model, which HiGHS presolve rejects. Keep that
@@ -1389,6 +1394,8 @@ def solve_time_indexed_mip_raw_projection(
     from scipy.optimize import milp as _milp
 
     inventory_audit: dict = {}
+    if inventory_enabled:
+        _audit['inventory_audit'] = inventory_audit
     if inventory_enabled and terminal is not None:
         rem = _remaining()
         if rem is not None and rem <= 0:
@@ -1490,7 +1497,7 @@ def solve_time_indexed_mip_raw_projection(
             res_inventory = _milp(
                 c=c_inventory,
                 constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
-                integrality=integrality, bounds=bounds_vec, options=_options(),
+                integrality=integrality, bounds=bounds_vec, options=_options(primary=True),
             )
         elapsed_inventory = time.perf_counter() - t_inventory
         inventory_status = _status(res_inventory)
@@ -1505,6 +1512,14 @@ def solve_time_indexed_mip_raw_projection(
                 **({"timeout_phase": "inventory_reachability"}
                    if inventory_status == SOLVER_TIME_LIMIT else {}))
             return result
+        from planning.numeric_contract import certify_witness
+        inventory_witness, inventory_certificate = certify_witness(
+            res_inventory.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
+        if inventory_witness is None:
+            return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE, {
+                **_audit, "stage_a_status": "not_run",
+                "inventory_audit": {"reachability_witness": inventory_certificate}})
+        res_inventory.x = inventory_witness
         minimum_gap = max(float(res_inventory.x[off_inventory_gap]), 0.0)
         # Preserve the measured gap, including sub-micro-kWh positive deficits.
         # Rounding it to zero can make A infeasible at an attained capacity bound.
@@ -1527,6 +1542,7 @@ def solve_time_indexed_mip_raw_projection(
             "target_gap_kwh": minimum_gap, "band_gap_kwh": float(band_gap),
             "reachability_solve_time_s": elapsed_inventory,
             "reachability_method": reachability_method,
+            "reachability_witness": inventory_certificate,
             "reachability_scope": "registered planning assumptions; not realized physical proof",
             "physical_unreachability_proven": False,
             "service_guard": (guard.model_dump()
@@ -1548,7 +1564,7 @@ def solve_time_indexed_mip_raw_projection(
     tA0 = time.perf_counter()
     res_a = _milp(
         c=c_off, constraints=[LinearConstraint(A_csr, np.array(lbs), np.array(ubs))],
-        integrality=integrality, bounds=bounds_vec, options=_options(),
+        integrality=integrality, bounds=bounds_vec, options=_options(primary=True),
     )
     tA = time.perf_counter() - tA0
     status_a = _status(res_a)
@@ -1587,6 +1603,24 @@ def solve_time_indexed_mip_raw_projection(
             snapshot, status_a, failure,
             {**_audit, "stage_a_status": status_a, "stage_a_solve_time_s": tA, **diag_audit},
         )
+
+    if inventory_enabled:
+        from planning.numeric_contract import certify_primary_objective, certify_witness
+        witness_a, certificate_a = certify_witness(
+            res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
+        inventory_audit['stage_a_witness'] = certificate_a
+        if witness_a is None:
+            return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                     {**_audit, "stage_a_status": status_a,
+                                      "stage_a_solve_time_s": tA})
+        primary_certificate = certify_primary_objective(
+            res_a, witness_a, c_off, tolerance=stage_b_tolerance)
+        inventory_audit['primary_objective_certificate'] = primary_certificate
+        if not primary_certificate['passed']:
+            return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                     {**_audit, "stage_a_status": status_a,
+                                      "stage_a_solve_time_s": tA})
+        res_a.x = witness_a
 
     initial_check = check_projection_candidate(
         res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
@@ -1653,6 +1687,17 @@ def solve_time_indexed_mip_raw_projection(
                 snapshot, status_b, FAILURE_SOLVER_FAILURE,
                 {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
                  "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+    if inventory_enabled:
+        from planning.numeric_contract import certify_witness
+        canonical_x, final_certificate = certify_witness(
+            x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
+        inventory_audit['execution_witness'] = final_certificate
+        if canonical_x is None:
+            return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                     {**_audit, "stage_a_status": status_a,
+                                      "stage_b_status": status_b,
+                                      "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+        x = canonical_x
     candidate_check = check_projection_candidate(
         x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
     if not candidate_check["passed"]:
