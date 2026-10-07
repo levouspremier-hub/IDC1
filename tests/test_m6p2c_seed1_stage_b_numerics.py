@@ -1,5 +1,6 @@
 """Immutable seed1 failure input; no environment or optimizer updates."""
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -26,7 +27,9 @@ def test_recorded_seed1_feasible_projection_finishes_stage_b(case_name):
     assert result.execution_source == 'stage_b'
     assert result.executable is True
     assert result.candidate_check['passed'] is True
-    assert result.candidate_check['integer_residual'] == 0.0
+    # A binary result can differ from 0/1 by a few IEEE-754 ulps; this
+    # rejects the recorded 1e-9 ghosts without changing physical acceptance.
+    assert result.candidate_check['integer_residual'] <= 8 * math.ulp(1.0)
 
 
 def test_candidate_records_stricter_solver_precision_without_science_changes():

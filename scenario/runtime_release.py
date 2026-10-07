@@ -23,11 +23,13 @@ def candidate_config(budget):
     config.update(status='qualification_candidate', runtime_execution_version=VERSION,
                   runtime_budget_s=budget)
     config['training']['corrector']['time_limit_s'] = budget
-    from planning.model import INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
+    from planning.model import INVENTORY_SOLVER_FEASIBILITY_TOLERANCE, INVENTORY_STAGE_B_PRESOLVE
     tolerance = INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
     config['training']['corrector']['solver_feasibility_tolerance'] = tolerance
+    config['training']['corrector']['inventory_stage_b_presolve'] = INVENTORY_STAGE_B_PRESOLVE
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
+        f'inventory B presolve={INVENTORY_STAGE_B_PRESOLVE}; '
         'random_seed=0 / parallel=False')
     config['inherited_calibration_scope'] = {
         'source': 'r5', 'scales_and_research_parameters_unchanged': True,

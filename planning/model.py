@@ -51,6 +51,7 @@ DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 DETERMINISTIC_RANDOM_SEED = 0
 DETERMINISTIC_PARALLEL = False
 INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = 1e-10
+INVENTORY_STAGE_B_PRESOLVE = False
 
 
 def deterministic_mip_options(*, time_limit_s: float | None) -> dict:
@@ -1631,9 +1632,16 @@ def solve_time_indexed_mip_raw_projection(
         execution_source = "stage_a"
     else:
         tB0 = time.perf_counter()
+        options_b = _options()
+        if inventory_enabled:
+            # The recorded origin7584 input has an exactly integral A witness
+            # satisfying every original B row, yet HiGHS presolve reports B
+            # infeasible. Solve that same B model without presolve, once and
+            # within the original remaining deadline; do not retry or relax it.
+            options_b['presolve'] = INVENTORY_STAGE_B_PRESOLVE
         res_b = _milp(
             c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
-            integrality=integrality, bounds=bounds_vec, options=_options())
+            integrality=integrality, bounds=bounds_vec, options=options_b)
         tB = time.perf_counter() - tB0
         status_b = _status(res_b)
         if status_b == SOLVER_OPTIMAL:
