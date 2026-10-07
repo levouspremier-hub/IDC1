@@ -18,7 +18,7 @@ def test_registered_budget_preserves_research_config(monkeypatch, budget):
     assert config['status'] == 'qualification_candidate'
     assert original['training']['corrector']['time_limit_s'] == .25
     assert original['training']['corrector']['solver_feasibility_tolerance'] == 1e-8
-    assert config['training']['corrector']['solver_feasibility_tolerance'] == 1e-9
+    assert config['training']['corrector']['solver_feasibility_tolerance'] == 1e-10
 
 
 @pytest.mark.parametrize('budget', [0, .3, 2., float('nan')])

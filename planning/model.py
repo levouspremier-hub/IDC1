@@ -50,7 +50,7 @@ DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 # 这些选项**不改变**可行域、约束或目标函数，只影响求解路径。
 DETERMINISTIC_RANDOM_SEED = 0
 DETERMINISTIC_PARALLEL = False
-INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = 1e-9
+INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = 1e-10
 
 
 def deterministic_mip_options(*, time_limit_s: float | None) -> dict:
@@ -1353,9 +1353,10 @@ def solve_time_indexed_mip_raw_projection(
         # remaining-budget 算法未变；不触碰目标、约束、边界。
         options = deterministic_mip_options(time_limit_s=_remaining())
         if inventory_enabled:
-            # Recorded seed1 input: A at 1e-8 returned a near-integer witness
-            # whose offset bound made B report infeasible. Tightening only B
-            # did not help; both stages at 1e-9 finish with integer residual 0.
+            # Two recorded seed1 inputs expose near-zero charging-mode integers
+            # at 1e-8/1e-9 and an offset bound infeasible for B. Both stages at
+            # 1e-10 solve these inputs with zero integer residual; tightening B
+            # alone cannot correct A's inaccurate offset witness.
             # Keep all physical/offset bounds and the shared deadline unchanged.
             tolerance = INVENTORY_SOLVER_FEASIBILITY_TOLERANCE
             options.update(mip_feasibility_tolerance=tolerance,

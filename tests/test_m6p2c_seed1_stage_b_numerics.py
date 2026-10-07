@@ -1,8 +1,8 @@
 """Immutable seed1 failure input; no environment or optimizer updates."""
 import json
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 from contracts.inventory import InventorySnapshot
 from contracts.models import DispatchProposal
