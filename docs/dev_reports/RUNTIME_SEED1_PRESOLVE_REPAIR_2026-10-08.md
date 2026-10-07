@@ -1,0 +1,11 @@
+# v12 seed1第三次数值失败与B presolve修复
+
+v4/v12 parent failed，65文件376266452字节完整回传验签。seed0完整512/98304/8192/512/2048成功、A保留1/fallback0，独立终态audit保留；seed1完成39批/7488transitions/624Adam/39乘子/156合格回合后origin7584 step1 Aoptimal/Binfeasible，.141172秒非超时。49partial/21raw/oldlogprob4.46904182434082/批前latest真实next39/Adam624/lag39/finite/RNG/原v4binding完整保留，失败批0更新、失败步未执行env；seed2未启动。failed SHA a2e73b204e4bf0e4c2f61392c3d0e014adbabb5306d1fb37e647c3e5ea919aa8。标准runs/m6p2c_v12_seed1_numeric_failure_triage_v1/，原core审核success仅表示保全验收，不是正式成功。
+
+O卡fd867a5先登记，唯一三历史失败×baseline/仅B_no_presolve六观察全部保留并全25文件回传验签。新7584 A整数残差0、row7.1e-15，A见证满足B完整原矩阵及offset1e-6，B仍返回infeasible；B关闭presolve后optimal且原残差3.55e-15、.403137秒。旧两输入关闭B presolve均optimal/.346—.368秒；所有A/B数学矩阵、目标、边界、整数声明逐字节相同。说明新失败涉及B presolve错误不可行，而非再次近零整数ghost或总预算超时；不声称已定位HiGHS内部具体错误行。
+
+红f610554先提交；最小fd13936仅inventory阶段B presolve=False、候选如实记录，A/reachability/非inventory以及精度1e-10/全物理服务库存终点/残差与offset/0.50共享deadline/失败和已有A保留规则不改，没有重试或额外求解。随后已存在AST共享options门禁拒绝临时变量写法，e4ed897把完全相同选项收回_options(stage_b=True)直接原helper，不改门禁。92对应回归及Ruff/mypy通过；binary整数断言采用8IEEE-754 ulp以允许4e-16浮点表示，正式验收1e-6及solver1e-10不动，旧ghost仍被拒绝。
+
+v13三原输入各5次的验收全部optimal/可执行/整数残差0/.304783—.403491秒、0环境PPO、完整回传保留；首次观察脚本在A求解前KeyError(presolve键默认省略)的失败0观察完整保留，修脚本而非生产源后新IDr2受控执行。v13完整资格因已知AST接线门禁受控SIGINT保留不算通过；自己的残留pytest停止后log尾追加造成旧自动receipt单log不匹配，旧receipt/全部结果不改，独立post-interrupt全18文件181855字节复验在runs/m6p2c_v13_qualification_interruption_audit_v1/保留最终log与原receipt。没有拿该旧资格放行。
+
+最终v14冻结3d892a4f82b92808e7138fdf953af634e73cd1b8，唯一runtime-seed1-three-failure-presolve-acceptance-v1-r3同十五原观察主机已succeeded，必须完整回传验签；新完整runtime-campaign-qualification-v14随后主机单槽执行，不继承v13旧源码资格。必要资格验证B无presolve对预算和完整执行链影响，不机械继续收紧精度。全部验收验签后直接runs/m6p2c_v14_release_delivery_v1/controller.py严格发布v6、最小资产/实际C/D预留+rw验收，唯一runtime-formal-three-seed-v6-v14/parent m6p2c_formal_three_seed_v6_v14/child m6p2c_formal_train_seedN_v6_v14均fresh串行512/98304/8192/512/2048和完整质量/产物验签才下seed。旧checkpoint不换签跨版本恢复、旧seed0不混为新版三seed。主任务未完成，小时辅助直接闭环保持ACTIVE，validation/test封存。

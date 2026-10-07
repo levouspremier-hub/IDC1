@@ -91,3 +91,5 @@ v9资格自动取得原槽后running，Python992715；门禁pytest已3242 passed
 2026-10-08 00:04—00:07：同一v4/v12 parent已验证fresh seed0完整512/98304/8192Adam/512乘子/2048合格回合，elapsed17468.330719秒（约4h51m）；A保留1次、fallback0、无失败，未改降级语义/质量，允许保留执行不阻断。独立完整41文件/354584286字节全SHA回传、core五文件/21动作523观察/schema/原v4binding及final真实next512/全Adam8192/lag512/finite/212来源重验通过，标准runs/m6p2c_formal_seed0_terminal_audit_v12_v1/与receipt。report SHA a6db8f4e8144256ad5aa16402de074693dfa9915fc3b3d8a7fd1809e70d6364a，final CP f4b945cb1d0e1902500bc4028256a71270df0b64568e2f3586b78848d5f159bd。此独立receipt仅seed0，不是parent三seed完成。
 
 原同一launcher已自动fresh进入seed1/Python1360878，18批/3456 transitions/288Adam/18乘子，无failed_batch、A保留0/fallback0，seed2未启动；只读CP与原binding/全回合质量继续验收，无独立提交或并发。实际C136348663808/D181612318720、根rw。parent运行/原watcher630存活，三seed最终仍待；全部历史及科学配置保留，小时巡检ACTIVE，validation/test封存。
+
+2026-10-08 01:05后：v12 seed1再次阻断（39完整批、7584step1、49partial、失败批0更新），seed2未启动，parent65文件全回传验签，seed0成功独立保留。O卡固定六观察证明新A完全整数且满足原B矩阵，只有B presolve开关使infeasible变optimal，非精度ghost/超时；先红后最小B-only无presolve和共享helper接线修复，92回归通过，最终v14候选3d892a4。三历史输入固定15主机验收r3成功、完整新资格及直控交付随后推进，不能把已失败v12/v13换签恢复或重复挑成功；详情RUNTIME_SEED1_PRESOLVE_REPAIR_2026-10-08.md。
