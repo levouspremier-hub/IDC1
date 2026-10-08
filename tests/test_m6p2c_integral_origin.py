@@ -7,6 +7,11 @@ from contracts.models import DispatchProposal
 from planning.corrector import correct
 
 
+def test_current_equivalent_domain_registers_native_stage_b_presolve():
+    from scenario.runtime_release import candidate_config
+    assert candidate_config(.50)['training']['corrector']['inventory_stage_b_presolve'] is True
+
+
 def test_recorded_origin3072_exact_a_is_feasible_for_stage_b():
     case=json.loads((Path(__file__).parent/'fixtures'/'m6p2c_seed0_origin3072_step18.json').read_text())
     result=correct(InventorySnapshot.model_validate(case['snapshot']),
