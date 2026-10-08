@@ -1754,6 +1754,35 @@ def solve_time_indexed_mip_raw_projection(
     lbs_b = list(lbs) + [-np.inf]
     ubs_b = list(ubs) + [offset_a + stage_b_tolerance]
     A_b = _append_sparse_row(A_csr, offset_row)
+    b_bounds = bounds_vec
+    b_domain_names: list[str] = []
+    if inventory_enabled:
+        from planning.numeric_contract import projection_storage_power_bounds
+        domain = projection_storage_power_bounds(
+            raw_compute, [1. / c if c > 0. else 0. for c in cap],
+            [task.remaining_work for task in snapshot.tasks], ubs_b[-1],
+            1. / max(n_group, 1), raw_storage, 1. / cmax, 1. / dmax)
+        inventory_audit['projection_storage_power_domain'] = domain
+        b_bounds = Bounds(lb=np.array(lb, copy=True), ub=np.array(ub, copy=True))
+        b_bounds.ub[off_charge] = min(b_bounds.ub[off_charge], domain['charge_upper_kw'])
+        b_bounds.ub[off_discharge] = min(b_bounds.ub[off_discharge],
+                                         domain['discharge_upper_kw'])
+        if domain['charge_mode_forbidden']:
+            b_bounds.ub[off_z] = min(b_bounds.ub[off_z], 0.)
+        if domain['discharge_mode_forbidden']:
+            b_bounds.lb[off_z] = max(b_bounds.lb[off_z], 1.)
+        for power_index, key, mode_coefficient, upper in (
+                (off_charge, 'charge', -1., 0.),
+                (off_discharge, 'discharge', 1., 1.)):
+            coefficient = domain[key+'_cut_coefficient']
+            if coefficient > 0.:
+                row = {power_index: coefficient, off_z: mode_coefficient}
+                rows_b.append(row)
+                lbs_b.append(-np.inf)
+                ubs_b.append(upper)
+                A_b = _append_sparse_row(A_b, row)
+                b_domain_names.append('projection_storage_'+key+'_mode_cut')
+        _audit['n_constraints'] = len(rows_b)
     check_a = check_projection_candidate(
         res_a.x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
     if not check_a["passed"]:
@@ -1770,7 +1799,6 @@ def solve_time_indexed_mip_raw_projection(
         execution_source = "stage_a"
     else:
         tB0 = time.perf_counter()
-        b_bounds = bounds_vec
         b_lower, b_upper = np.array(lbs_b), np.array(ubs_b)
         b_shift = None
         if inventory_enabled:
@@ -1779,7 +1807,7 @@ def solve_time_indexed_mip_raw_projection(
                 translate_continuous_origin,
             )
             b_shift, b_bounds, b_lower, b_upper = translate_continuous_origin(
-                res_a.x, integrality, bounds_vec, A_b, b_lower, b_upper)
+                res_a.x, integrality, b_bounds, A_b, b_lower, b_upper)
             inventory_audit['stage_b_coordinates'] = {
                 'version': STAGE_B_COORDINATE_VERSION,
                 'continuous_origin': 'certified_stage_a',
@@ -1866,7 +1894,7 @@ def solve_time_indexed_mip_raw_projection(
 
     ax = np.asarray(A_b.dot(x)).ravel()
     residuals = {name: float(max(lbs_b[r] - ax[r], ax[r] - ubs_b[r], 0.))
-                 for r, name in enumerate([*names, "projection_offset_bound"])}
+                 for r, name in enumerate([*names, "projection_offset_bound", *b_domain_names])}
     max_residual = max(residuals.values(), default=0.)
 
     total_business = float(sum(business_slack))

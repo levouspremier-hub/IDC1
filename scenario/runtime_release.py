@@ -21,6 +21,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin6336_step2.json',
     'm6p2c_seed0_origin3072_step18.json',
     'm6p2c_seed1_origin2544_step23.json',
+    'm6p2c_seed2_origin8496_step6.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -51,6 +52,7 @@ def candidate_config(budget):
         NUMERIC_CONTRACT_VERSION,
         ONE_STEP_STORAGE_BOUND_VERSION,
         PRIMAL_WITNESS_TOLERANCE,
+        PROJECTION_STORAGE_DOMAIN_VERSION,
         STAGE_B_COORDINATE_VERSION,
     )
     config['training']['corrector']['primary_mip_rel_gap'] = 0.
@@ -67,6 +69,7 @@ def candidate_config(budget):
         'stage_b_coordinate_version': STAGE_B_COORDINATE_VERSION,
         'fixed_integer_primal_polish_version': FIXED_INTEGER_POLISH_VERSION,
         'inventory_mode_cover_version': INVENTORY_MODE_COVER_VERSION,
+        'projection_storage_power_domain_version': PROJECTION_STORAGE_DOMAIN_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
@@ -185,6 +188,9 @@ def validate_numeric_evidence(result, candidate_path):
                 or row['candidate_check']['integer_residual'] != 0):
             raise ValueError('numeric fixture provenance or executable witness differs')
         audit = row['inventory_audit']
+        if audit.get('projection_storage_power_domain', {}).get('version') != (
+                candidate['config']['numeric_contract']['projection_storage_power_domain_version']):
+            raise ValueError('numeric qualification projection storage domain differs')
         for key in ('stage_a_witness', 'execution_witness', 'primary_objective_certificate'):
             if audit.get(key, {}).get('passed') is not True:
                 raise ValueError('numeric qualification lacks certified lexicographic witnesses')

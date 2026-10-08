@@ -15,6 +15,55 @@ COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-conserved-backlog-domain-v2'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
 FIXED_INTEGER_POLISH_VERSION = 'capacity-supported-fixed-integer-lp-v4'
 INVENTORY_MODE_COVER_VERSION = 'soc-balance-essential-integer-power-cover-v2'
+PROJECTION_STORAGE_DOMAIN_VERSION = 'encoded-projection-storage-power-domain-v1'
+PROJECTION_POWER_CUT_MAX_COEFFICIENT = 1e8
+
+
+def projection_storage_power_bounds(raw_compute, encoded_inverse_caps, remaining_work,
+                                    primary_upper, encoded_compute_weight, raw_storage,
+                                    encoded_inverse_charge, encoded_inverse_discharge):
+    """Integer-equivalent B bounds implied by ORIGINAL encoded projection rows.
+
+    Total current task work cannot exceed total remaining work. Minimizing L1
+    distance under that upper bound is a fractional knapsack: retain raw actions
+    in descending inverse-capacity order. Going above a raw action cannot improve
+    L1 or satisfy an upper work bound. Zero-capacity actions remain fixed at zero.
+    In charge mode, e>=raw_storage+inverse_charge*C; in discharge mode,
+    e>=-raw_storage+inverse_discharge*D. Combine with the original B offset row.
+    Exact binary64 row rationals, outward bounds and downward cut coefficients
+    preserve the original domain, including arbitrarily small positive powers.
+    """
+    from fractions import Fraction
+    f = Fraction.from_float
+    work = sum((f(float(w)) for w in remaining_work), Fraction(0))
+    raw = [f(float(u)) for u in raw_compute]
+    retained = Fraction(0)
+    for inverse, action in sorted(
+            ((f(float(inv)), u) for inv, u in zip(encoded_inverse_caps, raw, strict=True)
+             if inv > 0.), reverse=True):
+        take = min(action, work * inverse)
+        retained += take
+        work -= take / inverse
+    minimum = (sum(raw) - retained) * f(float(encoded_compute_weight))
+    available = f(float(primary_upper)) - minimum
+    charge = (available - f(float(raw_storage))) / f(float(encoded_inverse_charge))
+    discharge = (available + f(float(raw_storage))) / f(float(encoded_inverse_discharge))
+
+    def upper(value):
+        return float(np.nextafter(float(value), np.inf)) if value > 0 else 0.
+
+    def coefficient(bound):
+        return min(float(np.nextafter(1. / bound, 0.)),
+                   PROJECTION_POWER_CUT_MAX_COEFFICIENT) if bound > 0. else 0.
+
+    c, d = upper(charge), upper(discharge)
+    return {'version': PROJECTION_STORAGE_DOMAIN_VERSION,
+            'arithmetic': 'exact binary64 encoded row rationals',
+            'minimum_compute_offset': float(np.nextafter(float(minimum), -np.inf)),
+            'charge_upper_kw': c, 'discharge_upper_kw': d,
+            'charge_mode_forbidden': charge < 0, 'discharge_mode_forbidden': discharge < 0,
+            'charge_cut_coefficient': coefficient(c),
+            'discharge_cut_coefficient': coefficient(d)}
 
 
 def aggregate_service_floor(previous_lower, arrivals, next_upper):
