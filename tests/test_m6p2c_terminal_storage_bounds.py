@@ -152,6 +152,7 @@ def test_stage_b_does_not_misclassify_certified_a_after_one_ulp_soc_change():
 def test_stage_b_translation_preserves_original_domain_rows_and_economic_order():
     from scipy.optimize import Bounds
     from scipy.sparse import csr_matrix
+
     from planning.numeric_contract import translate_continuous_origin
     matrix = csr_matrix([[1., -20., 2.], [-1., 3., 1.]])
     bounds = Bounds([0.,0.,-10.], [20.,1.,10.])
@@ -184,6 +185,7 @@ def test_host_short_near_integer_b_is_certified_in_original_primal_domain():
 
 def test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows():
     from scipy.sparse import csr_matrix
+
     from planning.numeric_contract import certify_or_polish_witness
     matrix = csr_matrix([[-20.,1.]])
     witness, audit = certify_or_polish_witness(
@@ -197,6 +199,7 @@ def test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows():
 def test_polish_does_not_accept_a_noninteger_candidate_or_an_expired_deadline(monkeypatch):
     import scipy.optimize
     from scipy.sparse import csr_matrix
+
     from planning.numeric_contract import certify_or_polish_witness
     def never(**kw):
         raise AssertionError('no LP may be called')
@@ -210,8 +213,10 @@ def test_polish_does_not_accept_a_noninteger_candidate_or_an_expired_deadline(mo
 
 def test_failed_primal_polish_remains_rejected_without_retry(monkeypatch):
     from types import SimpleNamespace
+
     import scipy.optimize
     from scipy.sparse import csr_matrix
+
     from planning.numeric_contract import certify_or_polish_witness
     calls=[]
     def fail(**kw):
@@ -236,6 +241,7 @@ def test_small_positive_inventory_deficit_requires_a_real_charging_mode():
 
 def test_mode_cover_is_valid_for_every_original_integer_power_domain():
     import itertools
+
     from planning.numeric_contract import inventory_mode_cover
     for upper in ([0.,2.,20.],[1e-14,2.,3.],[.1,.2,.3]):
         for required in [1e-10,.2,1.,3.,20.]:
@@ -259,6 +265,7 @@ def test_host_seed1_positive_charge_cannot_be_polished_as_discharge_mode():
 
 def test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing_bounds():
     from scipy.sparse import csr_matrix
+
     from planning.numeric_contract import certify_or_polish_witness
     matrix=csr_matrix([[-20.,1.,0.],[0.,1.,0.]])
     witness,audit=certify_or_polish_witness(
@@ -276,6 +283,7 @@ def test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing
 
 def test_primal_polish_must_not_degrade_the_reported_economic_incumbent():
     from types import SimpleNamespace
+
     from planning.numeric_contract import certify_polished_objective
     result=SimpleNamespace(fun=1.,mip_dual_bound=.99)
     assert certify_polished_objective(result,[1.],[1.])['passed']
