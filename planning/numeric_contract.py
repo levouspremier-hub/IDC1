@@ -13,7 +13,7 @@ NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
-FIXED_INTEGER_POLISH_VERSION = 'original-primal-fixed-integer-lp-v1'
+FIXED_INTEGER_POLISH_VERSION = 'physical-flow-fixed-integer-lp-v2'
 INVENTORY_MODE_COVER_VERSION = 'soc-balance-integer-power-cover-v1'
 
 
@@ -138,11 +138,14 @@ def certify_primary_objective(result, witness, objective, *, tolerance):
 
 
 def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
-                              objective, remaining):
+                              objective, remaining, storage_modes=None,
+                              storage_requirements=(True, True)):
     """One fixed-integer LP for a near-integer witness; never relax the original model.
 
-    Exact witnesses take no extra solve. An invalid integer assignment, nonfinite
-    candidate, or expired shared deadline cannot trigger polishing. LP output
+    Exact witnesses take no extra solve. An excessive integer deviation, nonfinite
+    candidate, or expired shared deadline cannot trigger polishing. A required
+    net inventory direction can select a storage mode consistent with a single
+    positive flow; the resulting integer candidate is NOT itself accepted. LP output
     must pass the same strict original-matrix certificate as every other witness.
     """
     import time
@@ -160,7 +163,22 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
         return None, original
     started = time.perf_counter()
     mask = np.asarray(integrality) != 0
-    fixed = np.rint(np.asarray(x)[mask])
+    assignment = np.rint(np.asarray(x))
+    mode_changes = []
+    if storage_modes is not None:
+        for mode, charge, discharge in zip(*storage_modes, strict=True):
+            old = assignment[mode]
+            if storage_requirements[0] and x[charge] > 0. and x[discharge] <= 0.:
+                assignment[mode] = 1.
+            elif storage_requirements[1] and x[discharge] > 0. and x[charge] <= 0.:
+                assignment[mode] = 0.
+            if assignment[mode] != old:
+                mode_changes.append({'variable': int(mode), 'raw_mode': float(x[mode]),
+                                     'nearest_integer': float(old),
+                                     'selected_mode': float(assignment[mode]),
+                                     'charge_kw': float(x[charge]),
+                                     'discharge_kw': float(x[discharge])})
+    fixed = assignment[mask]
     lower, upper = np.array(lb, copy=True), np.array(ub, copy=True)
     if np.any(fixed < lower[mask]) or np.any(fixed > upper[mask]):
         return None, original
@@ -185,6 +203,9 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
         method='highs-ds', options=options)
     polish = {'version': FIXED_INTEGER_POLISH_VERSION, 'attempted': True,
               'fixed_integer_count': int(np.count_nonzero(mask)), 'options': options,
+              'storage_mode_changes': mode_changes,
+              'net_charge_required': bool(storage_requirements[0]),
+              'net_discharge_required': bool(storage_requirements[1]),
               'solver_status': int(result.status), 'message': result.message,
               'elapsed_s': time.perf_counter() - started,
               'original_certificate': original}
@@ -193,3 +214,18 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
     polished, certificate = certify_witness(
         result.x, lb, ub, integrality, matrix, row_lb, row_ub)
     return polished, {**certificate, 'primal_polish': polish}
+
+
+def certify_polished_objective(result, witness, objective):
+    """Preserve the original MIP's incumbent gap after choosing a feasible LP mode."""
+    value = float(np.asarray(objective) @ witness)
+    reported = getattr(result, 'fun', None)
+    lower = getattr(result, 'mip_dual_bound', None)
+    if reported is None or lower is None or not np.all(np.isfinite([value, reported, lower])):
+        return {'passed': False, 'reason': 'missing_or_nonfinite_objective_bound'}
+    return {'passed': bool(lower <= value + PRIMAL_WITNESS_TOLERANCE
+                           and value <= reported + PRIMAL_WITNESS_TOLERANCE),
+            'objective': value, 'reported_incumbent': float(reported),
+            'original_lower_bound': float(lower),
+            'original_gap': float(reported - lower), 'polished_gap': float(value - lower),
+            'tolerance': PRIMAL_WITNESS_TOLERANCE}

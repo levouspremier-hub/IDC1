@@ -16,6 +16,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed0_origin6192_step47.json',
     'm6p2c_seed0_origin384_step36.json',
     'm6p2c_seed0_origin480_step45.json',
+    'm6p2c_seed1_origin576_step44.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -209,8 +210,15 @@ def validate_numeric_evidence(result, candidate_path):
                 or not 0 < call['options']['time_limit'] <= candidate['config']['runtime_budget_s']
                 or not call['mathematical_input_hashes'] for call in calls):
             raise ValueError('numeric qualification primal polish calls differ')
-        if any(p['solver_status'] != 0 or not p['attempted'] for p in polishes):
+        if any(p['solver_status'] != 0 or not p['attempted']
+               or p['version'] != candidate['config']['numeric_contract'][
+                   'fixed_integer_primal_polish_version'] for p in polishes):
             raise ValueError('numeric qualification primal polish did not succeed')
+        if (row['execution_source'] == 'stage_b'
+                and 'primal_polish' in audit['execution_witness']
+                and audit.get('polished_economic_objective_certificate', {}).get('passed')
+                is not True):
+            raise ValueError('numeric qualification polished economic incumbent differs')
     return result
 
 

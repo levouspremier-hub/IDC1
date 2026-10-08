@@ -1351,6 +1351,11 @@ def solve_time_indexed_mip_raw_projection(
                 row_mat[r, col] = val
         A_csr = csr_matrix(row_mat)
     bounds_vec = Bounds(lb=lb, ub=ub)
+    storage_modes = (range(off_z, off_z + H), range(off_charge, off_charge + H),
+                     range(off_discharge, off_discharge + H))
+    def storage_requirements():
+        return (snapshot.soc_kwh < bounds_vec.lb[off_soc + H],
+                snapshot.soc_kwh > bounds_vec.ub[off_soc + H])
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
     if coupled and guard is not None:
@@ -1535,7 +1540,8 @@ def solve_time_indexed_mip_raw_projection(
         from planning.numeric_contract import certify_or_polish_witness
         inventory_witness, inventory_certificate = certify_or_polish_witness(
             res_inventory.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
-            objective=c_inventory, remaining=_remaining)
+            objective=c_inventory, remaining=_remaining, storage_modes=storage_modes,
+            storage_requirements=storage_requirements())
         elapsed_inventory = time.perf_counter() - t_inventory
         if inventory_witness is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE, {
@@ -1666,7 +1672,8 @@ def solve_time_indexed_mip_raw_projection(
         from planning.numeric_contract import certify_or_polish_witness, certify_primary_objective
         witness_a, certificate_a = certify_or_polish_witness(
             res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
-            objective=c_off, remaining=_remaining)
+            objective=c_off, remaining=_remaining, storage_modes=storage_modes,
+            storage_requirements=storage_requirements())
         tA = time.perf_counter() - tA0
         inventory_audit['stage_a_witness'] = certificate_a
         if witness_a is None:
@@ -1773,7 +1780,8 @@ def solve_time_indexed_mip_raw_projection(
         from planning.numeric_contract import certify_or_polish_witness
         canonical_x, final_certificate = certify_or_polish_witness(
             x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b),
-            objective=c_econ, remaining=_remaining)
+            objective=c_econ, remaining=_remaining, storage_modes=storage_modes,
+            storage_requirements=storage_requirements())
         tB += final_certificate.get('primal_polish', {}).get('elapsed_s', 0.)
         inventory_audit['execution_witness'] = final_certificate
         if canonical_x is None:
@@ -1781,6 +1789,14 @@ def solve_time_indexed_mip_raw_projection(
                                      {**_audit, "stage_a_status": status_a,
                                       "stage_b_status": status_b,
                                       "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+        if execution_source == 'stage_b' and 'primal_polish' in final_certificate:
+            from planning.numeric_contract import certify_polished_objective
+            economic_certificate = certify_polished_objective(res_b, canonical_x, c_econ)
+            inventory_audit['polished_economic_objective_certificate'] = economic_certificate
+            if not economic_certificate['passed']:
+                return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
+                                         {**_audit, 'stage_a_status': status_a,
+                                          'stage_b_status': status_b})
         x = canonical_x
     candidate_check = check_projection_candidate(
         x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
