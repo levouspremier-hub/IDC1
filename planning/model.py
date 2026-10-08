@@ -1186,6 +1186,7 @@ def solve_time_indexed_mip_raw_projection(
         mutual_exclusion=True,
     )
 
+    coupled_charge_upper: list[float] = []
     if inventory_enabled and terminal is not None:
         if guard is not None:
             if not coupled:
@@ -1220,8 +1221,25 @@ def solve_time_indexed_mip_raw_projection(
                     # Only charging invokes the zero-renewable reserve. Storage
                     # exclusion and the original physical constraints stay intact.
                     reserve_row[off_z + k] = big_m
-                    add(reserve_row, -np.inf, headroom + big_m,
+                    encoded_upper = headroom + big_m
+                    add(reserve_row, -np.inf, encoded_upper,
                         f"schedule_coupled_charging_reserve[{k}]")
+                    from planning.numeric_contract import coupled_charge_domain_upper
+                    # z=0 already forces charge=0. For z=1 the ORIGINAL reserve
+                    # row bounds charging by network headroom minus nonnegative
+                    # service power. The original k=0 total work floor gives a
+                    # safe minimum power; future slots use zero, not guessed work.
+                    minimum_power = (min(coefficient) * sum(guard.group_work_floor)
+                                     if k == 0 else 0.)
+                    minimum_power = max(float(np.nextafter(minimum_power, -np.inf)), 0.)
+                    tight_charge = coupled_charge_domain_upper(
+                        ub[off_charge + k], encoded_upper - big_m, minimum_power)
+                    ub[off_charge + k] = min(ub[off_charge + k], tight_charge)
+                    coupled_charge_upper.append(tight_charge)
+                    # Keep the hardware exclusion AND the original reserve row;
+                    # this is an integer-equivalent cut, a tighter LP relaxation.
+                    add({off_charge + k: 1., off_z + k: -tight_charge}, -np.inf, 0.,
+                        f"storage_excl_charge_derived[{k}]")
                 if not executor_consistent:
                     previous = None
                     for i in guard.known_service_order:
@@ -1394,6 +1412,8 @@ def solve_time_indexed_mip_raw_projection(
     from scipy.optimize import milp as _milp
 
     inventory_audit: dict = {}
+    if coupled_charge_upper:
+        inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
     if inventory_enabled:
         _audit['inventory_audit'] = inventory_audit
     if inventory_enabled and terminal is not None:
@@ -1552,6 +1572,8 @@ def solve_time_indexed_mip_raw_projection(
             "inventory_numerical_allowance_kwh": 1e-7,
             "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
         }
+        if coupled_charge_upper:
+            inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
         if H == 1:
             from planning.numeric_contract import one_step_storage_bounds
             tail_bounds = one_step_storage_bounds(

@@ -11,6 +11,13 @@ INTEGER_REPRESENTATION_ULPS = 8
 PRIMAL_WITNESS_TOLERANCE = 1e-10
 NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
+COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
+
+
+def coupled_charge_domain_upper(hardware_max, encoded_headroom, minimum_service_power):
+    """Valid in both binary domains; round a new redundant upper bound outward."""
+    available = encoded_headroom - minimum_service_power
+    return min(hardware_max, float(np.nextafter(available, np.inf))) if available > 0. else 0.
 
 
 def one_step_storage_bounds(initial_energy, final_lower, final_upper, dt, eta_c, eta_d):

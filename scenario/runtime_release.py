@@ -37,6 +37,7 @@ def candidate_config(budget):
     config['training']['corrector']['solver_feasibility_tolerance'] = tolerance
     config['training']['corrector']['inventory_stage_b_presolve'] = INVENTORY_STAGE_B_PRESOLVE
     from planning.numeric_contract import (
+        COUPLED_CHARGE_DOMAIN_VERSION,
         INTEGER_REPRESENTATION_ULPS,
         NUMERIC_CONTRACT_VERSION,
         ONE_STEP_STORAGE_BOUND_VERSION,
@@ -52,6 +53,7 @@ def candidate_config(budget):
         'learning_origin_cycles': 2,
         'primary_offset_tolerance': 1e-6,
         'one_step_storage_bounds_version': ONE_STEP_STORAGE_BOUND_VERSION,
+        'coupled_charge_domain_version': COUPLED_CHARGE_DOMAIN_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
