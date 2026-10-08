@@ -135,3 +135,38 @@ def test_charge_domain_cut_preserves_every_original_binary_domain(headroom, mini
                 original = charge <= hardware*z and (z==0 or charge+service <= headroom)
                 strengthened = original and charge <= upper*z
                 assert original == strengthened
+
+
+def test_stage_b_does_not_misclassify_certified_a_after_one_ulp_soc_change():
+    case = json.loads((Path(__file__).parent / 'fixtures' /
+                       'm6p2c_seed1_origin1008_step18.json').read_text())
+    base = case['snapshot']['soc_kwh']
+    snapshot = InventorySnapshot.model_validate({**case['snapshot'], 'soc_kwh':
+                                               base + np.spacing(base)})
+    result = correct(snapshot, DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+    assert result.inventory_audit['stage_a_witness']['passed']
+    assert result.stage_b_status == 'optimal'
+    assert result.executable and result.inventory_audit['execution_witness']['passed']
+
+
+def test_stage_b_translation_preserves_original_domain_rows_and_economic_order():
+    from scipy.optimize import Bounds
+    from scipy.sparse import csr_matrix
+    from planning.numeric_contract import translate_continuous_origin
+    matrix = csr_matrix([[1., -20., 2.], [-1., 3., 1.]])
+    bounds = Bounds([0.,0.,-10.], [20.,1.,10.])
+    anchor = np.array([3.,1.,-2.])
+    row_lower, row_upper = np.array([-30.,-10.]), np.array([30.,10.])
+    shift, translated, lower, upper = translate_continuous_origin(
+        anchor, [0,1,0], bounds, matrix, row_lower, row_upper)
+    assert np.array_equal(shift, [3.,0.,-2.])
+    assert translated.lb[1] == bounds.lb[1] and translated.ub[1] == bounds.ub[1]
+    objective = np.array([.2,0.,.7])
+    for original in [np.array([0.,0.,0.]), anchor, np.array([20.,1.,10.])]:
+        delta = original-shift
+        assert np.array_equal(delta+shift, original)
+        assert np.array_equal(matrix@delta-lower, matrix@original-row_lower)
+        assert np.array_equal(upper-matrix@delta, row_upper-matrix@original)
+        assert np.array_equal(delta-translated.lb, original-bounds.lb)
+        assert np.array_equal(translated.ub-delta, bounds.ub-original)
+        assert np.isclose(objective@delta+objective@shift, objective@original)
