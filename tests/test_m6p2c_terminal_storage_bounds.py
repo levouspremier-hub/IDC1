@@ -1,0 +1,112 @@
+"""One-step end inventory implies storage bounds, including subnanowatt flows."""
+import json
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from contracts.inventory import InventorySnapshot
+from contracts.models import DispatchProposal
+from planning.corrector import correct
+
+
+def _case():
+    return json.loads((Path(__file__).parent / 'fixtures' /
+                      'm6p2c_seed0_origin6192_step47.json').read_text())
+
+
+def test_recorded_last_step_failure_has_an_executable_integer_solution():
+    case = _case()
+    snapshot = InventorySnapshot.model_validate(case['snapshot'])
+    result = correct(snapshot, DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+    assert result.stage_a_status == result.stage_b_status == 'optimal'
+    assert result.executable and result.candidate_check['passed']
+    assert result.candidate_check['integer_residual'] == 0.
+    bounds = result.inventory_audit['one_step_storage_bounds']
+    expected = ((snapshot.soc_kwh - snapshot.terminal_inventory.target_kwh)
+                * snapshot.bess_discharge_efficiency / snapshot.delta_t_hours)
+    assert bounds['discharge_lower_kw'] == bounds['discharge_upper_kw'] == expected
+    assert expected > 0., 'subnanowatt discharge must not be rounded away'
+
+
+@pytest.mark.parametrize('delta', [-1e-7, -1e-9, -1e-10, -np.spacing(50.), 0.,
+                                  np.spacing(50.), 1e-10, 1e-9, 1e-7])
+def test_terminal_roundoff_on_both_sides_retains_the_original_target(delta):
+    case = _case()
+    snapshot = InventorySnapshot.model_validate({**case['snapshot'], 'soc_kwh': 50. + delta})
+    result = correct(snapshot, DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+    assert result.stage_a_status == result.stage_b_status == 'optimal'
+    assert result.executable and result.candidate_check['integer_residual'] == 0.
+    assert result.inventory_audit['stage_a_witness']['passed']
+    assert result.inventory_audit['execution_witness']['passed']
+
+
+@pytest.mark.parametrize('lower,upper', [(49.,49.), (49.,50.), (49.,51.), (50.,50.),
+                                      (50.,51.), (51.,51.)])
+def test_derived_bounds_preserve_both_exact_mutually_exclusive_domains(lower, upper):
+    from planning.numeric_contract import one_step_storage_bounds
+    derived = one_step_storage_bounds(50., lower, upper, .5, .95, .9)
+    # Enumerate each original binary domain at endpoints and interior SOC values.
+    for energy in np.linspace(lower, upper, 5):
+        delta = energy - 50.
+        charge = max(delta, 0.) / (.95 * .5)
+        discharge = max(-delta, 0.) * .9 / .5
+        z_values = (1.,) if charge > 0 else (0.,) if discharge > 0 else (0., 1.)
+        assert derived['charge_lower_kw'] <= charge <= derived['charge_upper_kw']
+        assert derived['discharge_lower_kw'] <= discharge <= derived['discharge_upper_kw']
+        assert all(derived['mode_lower'] <= z <= derived['mode_upper'] for z in z_values)
+
+
+def test_candidate_binds_tail_bound_derivation_and_the_new_original_failure():
+    from scenario.runtime_release import NUMERIC_FIXTURES, candidate_config
+    assert 'm6p2c_seed0_origin6192_step47.json' in NUMERIC_FIXTURES
+    assert candidate_config(.50)['numeric_contract']['one_step_storage_bounds_version'] == (
+        'soc-balance-exclusion-one-step-v1')
+
+
+def test_qualification_revalidates_same_candidate_shorts_without_rerunning(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from scripts import runtime_qualification as q
+    monkeypatch.setattr(q, 'ROOT', tmp_path)
+    monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {
+        'runtime_budget_s': p, 'numeric_contract': {'version': 'fixed'}}})
+    monkeypatch.setattr(q, 'sha', lambda p: 'bound-hash')
+    monkeypatch.setattr(q, 'save', lambda *a, **kw: None)
+    monkeypatch.setattr(q, 'coverage_run_qualified', lambda *a: True)
+    verified, calls = [], []
+    def reuse(folder, candidate, seed):
+        verified.append((folder.name, candidate, seed))
+        return True
+    monkeypatch.setattr(q, 'reused_short_qualified', reuse, raising=False)
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(q.subprocess, 'run', run)
+    (tmp_path / 'runs').mkdir()
+    assert q.qualify('complete', [.25,.50,1.], budget=.50, reuse_short_prefix='fixed_short') == 0
+    assert verified == [(f'fixed_short_seed{s}', .50, s) for s in (0,1,2)]
+    assert not any('--short' in argv for argv in calls)
+    assert sum('--coverage' in argv for argv in calls) == 3
+    assert all(any(action in argv for argv in calls)
+               for action in ['gate','resume-audit','numerics','diagnose','soak'])
+
+
+def test_reused_short_failure_blocks_learning_and_formal_release(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from scripts import runtime_qualification as q
+    monkeypatch.setattr(q, 'ROOT', tmp_path)
+    monkeypatch.setattr(q, 'verify_candidate', lambda p: {'config': {
+        'runtime_budget_s': p, 'numeric_contract': {'version': 'fixed'}}})
+    monkeypatch.setattr(q, 'sha', lambda p: 'bound-hash')
+    monkeypatch.setattr(q, 'save', lambda *a, **kw: None)
+    monkeypatch.setattr(q, 'reused_short_qualified', lambda *a: False, raising=False)
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(q.subprocess, 'run', run)
+    (tmp_path / 'runs').mkdir()
+    assert q.qualify('bad', [.25,.50,1.], budget=.50, reuse_short_prefix='fixed_short') == 1
+    assert not any('--coverage' in argv or 'soak' in argv for argv in calls)
