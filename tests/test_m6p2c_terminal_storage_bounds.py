@@ -206,3 +206,21 @@ def test_polish_does_not_accept_a_noninteger_candidate_or_an_expired_deadline(mo
             x,[0.,0.],[1.,20.],[1,0],csr_matrix([[-20.,1.]]),[-np.inf],[0.],
             objective=[0.,1.],remaining=lambda b=budget:b)
         assert witness is None and not audit['passed']
+
+
+def test_failed_primal_polish_remains_rejected_without_retry(monkeypatch):
+    from types import SimpleNamespace
+    import scipy.optimize
+    from scipy.sparse import csr_matrix
+    from planning.numeric_contract import certify_or_polish_witness
+    calls=[]
+    def fail(**kw):
+        calls.append(kw)
+        assert np.array_equal(kw['bounds'][0], [0.,0.])
+        return SimpleNamespace(status=2, message='infeasible', x=None)
+    monkeypatch.setattr(scipy.optimize,'linprog',fail)
+    witness,audit=certify_or_polish_witness(
+        [5e-11,1e-9],[0.,0.],[1.,20.],[1,0],csr_matrix([[-20.,1.]]),[-np.inf],[0.],
+        objective=[0.,1.],remaining=lambda:.5)
+    assert witness is None and not audit['passed'] and len(calls)==1
+    assert audit['primal_polish']['solver_status']==2

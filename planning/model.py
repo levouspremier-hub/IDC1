@@ -1532,9 +1532,11 @@ def solve_time_indexed_mip_raw_projection(
                 **({"timeout_phase": "inventory_reachability"}
                    if inventory_status == SOLVER_TIME_LIMIT else {}))
             return result
-        from planning.numeric_contract import certify_witness
-        inventory_witness, inventory_certificate = certify_witness(
-            res_inventory.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
+        from planning.numeric_contract import certify_or_polish_witness
+        inventory_witness, inventory_certificate = certify_or_polish_witness(
+            res_inventory.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
+            objective=c_inventory, remaining=_remaining)
+        elapsed_inventory = time.perf_counter() - t_inventory
         if inventory_witness is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE, {
                 **_audit, "stage_a_status": "not_run",
@@ -1646,9 +1648,11 @@ def solve_time_indexed_mip_raw_projection(
         )
 
     if inventory_enabled:
-        from planning.numeric_contract import certify_primary_objective, certify_witness
-        witness_a, certificate_a = certify_witness(
-            res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs))
+        from planning.numeric_contract import certify_or_polish_witness, certify_primary_objective
+        witness_a, certificate_a = certify_or_polish_witness(
+            res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
+            objective=c_off, remaining=_remaining)
+        tA = time.perf_counter() - tA0
         inventory_audit['stage_a_witness'] = certificate_a
         if witness_a is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
@@ -1751,9 +1755,11 @@ def solve_time_indexed_mip_raw_projection(
                 {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
                  "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
     if inventory_enabled:
-        from planning.numeric_contract import certify_witness
-        canonical_x, final_certificate = certify_witness(
-            x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
+        from planning.numeric_contract import certify_or_polish_witness
+        canonical_x, final_certificate = certify_or_polish_witness(
+            x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b),
+            objective=c_econ, remaining=_remaining)
+        tB += final_certificate.get('primal_polish', {}).get('elapsed_s', 0.)
         inventory_audit['execution_witness'] = final_certificate
         if canonical_x is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,

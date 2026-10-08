@@ -387,6 +387,7 @@ def numerics(run_id, path):
               'formal_training_ready': False, 'train_only': True}
     save(run_id, candidate, rows, report, 'running')
     real_milp = scipy.optimize.milp
+    real_linprog = scipy.optimize.linprog
     try:
         for name in NUMERIC_FIXTURES:
             source = ROOT / 'tests/fixtures' / name
@@ -414,6 +415,7 @@ def numerics(run_id, path):
                         compute_actions=generator.random(len(snapshot.group_work_capacity)).tolist(),
                         storage_action=float(generator.uniform(-1., 1.)))
                 calls = []
+                polish_calls = []
                 def observe(_calls=calls, **kwargs):
                     con = kwargs['constraints'][0]
                     matrix = con.A.tocsr()
@@ -427,7 +429,22 @@ def numerics(run_id, path):
                                       key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
                                       for key, value in arrays.items()}})
                     return real_milp(**kwargs)
+                def observe_polish(_calls=polish_calls, **kwargs):
+                    arrays = {'objective': kwargs['c'], 'bounds': kwargs['bounds'],
+                              'equality_rhs': kwargs['b_eq'],
+                              'inequality_rhs': kwargs['b_ub']}
+                    for label in ('A_eq', 'A_ub'):
+                        sparse = kwargs[label].tocsr()
+                        arrays.update({label+'_'+key: getattr(sparse, key)
+                                       for key in ('data', 'indices', 'indptr')})
+                    _calls.append({'method': kwargs['method'],
+                                   'options': dict(kwargs['options']),
+                                   'mathematical_input_hashes': {
+                                       key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
+                                       for key, value in arrays.items()}})
+                    return real_linprog(**kwargs)
                 scipy.optimize.milp = observe
+                scipy.optimize.linprog = observe_polish
                 started = time.perf_counter()
                 try:
                     with warnings.catch_warnings():
@@ -436,6 +453,7 @@ def numerics(run_id, path):
                             time_limit_s=candidate['config']['runtime_budget_s'])
                 finally:
                     scipy.optimize.milp = real_milp
+                    scipy.optimize.linprog = real_linprog
                 row = {'fixture': name, 'fixture_sha256': sha(source), 'variant': variant,
                        'source_failure_sha256': fixture['source_failure_sha256'],
                        'snapshot_soc_kwh': working_snapshot.soc_kwh,
@@ -446,7 +464,8 @@ def numerics(run_id, path):
                        'stage_b_status': result.stage_b_status,
                        'execution_source': result.execution_source,
                        'candidate_check': result.candidate_check,
-                       'inventory_audit': result.inventory_audit, 'solver_calls': calls}
+                       'inventory_audit': result.inventory_audit, 'solver_calls': calls,
+                       'primal_polish_calls': polish_calls}
                 rows.append(row)
                 dump(folder / 'observations.json', rows)
                 save(run_id, candidate, rows, report, 'running')
@@ -462,6 +481,7 @@ def numerics(run_id, path):
         return 1
     finally:
         scipy.optimize.milp = real_milp
+        scipy.optimize.linprog = real_linprog
 
 
 def qualify(run_id, paths, *, budget=None, reuse_short_prefix=None):

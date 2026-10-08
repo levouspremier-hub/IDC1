@@ -14,6 +14,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin1008_step18.json',
     'm6p2c_seed1_origin7584_step1.json',
     'm6p2c_seed0_origin6192_step47.json',
+    'm6p2c_seed0_origin384_step36.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -38,6 +39,7 @@ def candidate_config(budget):
     config['training']['corrector']['inventory_stage_b_presolve'] = INVENTORY_STAGE_B_PRESOLVE
     from planning.numeric_contract import (
         COUPLED_CHARGE_DOMAIN_VERSION,
+        FIXED_INTEGER_POLISH_VERSION,
         INTEGER_REPRESENTATION_ULPS,
         NUMERIC_CONTRACT_VERSION,
         ONE_STEP_STORAGE_BOUND_VERSION,
@@ -56,6 +58,7 @@ def candidate_config(budget):
         'one_step_storage_bounds_version': ONE_STEP_STORAGE_BOUND_VERSION,
         'coupled_charge_domain_version': COUPLED_CHARGE_DOMAIN_VERSION,
         'stage_b_coordinate_version': STAGE_B_COORDINATE_VERSION,
+        'fixed_integer_primal_polish_version': FIXED_INTEGER_POLISH_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
@@ -190,6 +193,21 @@ def validate_numeric_evidence(result, candidate_path):
         if row['stage_b_status'] == 'optimal' and row['solver_calls'][-1]['options'].get(
                 'presolve') is not False:
             raise ValueError('numeric qualification B presolve differs')
+        polishes = [audit[key]['primal_polish']
+                    for key in ('reachability_witness', 'stage_a_witness', 'execution_witness')
+                    if 'primal_polish' in audit.get(key, {})]
+        calls = row.get('primal_polish_calls', [])
+        if len(calls) != len(polishes) or any(
+                call['method'] != 'highs-ds'
+                or call['options'].get('primal_feasibility_tolerance') != 1e-10
+                or call['options'].get('dual_feasibility_tolerance') != 1e-10
+                or call['options'].get('random_seed') != 0
+                or call['options'].get('parallel') is not False
+                or not 0 < call['options']['time_limit'] <= candidate['config']['runtime_budget_s']
+                or not call['mathematical_input_hashes'] for call in calls):
+            raise ValueError('numeric qualification primal polish calls differ')
+        if any(p['solver_status'] != 0 or not p['attempted'] for p in polishes):
+            raise ValueError('numeric qualification primal polish did not succeed')
     return result
 
 

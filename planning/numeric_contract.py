@@ -13,6 +13,7 @@ NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
+FIXED_INTEGER_POLISH_VERSION = 'original-primal-fixed-integer-lp-v1'
 
 
 def translate_continuous_origin(anchor, integrality, bounds, matrix, row_lower, row_upper):
@@ -106,3 +107,61 @@ def certify_primary_objective(result, witness, objective, *, tolerance):
     if lower > value + PRIMAL_WITNESS_TOLERANCE or value - lower > tolerance:
         return {**audit, 'reason': 'unproven_primary_optimality'}
     return {**audit, 'passed': True, 'reason': 'certified'}
+
+
+def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
+                              objective, remaining):
+    """One fixed-integer LP for a near-integer witness; never relax the original model.
+
+    Exact witnesses take no extra solve. An invalid integer assignment, nonfinite
+    candidate, or expired shared deadline cannot trigger polishing. LP output
+    must pass the same strict original-matrix certificate as every other witness.
+    """
+    import time
+
+    import scipy.optimize
+    from scipy.sparse import vstack
+
+    witness, original = certify_witness(x, lb, ub, integrality, matrix, row_lb, row_ub)
+    if witness is not None or original['reason'] != 'canonical_primal_infeasible':
+        return witness, original
+    if max(original['bound_residual'], original['row_residual']) > 1e-6:
+        return None, original
+    budget = remaining()
+    if budget is not None and budget <= 0.:
+        return None, original
+    started = time.perf_counter()
+    mask = np.asarray(integrality) != 0
+    fixed = np.rint(np.asarray(x)[mask])
+    lower, upper = np.array(lb, copy=True), np.array(ub, copy=True)
+    if np.any(fixed < lower[mask]) or np.any(fixed > upper[mask]):
+        return None, original
+    lower[mask] = upper[mask] = fixed
+    row_lower, row_upper = np.asarray(row_lb), np.asarray(row_ub)
+    equal = np.isfinite(row_lower) & (row_lower == row_upper)
+    finite_upper = np.isfinite(row_upper) & ~equal
+    finite_lower = np.isfinite(row_lower) & ~equal
+    inequalities = vstack([matrix[finite_upper], -matrix[finite_lower]], format='csr')
+    inequality_rhs = np.r_[row_upper[finite_upper], -row_lower[finite_lower]]
+    options = {'primal_feasibility_tolerance': PRIMAL_WITNESS_TOLERANCE,
+               'dual_feasibility_tolerance': PRIMAL_WITNESS_TOLERANCE,
+               'random_seed': 0, 'parallel': False}
+    budget = remaining()  # Assembly shares the same deadline too.
+    if budget is not None:
+        if budget <= 0.:
+            return None, original
+        options['time_limit'] = budget
+    result = scipy.optimize.linprog(
+        c=np.asarray(objective), A_eq=matrix[equal], b_eq=row_lower[equal],
+        A_ub=inequalities, b_ub=inequality_rhs, bounds=np.column_stack([lower, upper]),
+        method='highs-ds', options=options)
+    polish = {'version': FIXED_INTEGER_POLISH_VERSION, 'attempted': True,
+              'fixed_integer_count': int(np.count_nonzero(mask)), 'options': options,
+              'solver_status': int(result.status), 'message': result.message,
+              'elapsed_s': time.perf_counter() - started,
+              'original_certificate': original}
+    if result.status != 0:
+        return None, {**original, 'primal_polish': polish}
+    polished, certificate = certify_witness(
+        result.x, lb, ub, integrality, matrix, row_lb, row_ub)
+    return polished, {**certificate, 'primal_polish': polish}
