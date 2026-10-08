@@ -1,0 +1,28 @@
+{
+  "scope": "original-matrix diagnostic; not training",
+  "minimum_compute_offset": 0.31153188086947875,
+  "primary_bound": 1.0506705436955848,
+  "derived_charge_upper": 2.2024001517048722e-10,
+  "normalized_cut_coefficient": 100000000.0,
+  "charge_upper_exact_fraction": "107589126801809570846963182450059560396094108284341845955672596975926615849481749495164136669990551132822698683552968578794265719/488508533376757746987969316062606953224223930743158009740544028777723709652153916161590734780685047189555201822200681442789921394870190080",
+  "status": 0,
+  "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+  "actual_charge": 0.0,
+  "actual_mode": 0.0,
+  "reported_economic": 91.27540629502862,
+  "actual_economic": 91.27540629502863,
+  "original_matrix_certificate": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": true,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 0.0,
+    "outside_machine_representation_bound": false,
+    "bound_residual": 8.881784197001252e-16,
+    "row_residual": 9.947598300641403e-14,
+    "integer_residual_after": 0.0,
+    "reason": "certified"
+  },
+  "parameter_updates": 0,
+  "environment_steps": 0
+}

@@ -1,0 +1,55 @@
+{
+  "passed": true,
+  "scope": "historical terminal audit; not current release qualification",
+  "native_files": 239,
+  "all_sha_size_verified": true,
+  "candidate_sha256": "5f4ba767b1ae0c109ce79861b949b196e976a97285c3989af278f2f0e4e3c0da",
+  "seed0": {
+    "batches": 106,
+    "transitions": 20352,
+    "adam_steps": 1696,
+    "lagrangian_updates": 106,
+    "qualified_episodes": 424,
+    "actual_restore_verified": true
+  },
+  "seed1": {
+    "batches": 106,
+    "transitions": 20352,
+    "adam_steps": 1696,
+    "lagrangian_updates": 106,
+    "qualified_episodes": 424,
+    "actual_restore_verified": true
+  },
+  "seed2_checkpoints": [
+    {
+      "file": "checkpoint_before_batch.pt",
+      "sha256": "c03fd4873e4f6c7b401e97535ff9f8c9161b7db24d648e68b868eca10ea3d01b",
+      "next_batch_index": 44,
+      "all_adam_steps": 704,
+      "lagrangian_updates": 44,
+      "finite": true,
+      "rng_role_source_origins_restored": true
+    },
+    {
+      "file": "checkpoint_latest.pt",
+      "sha256": "83768761bc4f38f0bf13bee79d00f0b621551539212ea01985dfd1df2562160c",
+      "next_batch_index": 44,
+      "all_adam_steps": 704,
+      "lagrangian_updates": 44,
+      "finite": true,
+      "rng_role_source_origins_restored": true
+    }
+  ],
+  "failed_sha256": "df44621409911d0be41f26d02efb7c83b095150180718b1dcee220a50596d2a5",
+  "failure": {
+    "origin": 8496,
+    "parameter_updates_this_batch": 0,
+    "adam_steps_at_failure": 704,
+    "multiplier_updates_at_failure": 44
+  },
+  "partial_transitions": 6,
+  "failed_environment_step_executed": false,
+  "environment_steps": 0,
+  "parameter_updates": 0,
+  "formal_started": false
+}
