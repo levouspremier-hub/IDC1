@@ -272,3 +272,12 @@ def test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing
         [-np.inf,1e-9],[0.,1e-9],objective=[0.,1.,1.],remaining=lambda:.5,
         storage_modes=([0],[1],[2]))
     assert rejected is None and not audit['passed']
+
+
+def test_primal_polish_must_not_degrade_the_reported_economic_incumbent():
+    from types import SimpleNamespace
+    from planning.numeric_contract import certify_polished_objective
+    result=SimpleNamespace(fun=1.,mip_dual_bound=.99)
+    assert certify_polished_objective(result,[1.],[1.])['passed']
+    assert not certify_polished_objective(result,[1.+1e-7],[1.])['passed']
+    assert not certify_polished_objective(result,[.98],[1.])['passed']
