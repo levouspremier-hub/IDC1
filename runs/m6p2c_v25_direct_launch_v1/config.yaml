@@ -1,0 +1,9 @@
+formal_job: runtime-formal-three-seed-v7-v25
+pin: 728398de2f1704094a7d1432a1a454d79e3f01d6
+qualification_job: runtime-campaign-qualification-v25
+seeds:
+- 0
+- 1
+- 2
+serial: true
+short_job: runtime-fixed-short-v25-v1
