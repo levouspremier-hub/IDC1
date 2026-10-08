@@ -246,3 +246,29 @@ def test_mode_cover_is_valid_for_every_original_integer_power_domain():
             for z in itertools.product((0.,1.),repeat=3):
                 if np.array(upper)@z>=actual:
                     assert weights@z>=1.-1e-14
+
+
+def test_host_seed1_positive_charge_cannot_be_polished_as_discharge_mode():
+    case=json.loads((Path(__file__).parent/'fixtures'/'m6p2c_seed1_origin576_step44.json').read_text())
+    result=correct(InventorySnapshot.model_validate(case['snapshot']),
+                   DispatchProposal.model_validate(case['proposal']),time_limit_s=.50)
+    assert result.executable and result.inventory_audit['stage_a_witness']['passed']
+    assert result.inventory_audit['primary_objective_certificate']['passed']
+    assert result.candidate_check['integer_residual']==0.
+
+
+def test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing_bounds():
+    from scipy.sparse import csr_matrix
+    from planning.numeric_contract import certify_or_polish_witness
+    matrix=csr_matrix([[-20.,1.,0.],[0.,1.,0.]])
+    witness,audit=certify_or_polish_witness(
+        [5e-11,1e-9,0.],[0.,0.,0.],[1.,20.,20.],[1,0,0],matrix,
+        [-np.inf,1e-9],[0.,1e-9],objective=[0.,1.,1.],remaining=lambda:.5,
+        storage_modes=([0],[1],[2]))
+    assert audit['passed'] and witness[0]==1.
+    assert audit['primal_polish']['storage_mode_changes'][0]['selected_mode']==1.
+    rejected,audit=certify_or_polish_witness(
+        [5e-11,1e-9,0.],[0.,0.,0.],[0.,20.,20.],[1,0,0],matrix,
+        [-np.inf,1e-9],[0.,1e-9],objective=[0.,1.,1.],remaining=lambda:.5,
+        storage_modes=([0],[1],[2]))
+    assert rejected is None and not audit['passed']
