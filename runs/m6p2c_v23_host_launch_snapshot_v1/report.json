@@ -1,0 +1,76 @@
+{
+  "phase": "host_numeric_pass_and_actual_fresh_seed0_short_started",
+  "direct_controller_process": {
+    "pid": 97661,
+    "caffeinate_pid": 97662,
+    "revision": "5fd721071cb6256ac00ab30058548463491c9b7e",
+    "controller_revision": "424b79ef358927b2bc82ebe4201d7f1ca44e4016",
+    "started_at": 1791465968.3831291
+  },
+  "controller_snapshot": {
+    "phase": "unique_job_submitted",
+    "events": [
+      {
+        "phase": "fixed_source_ready",
+        "time": 1791465975.531592
+      },
+      {
+        "phase": "storage_guard_passed",
+        "time": 1791465978.115715,
+        "capacity": {
+          "volumes": [
+            {
+              "drive": "D",
+              "free": 162471264256
+            },
+            {
+              "drive": "C",
+              "free": 136274690048
+            }
+          ],
+          "root_mount_options": [
+            "rw",
+            "relatime",
+            "discard",
+            "errors=remount-ro",
+            "data=ordered"
+          ],
+          "time": 1791465966.3418138
+        },
+        "input_bytes": 468217305,
+        "required_D_bytes": 41270406617
+      },
+      {
+        "phase": "unique_job_submitted",
+        "time": 1791465981.182217,
+        "job": "runtime-fixed-short-v23-v1",
+        "revision": "5fd721071cb6256ac00ab30058548463491c9b7e",
+        "asset_set": "bd21c3a8d561ea52b0c7f66b9f9ccee3f43e60224397f7bbd8649542a43abbaa"
+      }
+    ],
+    "error": null,
+    "formal_first_batch_verified": false,
+    "all_three_seeds_complete": false
+  },
+  "host_pid": 2217580,
+  "watcher_pid": 97992,
+  "host_snapshot": {
+    "job_state": "running",
+    "revision": "5fd721071cb6256ac00ab30058548463491c9b7e",
+    "host_numeric_passed": true,
+    "host_numeric_observations": 99,
+    "seed0_process_running": true,
+    "short_gate_seeds": [
+      {
+        "seed": 0,
+        "run_id": "runtime_v23_fixed_short_seed0",
+        "started_at": 1791466035.368636,
+        "passed": null
+      }
+    ]
+  },
+  "three_short_passed": false,
+  "full_qualification_passed": false,
+  "formal_started": false,
+  "all_three_seeds_complete": false
+}

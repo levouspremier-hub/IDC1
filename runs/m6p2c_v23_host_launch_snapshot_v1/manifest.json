@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v23_host_launch_snapshot_v1",
+  "revision": "424b79ef358927b2bc82ebe4201d7f1ca44e4016",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": null,
+  "scenario_hash": "4deb7b4237f3986c8f1abb11596cb67b7940bc17a6f26a1ac3bde16c879dc2b8",
+  "seed": 0,
+  "command": "read actual host job/process and 99-observation terminal report; immutable launch audit snapshot",
+  "status": "success",
+  "failure_classification": null
+}
