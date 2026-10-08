@@ -170,3 +170,13 @@ def test_stage_b_translation_preserves_original_domain_rows_and_economic_order()
         assert np.array_equal(delta-translated.lb, original-bounds.lb)
         assert np.array_equal(translated.ub-delta, bounds.ub-original)
         assert np.isclose(objective@delta+objective@shift, objective@original)
+
+
+def test_host_short_near_integer_b_is_certified_in_original_primal_domain():
+    case = json.loads((Path(__file__).parent / 'fixtures' /
+                       'm6p2c_seed0_origin384_step36.json').read_text())
+    snapshot = InventorySnapshot.model_validate(case['snapshot'])
+    result = correct(snapshot, DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+    assert result.stage_a_status == result.stage_b_status == 'optimal'
+    assert result.executable and result.candidate_check['integer_residual'] == 0.
+    assert result.inventory_audit['execution_witness']['passed']
