@@ -1,0 +1,71 @@
+{
+  "phase": "host_numeric_pass_and_actual_fresh_seed0_short_started",
+  "direct_controller_process": {
+    "pid": 5818,
+    "caffeinate_pid": 5819,
+    "revision": "0b5e0ed8b8d794da3f726ff63eab714666c4a5a5",
+    "controller_revision": "6626974596f144ea6b242370b3a5ad06dcfaac6f",
+    "started_at": 1791477816.352656
+  },
+  "controller_snapshot": {
+    "phase": "unique_job_submitted",
+    "events": [
+      {
+        "phase": "fixed_source_ready",
+        "time": 1791477823.61272
+      },
+      {
+        "phase": "storage_guard_passed",
+        "time": 1791477826.869771,
+        "capacity": {
+          "volumes": [
+            {
+              "drive": "D",
+              "free": 160721747968
+            },
+            {
+              "drive": "C",
+              "free": 135321067520
+            }
+          ],
+          "root_mount_options": [
+            "rw",
+            "relatime",
+            "discard",
+            "errors=remount-ro",
+            "data=ordered"
+          ],
+          "time": 1791477814.6554425
+        },
+        "input_bytes": 468217305,
+        "required_D_bytes": 41270406617
+      },
+      {
+        "phase": "unique_job_submitted",
+        "time": 1791477832.069231,
+        "job": "runtime-fixed-short-v24-v1",
+        "revision": "0b5e0ed8b8d794da3f726ff63eab714666c4a5a5",
+        "asset_set": "bd21c3a8d561ea52b0c7f66b9f9ccee3f43e60224397f7bbd8649542a43abbaa"
+      }
+    ],
+    "error": null,
+    "formal_first_batch_verified": false,
+    "all_three_seeds_complete": false
+  },
+  "host_pid": 2444725,
+  "watcher_pid": 6153,
+  "host_snapshot": {
+    "job_state": "running",
+    "revision": "0b5e0ed8b8d794da3f726ff63eab714666c4a5a5",
+    "host_numeric_passed": true,
+    "host_numeric_observations": 110,
+    "seed0_process_ids": [
+      2445698
+    ],
+    "seed0_journal_count": 3
+  },
+  "three_short_passed": false,
+  "full_qualification_passed": false,
+  "formal_started": false,
+  "all_three_seeds_complete": false
+}
