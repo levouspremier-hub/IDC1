@@ -1,0 +1,62 @@
+{
+  "passed": true,
+  "native_files": 47,
+  "all_native_sha_size_verified": true,
+  "canonical_matches_native": true,
+  "host_numeric_observations": 99,
+  "candidate_sha256": "4deb7b4237f3986c8f1abb11596cb67b7940bc17a6f26a1ac3bde16c879dc2b8",
+  "source_revision": "7d887c72f6eeccce2cb3d86bc7f55bd13dc771e5",
+  "seeds": [
+    {
+      "seed": 0,
+      "fresh": true,
+      "batches": 8,
+      "transitions": 1536,
+      "all_adam_steps": 128,
+      "lagrangian_updates": 8,
+      "qualified_episodes": 32,
+      "fallback_steps": 0,
+      "retained_stage_a_steps": 7,
+      "checkpoint_sha256": "33cc4da8c0b9d278080d85ae4a782b9013f8a4cb999170b42016c7415a132daf",
+      "report_sha256": "4f9f8ab5f25ca54a4ccc368fcac0a7465e34bd8701a8f3f3606fdcd74626f965",
+      "actual_checkpoint_role_source_origins_finite_verified": true,
+      "actual_rng_equal": true
+    },
+    {
+      "seed": 1,
+      "fresh": true,
+      "batches": 8,
+      "transitions": 1536,
+      "all_adam_steps": 128,
+      "lagrangian_updates": 8,
+      "qualified_episodes": 32,
+      "fallback_steps": 0,
+      "retained_stage_a_steps": 9,
+      "checkpoint_sha256": "d1a9ef2720394d087b0076dcf58a5209ab99edb55dd8bd3f4386f3f8254d1070",
+      "report_sha256": "7b09b553f612fe84d352202f0f188ee2baed5040f2bf6e54cd5046389bbf9a98",
+      "actual_checkpoint_role_source_origins_finite_verified": true,
+      "actual_rng_equal": true
+    },
+    {
+      "seed": 2,
+      "fresh": true,
+      "batches": 8,
+      "transitions": 1536,
+      "all_adam_steps": 128,
+      "lagrangian_updates": 8,
+      "qualified_episodes": 32,
+      "fallback_steps": 0,
+      "retained_stage_a_steps": 11,
+      "checkpoint_sha256": "ba8d32c95bf9c75a04804066feccfe027dd7725de571b782b5b56c9193f96913",
+      "report_sha256": "b5730eb85a516ebbeb2fb6cf82a108df759ed6d6a4ff88cfc79fbc8f66e4675c",
+      "actual_checkpoint_role_source_origins_finite_verified": true,
+      "actual_rng_equal": true
+    }
+  ],
+  "parameter_updates": 0,
+  "environment_steps": 0,
+  "qualification_job": "runtime-campaign-qualification-v23",
+  "full_qualification_passed": false,
+  "formal_started": false,
+  "all_three_formal_seeds_complete": false
+}

@@ -1,11 +1,11 @@
 {
-  "run_id": "m6p2c_fixed_short_formal_launch_v1",
+  "run_id": "m6p2c_v23_three_short_terminal_audit_v1",
   "revision": "902713ed45772fbb38348dbd5a3923df8cc76880",
   "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
   "data_hash": "d15c558662c20370a6ee34b377ca491a291bbe782a728937d3d435a558dc3400",
   "scenario_hash": "4deb7b4237f3986c8f1abb11596cb67b7940bc17a6f26a1ac3bde16c879dc2b8",
   "seed": 0,
-  "command": "independent real v23 short checkpoint/RNG/full artifact audit; read unique qualification, no environment/PPO updates",
-  "status": "running",
+  "command": "uv run python runs/m6p2c_v23_three_short_terminal_audit_v1/audit.py",
+  "status": "success",
   "failure_classification": null
 }
