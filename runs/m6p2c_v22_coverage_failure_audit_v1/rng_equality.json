@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "checkpoints": [
+    {
+      "seed": 0,
+      "file": "checkpoint_final.pt",
+      "actual_sampling_rng_equal": true,
+      "actual_shuffle_rng_equal": true,
+      "next_batch_index": 106
+    },
+    {
+      "seed": 1,
+      "file": "checkpoint_before_batch.pt",
+      "actual_sampling_rng_equal": true,
+      "actual_shuffle_rng_equal": true,
+      "next_batch_index": 32
+    },
+    {
+      "seed": 1,
+      "file": "checkpoint_latest.pt",
+      "actual_sampling_rng_equal": true,
+      "actual_shuffle_rng_equal": true,
+      "next_batch_index": 32
+    }
+  ]
+}

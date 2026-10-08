@@ -1,0 +1,52 @@
+.F..........................................                             [100%]
+=================================== FAILURES ===================================
+____ test_charge_mode_is_essential_when_all_other_capacity_is_insufficient _____
+
+    def test_charge_mode_is_essential_when_all_other_capacity_is_insufficient():
+        import itertools
+    
+        from planning.numeric_contract import inventory_mode_cover
+        for upper in [[2.,.1,.2],[.3,.3,.3],[1.,2.,3.]]:
+            for required in [.2,.5,1.,3.]:
+                cover=inventory_mode_cover(50.,50.+required*.5*.95,50.+required*.5*.95,
+                                           .5,.95,.95,upper,upper)
+                for modes in itertools.product((0,1),repeat=3):
+                    if sum(u*z for u,z in zip(upper,modes))>=required:
+                        assert all(modes[k]==1 for k in cover['essential_charge_modes'])
+                    if sum(u*(1-z) for u,z in zip(upper,modes))>=required:
+                        discharge=inventory_mode_cover(50.+required*.5/.95,50.,50.,
+                                                      .5,.95,.95,upper,upper)
+>                       assert all(modes[k]==0 for k in discharge['essential_discharge_modes'])
+E                       assert False
+E                        +  where False = all(<generator object test_charge_mode_is_essential_when_all_other_capacity_is_insufficient.<locals>.<genexpr> at 0x10e84a810>)
+
+tests/test_m6p2c_mode_candidate_rows.py:37: AssertionError
+=============================== warnings summary ===============================
+tests/test_m6p2c_mode_candidate_rows.py: 2 warnings
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1649: RuntimeWarning: Unrecognized options detected: {'mip_abs_gap', 'parallel', 'random_seed', 'dual_feasibility_tolerance', 'mip_feasibility_tolerance', 'primal_feasibility_tolerance'}. These will be passed to HiGHS verbatim.
+    res_a = _milp(
+
+tests/test_m6p2c_mode_candidate_rows.py: 2 warnings
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1777: RuntimeWarning: Unrecognized options detected: {'parallel', 'random_seed', 'dual_feasibility_tolerance', 'mip_feasibility_tolerance', 'primal_feasibility_tolerance'}. These will be passed to HiGHS verbatim.
+    res_b = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_charge_support_selects_one_original_mode
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_fixed_lp_coordinates.py:20: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    return real(**kwargs)
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_discharge_support_is_symmetric
+tests/test_m6p2c_fixed_lp_coordinates.py::test_neutral_inventory_does_not_change_zero_flow_fractional_support
+tests/test_m6p2c_terminal_storage_bounds.py::test_host_short_near_integer_b_is_certified_in_original_primal_domain
+tests/test_m6p2c_terminal_storage_bounds.py::test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows
+tests/test_m6p2c_terminal_storage_bounds.py::test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing_bounds
+  /Users/levous/Desktop/IDC/planning/numeric_contract.py:228: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    result = scipy.optimize.linprog(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_m6p2c_mode_candidate_rows.py::test_charge_mode_is_essential_when_all_other_capacity_is_insufficient
+1 failed, 43 passed, 42 warnings in 4.55s

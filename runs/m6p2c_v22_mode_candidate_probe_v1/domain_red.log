@@ -1,0 +1,72 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+______ test_aggregate_floor_comes_only_from_original_queue_balance_bounds ______
+
+    def test_aggregate_floor_comes_only_from_original_queue_balance_bounds():
+>       from planning.numeric_contract import aggregate_service_floor
+E       ImportError: cannot import name 'aggregate_service_floor' from 'planning.numeric_contract' (/Users/levous/Desktop/IDC/planning/numeric_contract.py)
+
+tests/test_m6p2c_mode_candidate_rows.py:11: ImportError
+____ test_charge_mode_is_essential_when_all_other_capacity_is_insufficient _____
+
+    def test_charge_mode_is_essential_when_all_other_capacity_is_insufficient():
+        import itertools
+    
+        from planning.numeric_contract import inventory_mode_cover
+        for upper in [[2.,.1,.2],[.3,.3,.3],[1.,2.,3.]]:
+            for required in [.2,.5,1.,3.]:
+                cover=inventory_mode_cover(50.,50.+required*.5*.95,50.+required*.5*.95,
+                                           .5,.95,.95,upper,upper)
+                for modes in itertools.product((0,1),repeat=3):
+                    if sum(u*z for u,z in zip(upper,modes))>=required:
+                        assert all(modes[k]==1 for k in cover['essential_charge_modes'])
+                    if sum(u*(1-z) for u,z in zip(upper,modes))>=required:
+                        discharge=inventory_mode_cover(50.+required*.5/.95,50.,50.,
+                                                      .5,.95,.95,upper,upper)
+>                       assert all(modes[k]==0 for k in discharge['essential_discharge_modes'])
+                                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E                       KeyError: 'essential_discharge_modes'
+
+tests/test_m6p2c_mode_candidate_rows.py:37: KeyError
+_______ test_conserved_forecast_service_tightens_future_charge_capacity ________
+
+    def test_conserved_forecast_service_tightens_future_charge_capacity():
+        case=json.loads((Path(__file__).parent/'fixtures'/'m6p2c_seed1_origin6336_step2.json').read_text())
+        result=correct(InventorySnapshot.model_validate(case['snapshot']),
+                       DispatchProposal.model_validate(case['proposal']),time_limit_s=.50)
+        cover=result.inventory_audit['inventory_mode_cover']
+>       assert cover['essential_charge_modes']==[0]
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'essential_charge_modes'
+
+tests/test_m6p2c_mode_candidate_rows.py:45: KeyError
+_____ test_recorded_seed1_origin6336_keeps_the_certified_primary_objective _____
+
+    def test_recorded_seed1_origin6336_keeps_the_certified_primary_objective():
+        case=json.loads((Path(__file__).parent/'fixtures'/'m6p2c_seed1_origin6336_step2.json').read_text())
+        result=correct(InventorySnapshot.model_validate(case['snapshot']),
+                       DispatchProposal.model_validate(case['proposal']),time_limit_s=.50)
+>       assert result.executable, result.inventory_audit.get('primary_objective_certificate')
+E       AssertionError: {'passed': False, 'objective': 1.4056822499712425, 'offset_tolerance': 1e-06, 'reported_objective': 1.399747428220489, ...}
+E       assert False
+E        +  where False = Correction(exec_compute_actions=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...059348217507535495, 'reason': 'reported_objective_differs_from_witness'}}, execution_source='none', candidate_check={}).executable
+
+tests/test_m6p2c_mode_candidate_rows.py:54: AssertionError
+=============================== warnings summary ===============================
+tests/test_m6p2c_mode_candidate_rows.py::test_conserved_forecast_service_tightens_future_charge_capacity
+tests/test_m6p2c_mode_candidate_rows.py::test_recorded_seed1_origin6336_keeps_the_certified_primary_objective
+  /Users/levous/Desktop/IDC/planning/model.py:1629: RuntimeWarning: Unrecognized options detected: {'mip_abs_gap', 'dual_feasibility_tolerance', 'parallel', 'primal_feasibility_tolerance', 'random_seed', 'mip_feasibility_tolerance'}. These will be passed to HiGHS verbatim.
+    res_a = _milp(
+
+tests/test_m6p2c_mode_candidate_rows.py::test_conserved_forecast_service_tightens_future_charge_capacity
+tests/test_m6p2c_mode_candidate_rows.py::test_recorded_seed1_origin6336_keeps_the_certified_primary_objective
+  /Users/levous/Desktop/IDC/planning/numeric_contract.py:213: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    result = scipy.optimize.linprog(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_m6p2c_mode_candidate_rows.py::test_aggregate_floor_comes_only_from_original_queue_balance_bounds
+FAILED tests/test_m6p2c_mode_candidate_rows.py::test_charge_mode_is_essential_when_all_other_capacity_is_insufficient
+FAILED tests/test_m6p2c_mode_candidate_rows.py::test_conserved_forecast_service_tightens_future_charge_capacity
+FAILED tests/test_m6p2c_mode_candidate_rows.py::test_recorded_seed1_origin6336_keeps_the_certified_primary_objective
+4 failed, 4 warnings in 0.45s

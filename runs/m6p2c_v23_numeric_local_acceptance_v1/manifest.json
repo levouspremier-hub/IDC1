@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v23_numeric_local_acceptance_v1",
+  "revision": "7cbb40c93f335c33ef316910618e08339ce5528d",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": "dec76ea2e947f63d086767f443edbef5725cdfed7458a047ebba0ec7d70fddcd",
+  "scenario_hash": "077e0ea21725f9e42be40f774217b385fd2eed4cf99ff6658ba85725a1571865",
+  "seed": 0,
+  "command": "/Users/levous/Desktop/IDC/scripts/runtime_qualification.py numerics --candidate configs/release/idc_runtime_candidate_v23_050.json --run-id m6p2c_v23_numeric_local_acceptance_v1",
+  "status": "success",
+  "failure_classification": null
+}
