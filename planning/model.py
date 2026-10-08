@@ -1712,9 +1712,31 @@ def solve_time_indexed_mip_raw_projection(
         execution_source = "stage_a"
     else:
         tB0 = time.perf_counter()
+        b_bounds = bounds_vec
+        b_lower, b_upper = np.array(lbs_b), np.array(ubs_b)
+        b_shift = None
+        if inventory_enabled:
+            from planning.numeric_contract import (
+                STAGE_B_COORDINATE_VERSION,
+                translate_continuous_origin,
+            )
+            b_shift, b_bounds, b_lower, b_upper = translate_continuous_origin(
+                res_a.x, integrality, bounds_vec, A_b, b_lower, b_upper)
+            inventory_audit['stage_b_coordinates'] = {
+                'version': STAGE_B_COORDINATE_VERSION,
+                'continuous_origin': 'certified_stage_a',
+                'integer_domains_unchanged': True,
+                'objective_constant': float(c_econ @ b_shift),
+            }
         res_b = _milp(
-            c=c_econ, constraints=[LinearConstraint(A_b, np.array(lbs_b), np.array(ubs_b))],
-            integrality=integrality, bounds=bounds_vec, options=_options(stage_b=True))
+            c=c_econ, constraints=[LinearConstraint(A_b, b_lower, b_upper)],
+            integrality=integrality, bounds=b_bounds, options=_options(stage_b=True))
+        if b_shift is not None:
+            if res_b.x is not None:
+                res_b.x = res_b.x + b_shift
+            for field in ('fun', 'mip_dual_bound'):
+                if getattr(res_b, field, None) is not None:
+                    setattr(res_b, field, getattr(res_b, field) + float(c_econ @ b_shift))
         tB = time.perf_counter() - tB0
         status_b = _status(res_b)
         if status_b == SOLVER_OPTIMAL:

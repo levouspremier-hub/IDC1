@@ -42,6 +42,7 @@ def candidate_config(budget):
         NUMERIC_CONTRACT_VERSION,
         ONE_STEP_STORAGE_BOUND_VERSION,
         PRIMAL_WITNESS_TOLERANCE,
+        STAGE_B_COORDINATE_VERSION,
     )
     config['training']['corrector']['primary_mip_rel_gap'] = 0.
     config['training']['corrector']['primary_mip_abs_gap'] = 0.
@@ -54,6 +55,7 @@ def candidate_config(budget):
         'primary_offset_tolerance': 1e-6,
         'one_step_storage_bounds_version': ONE_STEP_STORAGE_BOUND_VERSION,
         'coupled_charge_domain_version': COUPLED_CHARGE_DOMAIN_VERSION,
+        'stage_b_coordinate_version': STAGE_B_COORDINATE_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '

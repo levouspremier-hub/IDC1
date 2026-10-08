@@ -12,6 +12,17 @@ PRIMAL_WITNESS_TOLERANCE = 1e-10
 NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
+STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
+
+
+def translate_continuous_origin(anchor, integrality, bounds, matrix, row_lower, row_upper):
+    """Bijective x=y+anchor for continuous variables; leave integer domains intact."""
+    from scipy.optimize import Bounds
+    shift = np.asarray(anchor, dtype=float).copy()
+    shift[np.asarray(integrality) != 0] = 0.
+    row_shift = matrix @ shift
+    return (shift, Bounds(bounds.lb - shift, bounds.ub - shift),
+            np.asarray(row_lower) - row_shift, np.asarray(row_upper) - row_shift)
 
 
 def coupled_charge_domain_upper(hardware_max, encoded_headroom, minimum_service_power):
