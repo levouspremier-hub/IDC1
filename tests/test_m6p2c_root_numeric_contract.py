@@ -257,3 +257,41 @@ def test_learning_checkpoint_is_loaded_with_a_separate_role(monkeypatch, learnin
         validate_learning_coverage('folder', 'candidate')
     assert calls[0]['expected_scope'] == 'runtime_learning_qualification'
     assert calls[0]['expected_role'] == 'runtime_learning_qualification_resume'
+
+
+@pytest.mark.resume
+def test_actual_learning_checkpoint_roundtrip_preserves_rng_and_rejects_formal_role(tmp_path):
+    import torch
+
+    from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from safe_rl_v2 import formal_train_loop as loop
+    from safe_rl_v2.inventory_train import save_bound
+    from scenario.runtime_release import candidate_config
+    config = candidate_config(.50)
+    policy = loop.build_seeded_policy(config, obs_dim=523, seed=0)
+    optimizer = loop.build_optimizer(config, policy)
+    lagrangian = loop.build_lagrangian(config)
+    sampling = torch.Generator().manual_seed(17)
+    shuffle = torch.Generator().manual_seed(19)
+    path = tmp_path / 'qualification.pt'
+    save_bound(path, binding={'new': 'qualification'}, policy=policy, optimizer=optimizer,
+        lagrangian=lagrangian, sampling_generator=sampling, shuffle_generator=shuffle,
+        config=config, origins=[5040, 5088, 5136, 5184], obs_dim=523,
+        origin_provenance={}, next_batch_index=0, master_seed=0,
+        training_scope='runtime_learning_qualification',
+        artifact_role='runtime_learning_qualification_resume', schema=SHORT_SCHEMA)
+    restored_sampling, restored_shuffle = torch.Generator(), torch.Generator()
+    restored = loop.load_resume_checkpoint(path, policy=policy, optimizer=optimizer,
+        lagrangian=lagrangian, sampling_generator=restored_sampling,
+        shuffle_generator=restored_shuffle, config=config, expected_obs_dim=523,
+        expected_schema=SHORT_SCHEMA, expected_scope='runtime_learning_qualification',
+        expected_role='runtime_learning_qualification_resume')
+    assert restored['next_batch_index'] == 0
+    assert torch.equal(restored_sampling.get_state(), sampling.get_state())
+    assert torch.equal(restored_shuffle.get_state(), shuffle.get_state())
+    with pytest.raises(loop.FormalTrainLoopError, match='artifact_role'):
+        loop.load_resume_checkpoint(path, policy=policy, optimizer=optimizer,
+            lagrangian=lagrangian, sampling_generator=restored_sampling,
+            shuffle_generator=restored_shuffle, config=config, expected_obs_dim=523,
+            expected_schema=SHORT_SCHEMA, expected_scope='formal_training',
+            expected_role='formal_training_resume')
