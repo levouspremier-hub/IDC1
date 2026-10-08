@@ -13,9 +13,11 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin9120_step18.json',
     'm6p2c_seed1_origin1008_step18.json',
     'm6p2c_seed1_origin7584_step1.json',
+    'm6p2c_seed0_origin6192_step47.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
-                    'sample0', 'sample1', 'sample2', 'sample3')
+                    'sample0', 'sample1', 'sample2', 'sample3',
+                    'soc_plus_ulp', 'soc_minus_ulp', 'soc_plus_nano', 'soc_minus_nano')
 
 
 def require_candidate_scope(*, short):
@@ -37,6 +39,7 @@ def candidate_config(budget):
     from planning.numeric_contract import (
         INTEGER_REPRESENTATION_ULPS,
         NUMERIC_CONTRACT_VERSION,
+        ONE_STEP_STORAGE_BOUND_VERSION,
         PRIMAL_WITNESS_TOLERANCE,
     )
     config['training']['corrector']['primary_mip_rel_gap'] = 0.
@@ -48,6 +51,7 @@ def candidate_config(budget):
         'integer_normalization_requires_original_primal_certificate': True,
         'learning_origin_cycles': 2,
         'primary_offset_tolerance': 1e-6,
+        'one_step_storage_bounds_version': ONE_STEP_STORAGE_BOUND_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
@@ -154,8 +158,14 @@ def validate_numeric_evidence(result, candidate_path):
     for row in rows:
         path = ROOT / 'tests/fixtures' / row['fixture']
         fixture = json.loads(path.read_text())
+        expected_soc = fixture['snapshot']['soc_kwh']
+        if row['variant'].startswith('soc_'):
+            import numpy as np
+            delta = float(np.spacing(expected_soc)) if row['variant'].endswith('ulp') else 1e-9
+            expected_soc += -delta if '_minus_' in row['variant'] else delta
         if (row['fixture_sha256'] != sha(path)
                 or row['source_failure_sha256'] != fixture['source_failure_sha256']
+                or row['snapshot_soc_kwh'] != expected_soc
                 or row['passed'] is not True or not row['candidate_check']['passed']
                 or row['candidate_check']['integer_residual'] != 0):
             raise ValueError('numeric fixture provenance or executable witness differs')
@@ -177,6 +187,63 @@ def validate_numeric_evidence(result, candidate_path):
                 'presolve') is not False:
             raise ValueError('numeric qualification B presolve differs')
     return result
+
+
+def validate_short_evidence(folder, candidate_path, seed):
+    """Reuse only a fresh, same-source short run with actual optimizer/RNG state."""
+    import torch
+
+    from checkpointing.inventory_eval_input import SHORT_SCHEMA
+    from checkpointing.versioned import read_checkpoint_payload
+    from safe_rl_v2.formal_train import preregistered_batches
+    from safe_rl_v2.formal_train_loop import (
+        build_lagrangian,
+        build_optimizer,
+        build_seeded_policy,
+        load_resume_checkpoint,
+    )
+    from safe_rl_v2.inventory_diagnostics import inventory_episode_acceptance
+    from safe_rl_v2.inventory_train import verify_written_run
+    folder = Path(folder)
+    candidate = verify_candidate(candidate_path)
+    config = candidate['config']
+    binding = candidate_binding(candidate_path)
+    report = verify_written_run(folder, binding)
+    expected = preregistered_batches(load_matrix(), seed)[:8]
+    if (type(report['seed']) is not int or report['seed'] != seed
+            or report['scope'] != 'controlled_short_run' or report['inventory_binding'] != binding
+            or report['batches'] != 8 or report['batches_newly_run'] != 8
+            or report['resumed_from'] is not None or report['transitions'] != 1536
+            or report['adam_steps'] != 128 or report['lagrangian_updates'] != 8
+            or [b['origins'] for b in report['batch_records']] != expected
+            or len(report['inventory_episodes']) != 32
+            or any(not all(inventory_episode_acceptance(e).values())
+                   or e['target_qualified'] is not True for e in report['inventory_episodes'])
+            or any(b['zero_action_fallback_steps'] != 0 for b in report['batch_records'])
+            or report['validation_run'] or report['test_run']):
+        raise ValueError('same-candidate short evidence workload, role or quality differs')
+    checkpoint = folder / 'checkpoint_final.pt'
+    payload = read_checkpoint_payload(checkpoint)
+    if payload['metadata'].get('inventory_binding') != binding:
+        raise ValueError('short evidence checkpoint binding differs')
+    policy = build_seeded_policy(config, obs_dim=523, seed=seed)
+    optimizer = build_optimizer(config, policy)
+    lagrangian = build_lagrangian(config)
+    restored = load_resume_checkpoint(checkpoint, policy=policy, optimizer=optimizer,
+        lagrangian=lagrangian, sampling_generator=torch.Generator(),
+        shuffle_generator=torch.Generator(), config=config, expected_obs_dim=523,
+        expected_schema=SHORT_SCHEMA, expected_scope='controlled_short_run',
+        expected_role='controlled_training_resume')
+    steps = [int(s['step']) for s in optimizer.state.values()]
+    if (restored['next_batch_index'] != 8
+            or restored['origins'] != [o for b in expected for o in b]
+            or not steps or set(steps) != {128} or lagrangian._updates != 8
+            or payload['state']['source_ledger']['master_seed'] != seed
+            or any(not torch.isfinite(p).all() for p in policy.state_dict().values())
+            or any(not torch.isfinite(s[k]).all() for s in optimizer.state.values()
+                   for k in ('exp_avg', 'exp_avg_sq'))):
+        raise ValueError('short evidence actual checkpoint state differs')
+    return report
 
 
 def validate_learning_coverage(folder, candidate_path):
@@ -297,6 +364,10 @@ def qualification_evidence(folder, candidate_path):
             episodes = result['inventory_episodes']
         elif phase['action'] == 'short':
             verify_written_run(child, candidate_binding(candidate_path))
+            if phase.get('reused_same_candidate'):
+                validate_short_evidence(child, candidate_path, phase['seed'])
+                if phase['original_report_sha256'] != sha(child / 'report.json'):
+                    raise ValueError('reused short report differs from the accepted source')
             if (result['seed'] != phase['seed'] or result['batches'] != 8
                     or result['transitions'] != 1536 or result['adam_steps'] != 128
                     or result['lagrangian_updates'] != 8

@@ -10,6 +10,28 @@ import numpy as np
 INTEGER_REPRESENTATION_ULPS = 8
 PRIMAL_WITNESS_TOLERANCE = 1e-10
 NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
+ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
+
+
+def one_step_storage_bounds(initial_energy, final_lower, final_upper, dt, eta_c, eta_d):
+    """Bounds implied by one-step SOC balance AND exact charging exclusion.
+
+    In the charging domain, discharge=0 and delta_E=eta_c*dt*charge.
+    In the discharging domain, charge=0 and delta_E=-dt/eta_d*discharge.
+    Taking their union gives these bounds without changing the feasible domain.
+    Use strict signs: a subnanowatt flow is physical input, not an epsilon zero.
+    """
+    lower = final_lower - initial_energy
+    upper = final_upper - initial_energy
+    return {'version': ONE_STEP_STORAGE_BOUND_VERSION,
+            'initial_energy_kwh': initial_energy, 'final_lower_kwh': final_lower,
+            'final_upper_kwh': final_upper,
+            'charge_lower_kw': max(lower, 0.) / (eta_c * dt),
+            'charge_upper_kw': max(upper, 0.) / (eta_c * dt),
+            'discharge_lower_kw': max(-upper, 0.) * eta_d / dt,
+            'discharge_upper_kw': max(-lower, 0.) * eta_d / dt,
+            'mode_lower': 1. if lower > 0. else 0.,
+            'mode_upper': 0. if upper < 0. else 1.}
 
 
 def certify_witness(x, lb, ub, integrality, matrix, row_lb, row_ub):

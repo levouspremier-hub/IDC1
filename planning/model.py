@@ -1552,6 +1552,25 @@ def solve_time_indexed_mip_raw_projection(
             "inventory_numerical_allowance_kwh": 1e-7,
             "status": "target_reachable" if minimum_gap <= 1e-6 else "target_unreachable",
         }
+        if H == 1:
+            from planning.numeric_contract import one_step_storage_bounds
+            tail_bounds = one_step_storage_bounds(
+                snapshot.soc_kwh, bounds_vec.lb[off_soc + 1], bounds_vec.ub[off_soc + 1],
+                dt, snapshot.bess_charge_efficiency, snapshot.bess_discharge_efficiency)
+            # These bounds follow from the original balance, terminal interval
+            # and binary exclusion. Avoid fragile MIP propagation of a tiny SOC
+            # difference; keep the actual nonzero power, rows and objective.
+            bounds_vec.lb[off_charge] = max(bounds_vec.lb[off_charge],
+                                            tail_bounds['charge_lower_kw'])
+            bounds_vec.ub[off_charge] = min(bounds_vec.ub[off_charge],
+                                            tail_bounds['charge_upper_kw'])
+            bounds_vec.lb[off_discharge] = max(bounds_vec.lb[off_discharge],
+                                               tail_bounds['discharge_lower_kw'])
+            bounds_vec.ub[off_discharge] = min(bounds_vec.ub[off_discharge],
+                                               tail_bounds['discharge_upper_kw'])
+            bounds_vec.lb[off_z] = max(bounds_vec.lb[off_z], tail_bounds['mode_lower'])
+            bounds_vec.ub[off_z] = min(bounds_vec.ub[off_z], tail_bounds['mode_upper'])
+            inventory_audit['one_step_storage_bounds'] = tail_bounds
         _audit["inventory_audit"] = inventory_audit
         rem = _remaining()
         if rem is not None and rem <= 0:

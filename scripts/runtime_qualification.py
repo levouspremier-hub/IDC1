@@ -356,6 +356,12 @@ def coverage_run_qualified(folder, path):
     return True
 
 
+def reused_short_qualified(folder, path, seed):
+    from scenario.runtime_release import validate_short_evidence
+    validate_short_evidence(folder, path, seed)
+    return True
+
+
 def numerics(run_id, path):
     """Fixed failure inputs plus registered action variants, without env or PPO."""
     import hashlib
@@ -387,7 +393,15 @@ def numerics(run_id, path):
             fixture = json.loads(source.read_text())
             snapshot = InventorySnapshot.model_validate(fixture['snapshot'])
             for variant in NUMERIC_VARIANTS:
+                working_snapshot = snapshot
                 if variant == 'recorded':
+                    proposal = DispatchProposal.model_validate(fixture['proposal'])
+                elif variant.startswith('soc_'):
+                    delta = float(np.spacing(snapshot.soc_kwh)) if variant.endswith('ulp') else 1e-9
+                    if '_minus_' in variant:
+                        delta = -delta
+                    working_snapshot = snapshot.model_copy(
+                        update={'soc_kwh': snapshot.soc_kwh + delta})
                     proposal = DispatchProposal.model_validate(fixture['proposal'])
                 elif variant in ('zero_charge', 'full_discharge'):
                     full = variant == 'full_discharge'
@@ -418,12 +432,14 @@ def numerics(run_id, path):
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter('ignore', RuntimeWarning)
-                        result = correct(snapshot, proposal,
+                        result = correct(working_snapshot, proposal,
                             time_limit_s=candidate['config']['runtime_budget_s'])
                 finally:
                     scipy.optimize.milp = real_milp
                 row = {'fixture': name, 'fixture_sha256': sha(source), 'variant': variant,
                        'source_failure_sha256': fixture['source_failure_sha256'],
+                       'snapshot_soc_kwh': working_snapshot.soc_kwh,
+                       'snapshot_perturbation': variant if variant.startswith('soc_') else None,
                        'proposal': proposal.model_dump(), 'wall_s': time.perf_counter() - started,
                        'passed': result.executable and result.candidate_check.get('passed', False),
                        'stage_a_status': result.stage_a_status,
@@ -448,7 +464,12 @@ def numerics(run_id, path):
         scipy.optimize.milp = real_milp
 
 
-def qualify(run_id, paths, *, budget=None):
+def qualify(run_id, paths, *, budget=None, reuse_short_prefix=None):
+    if reuse_short_prefix is not None:
+        import re
+        if budget is None or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,159}',
+                                             reuse_short_prefix):
+            raise ValueError('reuse short evidence requires a safe prefix and fixed budget')
     candidates = [verify_candidate(path) for path in paths]
     if [c['config']['runtime_budget_s'] for c in candidates] != list(BUDGETS):
         raise ValueError('qualification must preregister exactly .25/.50/1.00 in order')
@@ -497,6 +518,18 @@ def qualify(run_id, paths, *, budget=None):
                 continue
             shorts_passed = True
             for seed in (0, 1, 2):
+                if reuse_short_prefix is not None:
+                    child = reuse_short_prefix + f'_seed{seed}'
+                    accepted = reused_short_qualified(ROOT/'runs'/child, path, seed)
+                    attempt['phases'].append({'action': 'short', 'run_id': child, 'seed': seed,
+                        'exit_code': 0 if accepted else 1, 'quality_passed': accepted,
+                        'reused_same_candidate': True,
+                        'original_report_sha256': sha(ROOT/'runs'/child/'report.json')})
+                    save(run_id, {'candidates': candidates}, [], report, 'running')
+                    if not accepted:
+                        shorts_passed = False
+                        break
+                    continue
                 child = run_id + '_' + label + f'_short_seed{seed}'
                 status = subprocess.run([sys.executable, '-m', 'safe_rl_v2.inventory_train',
                     '--short', '--seed', str(seed), '--runtime-candidate', str(path),
@@ -552,6 +585,7 @@ def main():
     parser.add_argument('--candidates', nargs=3, type=Path)
     parser.add_argument('--budget', type=float, choices=BUDGETS)
     parser.add_argument('--run-id')
+    parser.add_argument('--reuse-short-prefix', help='reverify same-candidate fresh short evidence')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--origin', type=int, choices=ORIGINS)
     parser.add_argument('--mode', choices=MODES)
@@ -563,7 +597,8 @@ def main():
         verify_candidate(args.output)
         return 0
     if args.action == 'qualify':
-        return qualify(args.run_id, args.candidates, budget=args.budget)
+        return qualify(args.run_id, args.candidates, budget=args.budget,
+                       reuse_short_prefix=args.reuse_short_prefix)
     if args.action == 'gate':
         return gate(args.run_id, args.candidate)
     if args.action == 'resume-audit':
