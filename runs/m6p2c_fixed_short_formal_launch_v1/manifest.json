@@ -1,11 +1,11 @@
 {
   "run_id": "m6p2c_fixed_short_formal_launch_v1",
-  "revision": "6626974596f144ea6b242370b3a5ad06dcfaac6f",
+  "revision": "9d0dc4bc2001f72f84459130b35f2df061e2bbf3",
   "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
-  "data_hash": "6fe0197b86da411f6ad620d2dcb0e43c322f7c9aa954e873e9838ca5b0b74c4a",
+  "data_hash": "d1124a11f81f3e9dda925cc91cfe7ca82f22d9c0ac83c282191d679510676206",
   "scenario_hash": "fb89c66676ce8321f5f5b5ac16bc3c937568a2b6a9e9feebab42c8ade14d937d",
   "seed": 0,
-  "command": "v23 terminal failure audit, certified v24 solver preset, and actual unique host fresh short launch; no new local environment/PPO updates",
+  "command": "independent immutable v24 short CP/RNG/native receipt audit; actual host qualification read-only inspection; no environment or optimizer updates",
   "status": "running",
   "failure_classification": null
 }

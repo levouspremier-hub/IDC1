@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "seeds": [
+    {
+      "seed": 0,
+      "optimizer_parameters": 9,
+      "state_count": 9,
+      "every_parameter_has_128_finite_adam_state": true
+    },
+    {
+      "seed": 1,
+      "optimizer_parameters": 9,
+      "state_count": 9,
+      "every_parameter_has_128_finite_adam_state": true
+    },
+    {
+      "seed": 2,
+      "optimizer_parameters": 9,
+      "state_count": 9,
+      "every_parameter_has_128_finite_adam_state": true
+    }
+  ],
+  "parameter_updates": 0,
+  "environment_steps": 0
+}
