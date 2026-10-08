@@ -1,0 +1,8 @@
+budget_s: 0.5
+card: M6.P2C-T
+parent_card: M6.P2C-S
+same_candidate_short_reuse: true
+seeds:
+- 0
+- 1
+- 2
