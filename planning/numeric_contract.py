@@ -14,6 +14,34 @@ ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
 FIXED_INTEGER_POLISH_VERSION = 'original-primal-fixed-integer-lp-v1'
+INVENTORY_MODE_COVER_VERSION = 'soc-balance-integer-power-cover-v1'
+
+
+def inventory_mode_cover(initial, final_lower, final_upper, dt, eta_c, eta_d,
+                         charge_upper, discharge_upper):
+    """Integer-valid cover of a positive net energy requirement, with coefficients <=1.
+
+    sum(power)>=R and power[k]<=U[k]*mode[k] imply sum(min(U[k]/R,1)*mode[k])>=1:
+    an active U>=R alone covers R; otherwise truncation changes no active bound.
+    Round the redundant requirements down and cover coefficients outward.
+    """
+    import math
+    charge = max((final_lower - initial) / (eta_c * dt), 0.)
+    discharge = max((initial - final_upper) / (dt / eta_d), 0.)
+    charge = float(np.nextafter(charge, 0.)) if charge > 0. else 0.
+    discharge = float(np.nextafter(discharge, 0.)) if discharge > 0. else 0.
+    def weights(upper, required):
+        if required == 0.:
+            return [0.] * len(upper)
+        return [1. if u >= required else float(np.nextafter(u / required, np.inf))
+                if u > 0. else 0. for u in upper]
+    charge_weights = weights(charge_upper, charge)
+    discharge_weights = weights(discharge_upper, discharge)
+    return {'version': INVENTORY_MODE_COVER_VERSION,
+            'charge_required_kw': charge, 'discharge_required_kw': discharge,
+            'charge_weights': charge_weights, 'discharge_weights': discharge_weights,
+            'discharge_mode_upper': float(np.nextafter(
+                math.fsum(discharge_weights) - 1., np.inf))}
 
 
 def translate_continuous_origin(anchor, integrality, bounds, matrix, row_lower, row_upper):

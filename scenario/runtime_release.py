@@ -15,6 +15,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin7584_step1.json',
     'm6p2c_seed0_origin6192_step47.json',
     'm6p2c_seed0_origin384_step36.json',
+    'm6p2c_seed0_origin480_step45.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -41,6 +42,7 @@ def candidate_config(budget):
         COUPLED_CHARGE_DOMAIN_VERSION,
         FIXED_INTEGER_POLISH_VERSION,
         INTEGER_REPRESENTATION_ULPS,
+        INVENTORY_MODE_COVER_VERSION,
         NUMERIC_CONTRACT_VERSION,
         ONE_STEP_STORAGE_BOUND_VERSION,
         PRIMAL_WITNESS_TOLERANCE,
@@ -59,6 +61,7 @@ def candidate_config(budget):
         'coupled_charge_domain_version': COUPLED_CHARGE_DOMAIN_VERSION,
         'stage_b_coordinate_version': STAGE_B_COORDINATE_VERSION,
         'fixed_integer_primal_polish_version': FIXED_INTEGER_POLISH_VERSION,
+        'inventory_mode_cover_version': INVENTORY_MODE_COVER_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '

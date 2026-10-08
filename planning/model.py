@@ -1576,6 +1576,21 @@ def solve_time_indexed_mip_raw_projection(
         }
         if coupled_charge_upper:
             inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
+        from planning.numeric_contract import inventory_mode_cover
+        cover = inventory_mode_cover(
+            snapshot.soc_kwh, bounds_vec.lb[off_soc + H], bounds_vec.ub[off_soc + H],
+            dt, snapshot.bess_charge_efficiency, snapshot.bess_discharge_efficiency,
+            bounds_vec.ub[off_charge:off_charge + H],
+            bounds_vec.ub[off_discharge:off_discharge + H])
+        inventory_audit['inventory_mode_cover'] = cover
+        for key, lower, upper in (
+                ('charge', 1., np.inf),
+                ('discharge', -np.inf, cover['discharge_mode_upper'])):
+            if cover[key+'_required_kw'] > 0.:
+                row = {off_z + k: w for k, w in enumerate(cover[key+'_weights']) if w > 0.}
+                add(row, lower, upper, f'inventory_{key}_mode_cover')
+                A_csr = _append_sparse_row(A_csr, row)
+        _audit['n_constraints'] = len(rows) + 1
         if H == 1:
             from planning.numeric_contract import one_step_storage_bounds
             tail_bounds = one_step_storage_bounds(
