@@ -33,12 +33,14 @@ def test_recorded_seed1_feasible_projection_finishes_stage_b(case_name):
 
 
 def test_candidate_records_stricter_solver_precision_without_science_changes():
+    from planning.model import INVENTORY_STAGE_B_PRESOLVE
     from scenario.inventory_release import load_config
     from scenario.runtime_release import candidate_config
     candidate = candidate_config(.50)
     inherited = load_config()
     assert candidate['training']['corrector']['solver_feasibility_tolerance'] == 1e-10
-    assert candidate['training']['corrector']['inventory_stage_b_presolve'] is False
+    assert candidate['training']['corrector']['inventory_stage_b_presolve'] is (
+        INVENTORY_STAGE_B_PRESOLVE)
     for section in ('policy', 'optimizer', 'ppo', 'sampling', 'scale', 'budgets', 'multipliers'):
         assert candidate['training'][section] == inherited['training'][section]
     assert candidate['training']['corrector']['time_limit_s'] == .50

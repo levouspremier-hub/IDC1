@@ -52,7 +52,7 @@ DEADLINE_SHORTFALL_PENALTY_SGD_PER_WORK = (0.10, "SGD/work-unit")
 DETERMINISTIC_RANDOM_SEED = 0
 DETERMINISTIC_PARALLEL = False
 INVENTORY_SOLVER_FEASIBILITY_TOLERANCE = PRIMAL_WITNESS_TOLERANCE
-INVENTORY_STAGE_B_PRESOLVE = False
+INVENTORY_STAGE_B_PRESOLVE = True
 
 
 def deterministic_mip_options(*, time_limit_s: float | None) -> dict:
@@ -1406,9 +1406,11 @@ def solve_time_indexed_mip_raw_projection(
                 # absolute 1e-6 lexicographic bound of the subsequent stage.
                 options.update(mip_rel_gap=0., mip_abs_gap=0.)
             if stage_b:
-                # An exactly integral A witness satisfies the recorded
-                # origin7584 B model, which HiGHS presolve rejects. Keep that
-                # model and remaining deadline; solve it once without presolve.
+                # The current conserved-service/essential-mode domain passes
+                # the historical 7584 input with native presolve enabled. The
+                # 3072 input has a certified A witness but the disabled native
+                # path reports B infeasible. Freeze ONE path for all inputs;
+                # all original rows/bounds/objectives and deadline remain.
                 options['presolve'] = INVENTORY_STAGE_B_PRESOLVE
         return options
 

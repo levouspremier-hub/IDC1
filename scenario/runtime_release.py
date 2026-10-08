@@ -19,6 +19,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin576_step44.json',
     'm6p2c_seed1_origin1968_step18.json',
     'm6p2c_seed1_origin6336_step2.json',
+    'm6p2c_seed0_origin3072_step18.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -196,8 +197,10 @@ def validate_numeric_evidence(result, candidate_path):
         primary = [c for c in row['solver_calls'] if c['options'].get('mip_rel_gap') == 0.]
         if not primary or any(c['options'].get('mip_abs_gap') != 0. for c in primary):
             raise ValueError('numeric qualification lacks the primary optimality contract')
+        expected_presolve = candidate['config']['training']['corrector'][
+            'inventory_stage_b_presolve']
         if row['stage_b_status'] == 'optimal' and row['solver_calls'][-1]['options'].get(
-                'presolve') is not False:
+                'presolve') is not expected_presolve:
             raise ValueError('numeric qualification B presolve differs')
         polishes = [audit[key]['primal_polish']
                     for key in ('reachability_witness', 'stage_a_witness', 'execution_witness')
