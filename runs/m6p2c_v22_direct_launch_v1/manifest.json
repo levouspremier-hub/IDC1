@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v22_direct_launch_v1",
+  "revision": "9bfe2fec3f5093919ec1680846480bdf02ead6de",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": "bd21c3a8d561ea52b0c7f66b9f9ccee3f43e60224397f7bbd8649542a43abbaa",
+  "scenario_hash": "8072a23c75ee1ad3c614a6714408113bdecd98da7a65d3f4e39c73b341d855e8",
+  "seed": 0,
+  "command": "uv run python runs/m6p2c_v22_direct_launch_v1/controller.py",
+  "status": "running",
+  "failure_classification": null
+}
