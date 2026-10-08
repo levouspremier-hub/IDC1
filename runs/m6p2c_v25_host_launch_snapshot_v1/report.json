@@ -1,0 +1,33 @@
+{
+  "remote_status": {
+    "job": "runtime-fixed-short-v25-v1",
+    "revision": "728398de2f1704094a7d1432a1a454d79e3f01d6",
+    "state": "running",
+    "exit_code": null,
+    "error": null
+  },
+  "host_pid": 2685343,
+  "worker_alive": true,
+  "host_numeric_passed": true,
+  "host_numeric_observations": 121,
+  "actual_seed0_processes": [
+    2686539
+  ],
+  "seed0_journal_batches": 1,
+  "seed0_failed_batch": false,
+  "qualification_job_exists": false,
+  "formal_job_exists": false,
+  "mac_processes": {
+    "pid": 13851,
+    "caffeinate_pid": 13852,
+    "revision": "728398de2f1704094a7d1432a1a454d79e3f01d6",
+    "controller_revision": "5ad571671f983c1169337daf281f36c237baf6b0",
+    "started_at": 1791487083.494548
+  },
+  "short_passed": false,
+  "full_qualification_passed": false,
+  "formal_started": false,
+  "formal_release_exists": false,
+  "parameter_updates_performed_by_audit": 0,
+  "environment_steps_performed_by_audit": 0
+}

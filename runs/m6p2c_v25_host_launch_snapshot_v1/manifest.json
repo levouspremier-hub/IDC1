@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v25_host_launch_snapshot_v1",
+  "revision": "5ad571671f983c1169337daf281f36c237baf6b0",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": "5f4ba767b1ae0c109ce79861b949b196e976a97285c3989af278f2f0e4e3c0da",
+  "scenario_hash": "5f4ba767b1ae0c109ce79861b949b196e976a97285c3989af278f2f0e4e3c0da",
+  "seed": 0,
+  "command": "uv run python runs/m6p2c_v25_host_launch_snapshot_v1/capture.py",
+  "status": "success",
+  "failure_classification": null
+}
