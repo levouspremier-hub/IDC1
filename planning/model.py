@@ -1187,6 +1187,7 @@ def solve_time_indexed_mip_raw_projection(
     )
 
     coupled_charge_upper: list[float] = []
+    coupled_aggregate_lower: list[float] = []
     if inventory_enabled and terminal is not None:
         if guard is not None:
             if not coupled:
@@ -1224,18 +1225,31 @@ def solve_time_indexed_mip_raw_projection(
                     encoded_upper = headroom + big_m
                     add(reserve_row, -np.inf, encoded_upper,
                         f"schedule_coupled_charging_reserve[{k}]")
-                    from planning.numeric_contract import coupled_charge_domain_upper
+                    from planning.numeric_contract import (
+                        aggregate_service_floor,
+                        coupled_charge_domain_upper,
+                    )
                     # z=0 already forces charge=0. For z=1 the ORIGINAL reserve
                     # row bounds charging by network headroom minus nonnegative
                     # service power. The original k=0 total work floor gives a
-                    # safe minimum power; future slots use zero, not guessed work.
+                    # safe known-service minimum. The ORIGINAL queue balance
+                    # and already encoded backlog bounds also force aggregate
+                    # service, including future slots. This is not guessed work.
                     minimum_power = (min(coefficient) * sum(guard.group_work_floor)
                                      if k == 0 else 0.)
+                    minimum_aggregate = aggregate_service_floor(
+                        lb[off_aggregate_backlog + k], guard.aggregate_arrival_work[k],
+                        ub[off_aggregate_backlog + k + 1])
+                    aggregate_power = max(float(np.nextafter(
+                        aggregate_coefficient * minimum_aggregate, -np.inf)), 0.)
+                    import math
+                    minimum_power = math.fsum([minimum_power, aggregate_power])
                     minimum_power = max(float(np.nextafter(minimum_power, -np.inf)), 0.)
                     tight_charge = coupled_charge_domain_upper(
                         ub[off_charge + k], encoded_upper - big_m, minimum_power)
                     ub[off_charge + k] = min(ub[off_charge + k], tight_charge)
                     coupled_charge_upper.append(tight_charge)
+                    coupled_aggregate_lower.append(minimum_aggregate)
                     # Keep the hardware exclusion AND the original reserve row;
                     # this is an integer-equivalent cut, a tighter LP relaxation.
                     add({off_charge + k: 1., off_z + k: -tight_charge}, -np.inf, 0.,
@@ -1419,6 +1433,7 @@ def solve_time_indexed_mip_raw_projection(
     inventory_audit: dict = {}
     if coupled_charge_upper:
         inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
+        inventory_audit['coupled_aggregate_service_lower_work'] = coupled_aggregate_lower
     if inventory_enabled:
         _audit['inventory_audit'] = inventory_audit
     if inventory_enabled and terminal is not None:
@@ -1582,6 +1597,7 @@ def solve_time_indexed_mip_raw_projection(
         }
         if coupled_charge_upper:
             inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
+            inventory_audit['coupled_aggregate_service_lower_work'] = coupled_aggregate_lower
         from planning.numeric_contract import inventory_mode_cover
         cover = inventory_mode_cover(
             snapshot.soc_kwh, bounds_vec.lb[off_soc + H], bounds_vec.ub[off_soc + H],
@@ -1589,6 +1605,10 @@ def solve_time_indexed_mip_raw_projection(
             bounds_vec.ub[off_charge:off_charge + H],
             bounds_vec.ub[off_discharge:off_discharge + H])
         inventory_audit['inventory_mode_cover'] = cover
+        for k in cover['essential_charge_modes']:
+            bounds_vec.lb[off_z + k] = max(bounds_vec.lb[off_z + k], 1.)
+        for k in cover['essential_discharge_modes']:
+            bounds_vec.ub[off_z + k] = min(bounds_vec.ub[off_z + k], 0.)
         for key, lower, upper in (
                 ('charge', 1., np.inf),
                 ('discharge', -np.inf, cover['discharge_mode_upper'])):

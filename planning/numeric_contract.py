@@ -11,10 +11,17 @@ INTEGER_REPRESENTATION_ULPS = 8
 PRIMAL_WITNESS_TOLERANCE = 1e-10
 NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
-COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
+COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-conserved-backlog-domain-v2'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
 FIXED_INTEGER_POLISH_VERSION = 'inventory-supported-fixed-integer-lp-v3'
-INVENTORY_MODE_COVER_VERSION = 'soc-balance-integer-power-cover-v1'
+INVENTORY_MODE_COVER_VERSION = 'soc-balance-essential-integer-power-cover-v2'
+
+
+def aggregate_service_floor(previous_lower, arrivals, next_upper):
+    """Original queue balance and bounds imply this nonnegative service floor."""
+    import math
+    required = math.fsum([previous_lower, arrivals, -next_upper])
+    return max(float(np.nextafter(required, -np.inf)), 0.) if required > 0. else 0.
 
 
 def inventory_mode_cover(initial, final_lower, final_upper, dt, eta_c, eta_d,
@@ -37,9 +44,17 @@ def inventory_mode_cover(initial, final_lower, final_upper, dt, eta_c, eta_d,
                 if u > 0. else 0. for u in upper]
     charge_weights = weights(charge_upper, charge)
     discharge_weights = weights(discharge_upper, discharge)
+    def essential(upper, required):
+        # Use a downward requirement and outward sum. A mode is indispensable
+        # only if even ALL other slots at their original upper bounds fall short.
+        return [k for k, u in enumerate(upper) if required > 0. and u > 0.
+                and float(np.nextafter(math.fsum(
+                    value for j, value in enumerate(upper) if j != k), np.inf)) < required]
     return {'version': INVENTORY_MODE_COVER_VERSION,
             'charge_required_kw': charge, 'discharge_required_kw': discharge,
             'charge_weights': charge_weights, 'discharge_weights': discharge_weights,
+            'essential_charge_modes': essential(charge_upper, charge),
+            'essential_discharge_modes': essential(discharge_upper, discharge),
             'discharge_mode_upper': float(np.nextafter(
                 math.fsum(discharge_weights) - 1., np.inf))}
 
