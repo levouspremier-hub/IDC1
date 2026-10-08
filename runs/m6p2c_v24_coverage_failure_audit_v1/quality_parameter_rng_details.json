@@ -1,0 +1,43 @@
+{
+  "passed": true,
+  "seeds": [
+    {
+      "seed": 0,
+      "batches": 106,
+      "qualified_episodes": 424,
+      "fallback": 0,
+      "retained_A": 0,
+      "checkpoints": [
+        {
+          "checkpoint": "checkpoint_final.pt",
+          "all_parameters": 9,
+          "all_Adam": 1696,
+          "actual_rng_equal": true
+        }
+      ]
+    },
+    {
+      "seed": 1,
+      "batches": 13,
+      "qualified_episodes": 52,
+      "fallback": 0,
+      "retained_A": 0,
+      "checkpoints": [
+        {
+          "checkpoint": "checkpoint_before_batch.pt",
+          "all_parameters": 9,
+          "all_Adam": 208,
+          "actual_rng_equal": true
+        },
+        {
+          "checkpoint": "checkpoint_latest.pt",
+          "all_parameters": 9,
+          "all_Adam": 208,
+          "actual_rng_equal": true
+        }
+      ]
+    }
+  ],
+  "environment_steps": 0,
+  "parameter_updates": 0
+}

@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v24_coverage_failure_audit_v1",
+  "revision": "9770024ef1cfc65c32f273ddbc5ec6c829f84f70",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": "1298de79390a781c2fb1870a94cd544e2913792b56c04ef7eb9eec0785818310",
+  "scenario_hash": "fb89c66676ce8321f5f5b5ac16bc3c937568a2b6a9e9feebab42c8ade14d937d",
+  "seed": 0,
+  "command": "uv run python runs/m6p2c_v24_coverage_failure_audit_v1/audit.py",
+  "status": "success",
+  "failure_classification": null
+}

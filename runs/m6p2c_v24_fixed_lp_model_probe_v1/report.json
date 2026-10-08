@@ -1,0 +1,110 @@
+{
+  "scope": "mathematical diagnostic only, not rollout/qualification",
+  "executable": false,
+  "failure": "solver_failure",
+  "stage_a": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": true,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 0.0,
+    "outside_machine_representation_bound": false,
+    "bound_residual": 0.0,
+    "row_residual": 3.552713678800501e-15,
+    "integer_residual_after": 0.0,
+    "reason": "certified"
+  },
+  "primary": {
+    "passed": true,
+    "objective": 0.5309659301553393,
+    "offset_tolerance": 1e-06,
+    "reported_objective": 0.5309659301553392,
+    "lower_bound": 0.5309659301553392,
+    "absolute_gap": 1.1102230246251565e-16,
+    "reason": "certified"
+  },
+  "execution": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": false,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 7.100093674571747e-11,
+    "outside_machine_representation_bound": true,
+    "bound_residual": 0.0,
+    "row_residual": 1.8310204035976515e-10,
+    "integer_residual_after": 0.0,
+    "reason": "canonical_primal_infeasible",
+    "primal_polish": {
+      "version": "inventory-supported-fixed-integer-lp-v3",
+      "attempted": true,
+      "fixed_integer_count": 125,
+      "options": {
+        "primal_feasibility_tolerance": 1e-10,
+        "dual_feasibility_tolerance": 1e-10,
+        "random_seed": 0,
+        "parallel": false,
+        "time_limit": 0.42123600002378225
+      },
+      "storage_mode_changes": [
+        {
+          "variable": 12751,
+          "raw_mode": 7.100093674571747e-11,
+          "nearest_integer": 0.0,
+          "selected_mode": 1.0,
+          "selection_reason": "required_inventory_positive_flow",
+          "charge_kw": 1.8310204035976515e-10,
+          "discharge_kw": 0.0
+        }
+      ],
+      "net_charge_required": true,
+      "net_discharge_required": false,
+      "solver_status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)",
+      "elapsed_s": 0.015996667090803385,
+      "original_certificate": {
+        "version": "canonical-integer-lexicographic-v1",
+        "passed": false,
+        "primal_tolerance": 1e-10,
+        "integer_representation_ulps": 8,
+        "integer_residual_before": 7.100093674571747e-11,
+        "outside_machine_representation_bound": true,
+        "bound_residual": 0.0,
+        "row_residual": 1.8310204035976515e-10,
+        "integer_residual_after": 0.0,
+        "reason": "canonical_primal_infeasible"
+      }
+    }
+  },
+  "fixed_lp_diagnostics": [
+    {
+      "name": "original_presolve",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)",
+      "objective": null
+    },
+    {
+      "name": "original_no_presolve",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is Infeasible)",
+      "objective": null
+    },
+    {
+      "name": "translated_presolve",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)",
+      "objective": null
+    },
+    {
+      "name": "translated_no_presolve",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is Infeasible)",
+      "objective": null
+    }
+  ],
+  "files": {
+    "actualB.npz": "138ea8738f381a6cb4aa4c61bf700d9440f849d1fe9ca1e62b12b78baf00a091",
+    "original_fixed_lp.npz": "2b78c68ff2c422f3c9ed5efbfdf221b6d97f2ea175e37cdbe8e9c1ab5b1757cf"
+  },
+  "environment_steps": 0,
+  "parameter_updates": 0
+}

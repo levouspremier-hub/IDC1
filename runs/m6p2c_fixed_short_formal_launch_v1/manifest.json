@@ -1,11 +1,11 @@
 {
   "run_id": "m6p2c_fixed_short_formal_launch_v1",
-  "revision": "9d0dc4bc2001f72f84459130b35f2df061e2bbf3",
+  "revision": "b61eac679b9b580a34dc7d349d779ef0fe45f5b7",
   "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
-  "data_hash": "d1124a11f81f3e9dda925cc91cfe7ca82f22d9c0ac83c282191d679510676206",
-  "scenario_hash": "fb89c66676ce8321f5f5b5ac16bc3c937568a2b6a9e9feebab42c8ade14d937d",
+  "data_hash": "e199e424dec26e4208c72864222ec1a6c9ebec4edb7124da6f153ba965e381c4",
+  "scenario_hash": "5f4ba767b1ae0c109ce79861b949b196e976a97285c3989af278f2f0e4e3c0da",
   "seed": 0,
-  "command": "independent immutable v24 short CP/RNG/native receipt audit; actual host qualification read-only inspection; no environment or optimizer updates",
+  "command": "v24 terminal failure audit; v25 original nearest-mode capacity prerequisite and local numeric acceptance; formal not submitted",
   "status": "running",
   "failure_classification": null
 }
