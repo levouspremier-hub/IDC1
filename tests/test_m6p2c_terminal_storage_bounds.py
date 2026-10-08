@@ -224,3 +224,25 @@ def test_failed_primal_polish_remains_rejected_without_retry(monkeypatch):
         objective=[0.,1.],remaining=lambda:.5)
     assert witness is None and not audit['passed'] and len(calls)==1
     assert audit['primal_polish']['solver_status']==2
+
+
+def test_small_positive_inventory_deficit_requires_a_real_charging_mode():
+    case=json.loads((Path(__file__).parent/'fixtures'/'m6p2c_seed0_origin480_step45.json').read_text())
+    snapshot=InventorySnapshot.model_validate(case['snapshot'])
+    result=correct(snapshot,DispatchProposal.model_validate(case['proposal']),time_limit_s=.50)
+    assert result.executable and result.inventory_audit['execution_witness']['passed']
+    assert result.inventory_audit['inventory_mode_cover']['charge_required_kw']>0
+
+
+def test_mode_cover_is_valid_for_every_original_integer_power_domain():
+    import itertools
+    from planning.numeric_contract import inventory_mode_cover
+    for upper in ([0.,2.,20.],[1e-14,2.,3.],[.1,.2,.3]):
+        for required in [1e-10,.2,1.,3.,20.]:
+            audit=inventory_mode_cover(50.,50.+required*.5*.95,50.+required*.5*.95,
+                .5,.95,.95,upper,[20.,20.,20.])
+            weights=np.array(audit['charge_weights'])
+            actual=audit['charge_required_kw']
+            for z in itertools.product((0.,1.),repeat=3):
+                if np.array(upper)@z>=actual:
+                    assert weights@z>=1.-1e-14
