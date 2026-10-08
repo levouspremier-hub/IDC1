@@ -1,0 +1,11 @@
+{
+  "run_id": "m6p2c_v25_three_short_terminal_audit_v1",
+  "revision": "5f3fbabf6a96520598c428197ba30ed693afca19",
+  "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
+  "data_hash": "80bf26f2f2f95057491f21e71b965379287f5f7eb53a5ee8479581f327535ef2",
+  "scenario_hash": "5f4ba767b1ae0c109ce79861b949b196e976a97285c3989af278f2f0e4e3c0da",
+  "seed": 0,
+  "command": "uv run python runs/m6p2c_v25_three_short_terminal_audit_v1/audit.py",
+  "status": "success",
+  "failure_classification": null
+}
