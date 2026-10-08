@@ -110,3 +110,28 @@ def test_reused_short_failure_blocks_learning_and_formal_release(monkeypatch, tm
     (tmp_path / 'runs').mkdir()
     assert q.qualify('bad', [.25,.50,1.], budget=.50, reuse_short_prefix='fixed_short') == 1
     assert not any('--coverage' in argv or 'soak' in argv for argv in calls)
+
+
+def test_tiny_soc_perturbation_does_not_create_a_fractional_charging_mode():
+    path = Path(__file__).parent / 'fixtures/m6p2c_seed1_origin1008_step18.json'
+    case = json.loads(path.read_text())
+    snapshot = InventorySnapshot.model_validate({**case['snapshot'],
+        'soc_kwh': case['snapshot']['soc_kwh'] + 1e-9})
+    result = correct(snapshot, DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+    assert result.stage_a_status == result.stage_b_status == 'optimal'
+    assert result.executable and result.candidate_check['integer_residual'] == 0.
+    upper = result.inventory_audit['coupled_charge_domain_upper_kw'][0]
+    assert 0 < upper < snapshot.bess_charge_power_max_kw
+
+
+@pytest.mark.parametrize('headroom,minimum,hardware', [(3.,1.,20.), (0.,0.,20.),
+                                                     (1.,2.,20.), (30.,0.,20.)])
+def test_charge_domain_cut_preserves_every_original_binary_domain(headroom, minimum, hardware):
+    from planning.numeric_contract import coupled_charge_domain_upper
+    upper = coupled_charge_domain_upper(hardware, headroom, minimum)
+    for z in (0.,1.):
+        for service in [minimum, minimum+1., minimum+10.]:
+            for charge in [0., .01, 1., 2., 3., 20.]:
+                original = charge <= hardware*z and (z==0 or charge+service <= headroom)
+                strengthened = original and charge <= upper*z
+                assert original == strengthened
