@@ -1370,6 +1370,14 @@ def solve_time_indexed_mip_raw_projection(
     def storage_requirements():
         return (snapshot.soc_kwh < bounds_vec.lb[off_soc + H],
                 snapshot.soc_kwh > bounds_vec.ub[off_soc + H])
+    def storage_required_power():
+        from planning.numeric_contract import inventory_mode_cover
+        requirement = inventory_mode_cover(
+            snapshot.soc_kwh, bounds_vec.lb[off_soc + H], bounds_vec.ub[off_soc + H],
+            dt, snapshot.bess_charge_efficiency, snapshot.bess_discharge_efficiency,
+            bounds_vec.ub[off_charge:off_charge + H],
+            bounds_vec.ub[off_discharge:off_discharge + H])
+        return requirement['charge_required_kw'], requirement['discharge_required_kw']
     integrality = np.zeros(n_vars)
     integrality[off_z:off_z + H] = 1
     if coupled and guard is not None:
@@ -1558,7 +1566,8 @@ def solve_time_indexed_mip_raw_projection(
         inventory_witness, inventory_certificate = certify_or_polish_witness(
             res_inventory.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
             objective=c_inventory, remaining=_remaining, storage_modes=storage_modes,
-            storage_requirements=storage_requirements())
+            storage_requirements=storage_requirements(),
+            storage_required_power=storage_required_power())
         elapsed_inventory = time.perf_counter() - t_inventory
         if inventory_witness is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE, {
@@ -1695,7 +1704,8 @@ def solve_time_indexed_mip_raw_projection(
         witness_a, certificate_a = certify_or_polish_witness(
             res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
             objective=c_off, remaining=_remaining, storage_modes=storage_modes,
-            storage_requirements=storage_requirements())
+            storage_requirements=storage_requirements(),
+            storage_required_power=storage_required_power())
         tA = time.perf_counter() - tA0
         inventory_audit['stage_a_witness'] = certificate_a
         if witness_a is None:
@@ -1803,7 +1813,8 @@ def solve_time_indexed_mip_raw_projection(
         canonical_x, final_certificate = certify_or_polish_witness(
             x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b),
             objective=c_econ, remaining=_remaining, storage_modes=storage_modes,
-            storage_requirements=storage_requirements())
+            storage_requirements=storage_requirements(),
+            storage_required_power=storage_required_power())
         tB += final_certificate.get('primal_polish', {}).get('elapsed_s', 0.)
         inventory_audit['execution_witness'] = final_certificate
         if canonical_x is None:

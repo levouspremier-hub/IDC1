@@ -13,7 +13,7 @@ NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-conserved-backlog-domain-v2'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
-FIXED_INTEGER_POLISH_VERSION = 'inventory-supported-fixed-integer-lp-v3'
+FIXED_INTEGER_POLISH_VERSION = 'capacity-supported-fixed-integer-lp-v4'
 INVENTORY_MODE_COVER_VERSION = 'soc-balance-essential-integer-power-cover-v2'
 
 
@@ -154,7 +154,7 @@ def certify_primary_objective(result, witness, objective, *, tolerance):
 
 def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
                               objective, remaining, storage_modes=None,
-                              storage_requirements=(True, True)):
+                              storage_requirements=(True, True), storage_required_power=None):
     """One fixed-integer LP for a near-integer witness; never relax the original model.
 
     Exact witnesses take no extra solve. An excessive integer deviation, nonfinite
@@ -180,13 +180,31 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
     mask = np.asarray(integrality) != 0
     assignment = np.rint(np.asarray(x))
     mode_changes = []
+    support_needed = storage_requirements
+    nearest_capacity = None
+    if storage_modes is not None and storage_required_power is not None:
+        import math
+        modes, charges, discharges = storage_modes
+        # Net energy demand alone does not require every positive ghost flow's
+        # mode. Retain nearest integers when their ORIGINAL power bounds already
+        # support that demand. Capacity is a necessary condition only; the sole
+        # complete LP still has to certify every original row and objective.
+        nearest_capacity = (
+            float(np.nextafter(math.fsum(float(ub[c]) for z, c in
+                  zip(modes, charges, strict=True) if assignment[z] == 1.), np.inf)),
+            float(np.nextafter(math.fsum(float(ub[d]) for z, d in
+                  zip(modes, discharges, strict=True) if assignment[z] == 0.), np.inf)))
+        support_needed = tuple(bool(required and capacity < power) for
+                               required, capacity, power in zip(
+                                   storage_requirements, nearest_capacity,
+                                   storage_required_power, strict=True))
     if storage_modes is not None:
         for mode, charge, discharge in zip(*storage_modes, strict=True):
             old = assignment[mode]
             selection_reason = 'required_inventory_positive_flow'
-            if storage_requirements[0] and x[charge] > 0. and x[discharge] <= 0.:
+            if support_needed[0] and x[charge] > 0. and x[discharge] <= 0.:
                 assignment[mode] = 1.
-            elif storage_requirements[1] and x[discharge] > 0. and x[charge] <= 0.:
+            elif support_needed[1] and x[discharge] > 0. and x[charge] <= 0.:
                 assignment[mode] = 0.
             elif x[charge] == 0. and x[discharge] == 0. and x[mode] != old:
                 # A fractional mode can support the inventory cover even with
@@ -195,9 +213,9 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
                 # before the ONLY LP; this does not certify or accept the ghost.
                 # Exact modes, opposite nonzero flows and neutral SOC are intact.
                 selection_reason = 'required_inventory_fractional_zero_flow_support'
-                if storage_requirements[0] and x[mode] > 0.:
+                if support_needed[0] and x[mode] > 0.:
                     assignment[mode] = 1.
-                elif storage_requirements[1] and x[mode] < 1.:
+                elif support_needed[1] and x[mode] < 1.:
                     assignment[mode] = 0.
             if assignment[mode] != old:
                 mode_changes.append({'variable': int(mode), 'raw_mode': float(x[mode]),
@@ -234,6 +252,9 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
               'storage_mode_changes': mode_changes,
               'net_charge_required': bool(storage_requirements[0]),
               'net_discharge_required': bool(storage_requirements[1]),
+              'nearest_mode_capacity_kw': nearest_capacity,
+              'required_inventory_power_kw': storage_required_power,
+              'mode_support_needed': list(support_needed),
               'solver_status': int(result.status), 'message': result.message,
               'elapsed_s': time.perf_counter() - started,
               'original_certificate': original}
