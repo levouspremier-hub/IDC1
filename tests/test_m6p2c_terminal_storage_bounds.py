@@ -180,3 +180,29 @@ def test_host_short_near_integer_b_is_certified_in_original_primal_domain():
     assert result.stage_a_status == result.stage_b_status == 'optimal'
     assert result.executable and result.candidate_check['integer_residual'] == 0.
     assert result.inventory_audit['execution_witness']['passed']
+
+
+def test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows():
+    from scipy.sparse import csr_matrix
+    from planning.numeric_contract import certify_or_polish_witness
+    matrix = csr_matrix([[-20.,1.]])
+    witness, audit = certify_or_polish_witness(
+        [5e-11,1e-9], [0.,0.], [1.,20.], [1,0], matrix, [-np.inf], [0.],
+        objective=[0.,1.], remaining=lambda: .5)
+    assert audit['passed'] and audit['primal_polish']['attempted']
+    assert np.array_equal(witness, [0.,0.])
+    assert audit['integer_residual_after']==0 and audit['row_residual']<=1e-10
+
+
+def test_polish_does_not_accept_a_noninteger_candidate_or_an_expired_deadline(monkeypatch):
+    import scipy.optimize
+    from scipy.sparse import csr_matrix
+    from planning.numeric_contract import certify_or_polish_witness
+    def never(**kw):
+        raise AssertionError('no LP may be called')
+    monkeypatch.setattr(scipy.optimize, 'linprog', never)
+    for x, budget in [([1e-9,1e-8],.5), ([5e-11,1e-9],0.)]:
+        witness, audit = certify_or_polish_witness(
+            x,[0.,0.],[1.,20.],[1,0],csr_matrix([[-20.,1.]]),[-np.inf],[0.],
+            objective=[0.,1.],remaining=lambda b=budget:b)
+        assert witness is None and not audit['passed']
