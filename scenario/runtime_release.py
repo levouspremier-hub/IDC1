@@ -17,6 +17,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed0_origin384_step36.json',
     'm6p2c_seed0_origin480_step45.json',
     'm6p2c_seed1_origin576_step44.json',
+    'm6p2c_seed1_origin1968_step18.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',

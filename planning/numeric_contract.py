@@ -13,7 +13,7 @@ NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-charge-domain-v1'
 STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
-FIXED_INTEGER_POLISH_VERSION = 'physical-flow-fixed-integer-lp-v2'
+FIXED_INTEGER_POLISH_VERSION = 'inventory-supported-fixed-integer-lp-v3'
 INVENTORY_MODE_COVER_VERSION = 'soc-balance-integer-power-cover-v1'
 
 
@@ -168,14 +168,27 @@ def certify_or_polish_witness(x, lb, ub, integrality, matrix, row_lb, row_ub, *,
     if storage_modes is not None:
         for mode, charge, discharge in zip(*storage_modes, strict=True):
             old = assignment[mode]
+            selection_reason = 'required_inventory_positive_flow'
             if storage_requirements[0] and x[charge] > 0. and x[discharge] <= 0.:
                 assignment[mode] = 1.
             elif storage_requirements[1] and x[discharge] > 0. and x[charge] <= 0.:
                 assignment[mode] = 0.
+            elif x[charge] == 0. and x[discharge] == 0. and x[mode] != old:
+                # A fractional mode can support the inventory cover even with
+                # zero local flow. Nearest rounding can remove that support and
+                # leave an infeasible fixed pattern. Select the required domain
+                # before the ONLY LP; this does not certify or accept the ghost.
+                # Exact modes, opposite nonzero flows and neutral SOC are intact.
+                selection_reason = 'required_inventory_fractional_zero_flow_support'
+                if storage_requirements[0] and x[mode] > 0.:
+                    assignment[mode] = 1.
+                elif storage_requirements[1] and x[mode] < 1.:
+                    assignment[mode] = 0.
             if assignment[mode] != old:
                 mode_changes.append({'variable': int(mode), 'raw_mode': float(x[mode]),
                                      'nearest_integer': float(old),
                                      'selected_mode': float(assignment[mode]),
+                                     'selection_reason': selection_reason,
                                      'charge_kw': float(x[charge]),
                                      'discharge_kw': float(x[discharge])})
     fixed = assignment[mask]
