@@ -1,0 +1,12 @@
+{
+  "status": 0,
+  "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+  "minimum_uniform_slack": 4.554352004439405e-11,
+  "binding_rows": [],
+  "ghost_mode_flows": {
+    "12150": 4.554352004439413e-11,
+    "12179": 0.10136499152129679,
+    "12180": 0.0,
+    "12209": 0.0
+  }
+}

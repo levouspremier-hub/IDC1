@@ -1,0 +1,50 @@
+........................................................................ [ 57%]
+.....................................................                    [100%]
+=============================== warnings summary ===============================
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_charge_support_selects_one_original_mode
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_fixed_lp_coordinates.py:20: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    return real(**kwargs)
+
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+tests/test_m6p2c_seed1_stage_b_numerics.py: 3 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1629: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'mip_abs_gap', 'dual_feasibility_tolerance', 'random_seed', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    res_a = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+tests/test_m6p2c_seed1_stage_b_numerics.py: 3 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1757: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'dual_feasibility_tolerance', 'random_seed', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    res_b = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_discharge_support_is_symmetric
+tests/test_m6p2c_fixed_lp_coordinates.py::test_neutral_inventory_does_not_change_zero_flow_fractional_support
+tests/test_m6p2c_terminal_storage_bounds.py::test_host_short_near_integer_b_is_certified_in_original_primal_domain
+tests/test_m6p2c_terminal_storage_bounds.py::test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows
+tests/test_m6p2c_terminal_storage_bounds.py::test_host_seed1_positive_charge_cannot_be_polished_as_discharge_mode
+tests/test_m6p2c_terminal_storage_bounds.py::test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing_bounds
+  /Users/levous/Desktop/IDC/planning/numeric_contract.py:213: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    result = scipy.optimize.linprog(
+
+tests/test_m6p2c_root_numeric_contract.py::test_real_inventory_handoff_rejects_a_ghost_before_calling_b
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_root_numeric_contract.py:97: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'mip_abs_gap', 'dual_feasibility_tolerance', 'random_seed', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    result = real(**kwargs)
+
+tests/test_m6p2c_runtime_repair.py::test_b_timeout_retains_validated_a
+tests/test_m6p2c_runtime_repair.py::test_corrector_exposes_timeout_separately_from_executable_action
+tests/test_m6p2c_runtime_repair.py::test_invalid_a_is_not_executed
+tests/test_m6p2c_runtime_repair.py::test_b_solver_error_does_not_use_a
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_runtime_repair.py:26: RuntimeWarning: Unrecognized options detected: {'random_seed', 'parallel'}. These will be passed to HiGHS verbatim.
+    result = original(**kwargs)
+
+tests/test_m6p2c_runtime_repair.py::test_budget_exhausted_after_a_retains_a_without_calling_b
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_runtime_repair.py:79: RuntimeWarning: Unrecognized options detected: {'random_seed', 'parallel'}. These will be passed to HiGHS verbatim.
+    result = original(**kwargs)
+
+tests/test_m6p2c_runtime_repair.py::test_terminal_inventory_is_checked_when_a_is_retained
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_runtime_repair.py:205: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'mip_abs_gap', 'dual_feasibility_tolerance', 'random_seed', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    return original(**kwargs)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+125 passed, 53 warnings in 28.78s

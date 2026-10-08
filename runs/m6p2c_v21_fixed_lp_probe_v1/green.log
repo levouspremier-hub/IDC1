@@ -1,0 +1,25 @@
+.....................................                                    [100%]
+=============================== warnings summary ===============================
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_charge_support_selects_one_original_mode
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_fixed_lp_coordinates.py:20: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    return real(**kwargs)
+
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1629: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'primal_feasibility_tolerance', 'parallel', 'random_seed', 'dual_feasibility_tolerance', 'mip_abs_gap'}. These will be passed to HiGHS verbatim.
+    res_a = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py: 1 warning
+tests/test_m6p2c_terminal_storage_bounds.py: 15 warnings
+  /Users/levous/Desktop/IDC/planning/model.py:1757: RuntimeWarning: Unrecognized options detected: {'mip_feasibility_tolerance', 'primal_feasibility_tolerance', 'parallel', 'random_seed', 'dual_feasibility_tolerance'}. These will be passed to HiGHS verbatim.
+    res_b = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
+tests/test_m6p2c_terminal_storage_bounds.py::test_host_short_near_integer_b_is_certified_in_original_primal_domain
+tests/test_m6p2c_terminal_storage_bounds.py::test_polish_fixes_the_candidate_integer_mode_and_rechecks_original_rows
+tests/test_m6p2c_terminal_storage_bounds.py::test_host_seed1_positive_charge_cannot_be_polished_as_discharge_mode
+tests/test_m6p2c_terminal_storage_bounds.py::test_primal_polish_selects_a_flow_consistent_candidate_mode_without_relaxing_bounds
+  /Users/levous/Desktop/IDC/planning/numeric_contract.py:213: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    result = scipy.optimize.linprog(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html

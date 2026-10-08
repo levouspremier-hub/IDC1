@@ -1,0 +1,19 @@
+{
+  "candidate_mode0": 1,
+  "status": 0,
+  "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+  "certificate": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": true,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 0.0,
+    "outside_machine_representation_bound": false,
+    "bound_residual": 0.0,
+    "row_residual": 7.479397224622385e-16,
+    "integer_residual_after": 0.0,
+    "reason": "certified"
+  },
+  "objective": 0.001013649958143724,
+  "charge0": 4.34285215976017e-09
+}

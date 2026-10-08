@@ -1,0 +1,110 @@
+{
+  "comparisons": [
+    {
+      "comparison": "original",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)"
+    },
+    {
+      "comparison": "raw_continuous",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)"
+    },
+    {
+      "comparison": "certified_a_continuous",
+      "status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)"
+    }
+  ],
+  "ghost_integers": [
+    {
+      "index": 12281,
+      "raw": 8.209655177893183e-11,
+      "nearest": 0.0
+    },
+    {
+      "index": 12310,
+      "raw": 0.9999999999179034,
+      "nearest": 1.0
+    }
+  ],
+  "recorded_execution_witness": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": false,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 8.209655177893183e-11,
+    "outside_machine_representation_bound": true,
+    "bound_residual": 0.0,
+    "row_residual": 4.3428514118204475e-09,
+    "integer_residual_after": 0.0,
+    "reason": "canonical_primal_infeasible",
+    "primal_polish": {
+      "version": "physical-flow-fixed-integer-lp-v2",
+      "attempted": true,
+      "fixed_integer_count": 150,
+      "options": {
+        "primal_feasibility_tolerance": 1e-10,
+        "dual_feasibility_tolerance": 1e-10,
+        "random_seed": 0,
+        "parallel": false,
+        "time_limit": 0.33891329099424183
+      },
+      "storage_mode_changes": [],
+      "net_charge_required": true,
+      "net_discharge_required": false,
+      "solver_status": 2,
+      "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)",
+      "elapsed_s": 0.015558541985228658,
+      "original_certificate": {
+        "version": "canonical-integer-lexicographic-v1",
+        "passed": false,
+        "primal_tolerance": 1e-10,
+        "integer_representation_ulps": 8,
+        "integer_residual_before": 8.209655177893183e-11,
+        "outside_machine_representation_bound": true,
+        "bound_residual": 0.0,
+        "row_residual": 4.3428514118204475e-09,
+        "integer_residual_after": 0.0,
+        "reason": "canonical_primal_infeasible"
+      }
+    }
+  },
+  "correct_executable": false,
+  "environment_steps": 0,
+  "parameter_updates": 0,
+  "comparison_scope": "Independent offline LP diagnostics, never a production retry",
+  "storage_modes": [
+    12281,
+    12282,
+    12283,
+    12284,
+    12285,
+    12286,
+    12287,
+    12288,
+    12289,
+    12290,
+    12291,
+    12292,
+    12293,
+    12294,
+    12295,
+    12296,
+    12297,
+    12298,
+    12299,
+    12300,
+    12301,
+    12302,
+    12303,
+    12304,
+    12305,
+    12306,
+    12307,
+    12308,
+    12309,
+    12310
+  ],
+  "source_failure_sha256": "23078430e114556d43d7d75ec31b354b3601434ad9784ed28fa80974e8509824"
+}

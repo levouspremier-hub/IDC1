@@ -1,0 +1,8 @@
+{
+  "passed": true,
+  "batches": 10,
+  "qualified_episodes": 40,
+  "zero_fallback": true,
+  "valid_stage_a_retained_steps": 21,
+  "claimed_extra_updates": false
+}

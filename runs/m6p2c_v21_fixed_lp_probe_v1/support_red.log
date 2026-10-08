@@ -1,0 +1,65 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+______ test_zero_flow_fractional_charge_support_selects_one_original_mode ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b3677a0>
+
+    def test_zero_flow_fractional_charge_support_selects_one_original_mode(monkeypatch):
+        import numpy as np
+        import scipy.optimize
+        from scipy.sparse import csr_matrix
+    
+        from planning.numeric_contract import certify_or_polish_witness
+        real = scipy.optimize.linprog
+        calls = []
+        def record(**kwargs):
+            calls.append(kwargs)
+            return real(**kwargs)
+        monkeypatch.setattr(scipy.optimize, 'linprog', record)
+        # z+q>=1 is the energy-cover support. q is almost 1; c=d=0 at z.
+        # Original row q+53*z<=1 forces q=0 when the exact candidate z=1.
+        # Rounding z=0,q=1 is infeasible due to q<=1-4e-9 in the full rows.
+        matrix = csr_matrix([[1.,0.,0.,1.], [0.,0.,0.,1.]])
+        witness, audit = certify_or_polish_witness(
+            [8e-11,0.,0.,1.-8e-11], [0.,0.,0.,0.], [1.,1.,1.,1.], [1,0,0,0],
+            matrix, [1.,-np.inf], [np.inf,1.-4e-9], objective=[0.,0.,0.,0.],
+            remaining=lambda:.5, storage_modes=([0],[1],[2]), storage_requirements=(True,False))
+>       assert witness is not None and audit['passed']
+E       assert (None is not None)
+
+tests/test_m6p2c_fixed_lp_coordinates.py:30: AssertionError
+_______ test_recorded_coverage_seed1_origin1968_has_certified_execution ________
+
+    def test_recorded_coverage_seed1_origin1968_has_certified_execution():
+        case = json.loads((Path(__file__).parent / 'fixtures' /
+                           'm6p2c_seed1_origin1968_step18.json').read_text())
+        result = correct(InventorySnapshot.model_validate(case['snapshot']),
+                         DispatchProposal.model_validate(case['proposal']), time_limit_s=.50)
+        assert result.stage_a_status == result.stage_b_status == 'optimal'
+>       assert result.executable, result.inventory_audit.get('execution_witness')
+E       AssertionError: {'version': 'canonical-integer-lexicographic-v1', 'passed': False, 'primal_tolerance': 1e-10, 'integer_representation_ulps': 8, ...}
+E       assert False
+E        +  where False = Correction(exec_compute_actions=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, ...integer_residual_after': 0.0, 'reason': 'canonical_primal_infeasible'}}}}, execution_source='none', candidate_check={}).executable
+
+tests/test_m6p2c_fixed_lp_coordinates.py:42: AssertionError
+=============================== warnings summary ===============================
+tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_charge_support_selects_one_original_mode
+  /Users/levous/Desktop/IDC/tests/test_m6p2c_fixed_lp_coordinates.py:20: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    return real(**kwargs)
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
+  /Users/levous/Desktop/IDC/planning/model.py:1629: RuntimeWarning: Unrecognized options detected: {'dual_feasibility_tolerance', 'random_seed', 'mip_feasibility_tolerance', 'mip_abs_gap', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    res_a = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
+  /Users/levous/Desktop/IDC/planning/model.py:1757: RuntimeWarning: Unrecognized options detected: {'dual_feasibility_tolerance', 'random_seed', 'mip_feasibility_tolerance', 'primal_feasibility_tolerance', 'parallel'}. These will be passed to HiGHS verbatim.
+    res_b = _milp(
+
+tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
+  /Users/levous/Desktop/IDC/planning/numeric_contract.py:200: OptimizeWarning: Unrecognized options detected: {'random_seed': 0, 'parallel': False}. These will be passed to HiGHS verbatim.
+    result = scipy.optimize.linprog(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_m6p2c_fixed_lp_coordinates.py::test_zero_flow_fractional_charge_support_selects_one_original_mode
+FAILED tests/test_m6p2c_fixed_lp_coordinates.py::test_recorded_coverage_seed1_origin1968_has_certified_execution
