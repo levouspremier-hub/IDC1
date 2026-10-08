@@ -17,3 +17,5 @@
 新的唯一流程为runs/m6p2c_v19_direct_launch_v1/controller.py，主机runtime-fixed-short-v19-v1→runtime-campaign-qualification-v19→严格v7/fresh runtime-formal-three-seed-v7-v19；旧v18 controller与watcher均已终态退出，不重启，不继承其short或资格，v7仍未生成。主机运行状态只能以新直控和实际job为准。
 
 主机实际v19运行与首批审核：固定dc0a823310c6e25ba64c09b2b24c119221e0af32；job runtime-fixed-short-v19-v1 running，host1681646、Mac直控66405/watcher66598。主机55数值观察通过；seed0已完成2批，实际latest CPnext2/所有Adam32/lag2/384transitions/8合格回合/原候选binding/注册origins/finite审计通过，当前无failed_batch；已越过v18失败位置。审核时短跑未完成、v7未生成、正式未启动。证据runs/m6p2c_v19_short_first_batch_audit_v1/和runs/m6p2c_v19_direct_launch_v1/；后续以持续增长的实际状态为准。当前代码/候选/文档均显式提交推送、git status干净，活动科学任务仅一个；已授权后续由持久直控和当前对话小时巡检继续，不用用户再次确认。
+
+最终v20：红673499c，等价原能量整数cover b9fb88d，冻结11ea6e0。114相关回归/Ruff/mypy通过，6原输入×11变体66观察全部A/Boptimal、完全整数及原矩阵严格证书通过/.01607429—.31835075秒，仅5案例一次连续LP；未改原行/目标/预算或任何容差。v19完整26文件及真实before/latestCPnext2/所有Adam32/lag2/finite/原binding已验证，93partial与失败0更新0env保留，旧直控/watchers终态退出。新唯一短跑runtime-fixed-short-v20-v1→同源runtime-campaign-qualification-v20→严格v7/fresh runtime-formal-three-seed-v7-v20，实际状态以runs/m6p2c_v20_direct_launch_v1/report.json与进程文件为准。仍未正式启动、v7未生成，不把新本机验收当主机成功。
