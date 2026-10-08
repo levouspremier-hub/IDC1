@@ -1,0 +1,3 @@
+budget: 0.5
+diagnostic_integer_origin: true
+fixture: tests/fixtures/m6p2c_seed0_origin3072_step18.json

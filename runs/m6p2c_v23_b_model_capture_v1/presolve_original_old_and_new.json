@@ -1,0 +1,82 @@
+[
+  {
+    "fixture": "m6p2c_seed1_origin7584_step1.json",
+    "executable": true,
+    "stage_a": "optimal",
+    "stage_b": "optimal",
+    "certificate": {
+      "passed": true,
+      "bound_residual": 0.0,
+      "integer_residual": 0.0,
+      "row_residual": 7.105427357601002e-15,
+      "tolerance": 1e-06
+    },
+    "solver_calls": [
+      {
+        "status": 0,
+        "options": {
+          "random_seed": 0,
+          "parallel": false,
+          "time_limit": 0.48534799995832145,
+          "mip_feasibility_tolerance": 1e-10,
+          "primal_feasibility_tolerance": 1e-10,
+          "dual_feasibility_tolerance": 1e-10,
+          "mip_rel_gap": 0.0,
+          "mip_abs_gap": 0.0
+        }
+      },
+      {
+        "status": 0,
+        "options": {
+          "random_seed": 0,
+          "parallel": false,
+          "time_limit": 0.44799008406698704,
+          "mip_feasibility_tolerance": 1e-10,
+          "primal_feasibility_tolerance": 1e-10,
+          "dual_feasibility_tolerance": 1e-10,
+          "presolve": true
+        }
+      }
+    ]
+  },
+  {
+    "fixture": "m6p2c_seed0_origin3072_step18.json",
+    "executable": true,
+    "stage_a": "optimal",
+    "stage_b": "optimal",
+    "certificate": {
+      "passed": true,
+      "bound_residual": 0.0,
+      "integer_residual": 0.0,
+      "row_residual": 7.105427357601002e-15,
+      "tolerance": 1e-06
+    },
+    "solver_calls": [
+      {
+        "status": 0,
+        "options": {
+          "random_seed": 0,
+          "parallel": false,
+          "time_limit": 0.4814410840626806,
+          "mip_feasibility_tolerance": 1e-10,
+          "primal_feasibility_tolerance": 1e-10,
+          "dual_feasibility_tolerance": 1e-10,
+          "mip_rel_gap": 0.0,
+          "mip_abs_gap": 0.0
+        }
+      },
+      {
+        "status": 0,
+        "options": {
+          "random_seed": 0,
+          "parallel": false,
+          "time_limit": 0.45234149997122586,
+          "mip_feasibility_tolerance": 1e-10,
+          "primal_feasibility_tolerance": 1e-10,
+          "dual_feasibility_tolerance": 1e-10,
+          "presolve": true
+        }
+      }
+    ]
+  }
+]

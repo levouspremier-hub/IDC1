@@ -1,0 +1,8 @@
+{
+  "scope": "independent exact fixed column and always-true zero row algebra",
+  "columns": 320,
+  "rows": 463,
+  "zero_rows_exact_true": 1424,
+  "status": 2,
+  "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)"
+}

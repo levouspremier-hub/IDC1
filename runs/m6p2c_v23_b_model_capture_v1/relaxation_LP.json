@@ -1,0 +1,6 @@
+{
+  "scope": "independent original B continuous relaxation diagnostic",
+  "status": 0,
+  "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+  "constant_row_bad_count": 0
+}

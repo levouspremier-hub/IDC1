@@ -1,0 +1,6 @@
+{
+  "scope": "independent original rows plus exact binary scaled redundant rows",
+  "scale": 64.0,
+  "status": 2,
+  "message": "The problem is infeasible. (HiGHS Status 8: model_status is Infeasible; primal_status is None)"
+}

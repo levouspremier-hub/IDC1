@@ -1,0 +1,18 @@
+{
+  "scope": "independent fixed-certified-A-mode B diagnostic",
+  "status": 0,
+  "message": "Optimization terminated successfully. (HiGHS Status 7: Optimal)",
+  "original_certificate": {
+    "version": "canonical-integer-lexicographic-v1",
+    "passed": true,
+    "primal_tolerance": 1e-10,
+    "integer_representation_ulps": 8,
+    "integer_residual_before": 0.0,
+    "outside_machine_representation_bound": false,
+    "bound_residual": 0.0,
+    "row_residual": 7.105427357601002e-15,
+    "integer_residual_after": 0.0,
+    "reason": "certified"
+  },
+  "objective": 16.79064658426563
+}

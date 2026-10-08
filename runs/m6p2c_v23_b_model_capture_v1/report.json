@@ -1,0 +1,41 @@
+{
+  "executable": false,
+  "models": [
+    {
+      "status": 0,
+      "options": {
+        "random_seed": 0,
+        "parallel": false,
+        "time_limit": 0.4803122500889003,
+        "mip_feasibility_tolerance": 1e-10,
+        "primal_feasibility_tolerance": 1e-10,
+        "dual_feasibility_tolerance": 1e-10,
+        "mip_rel_gap": 0.0,
+        "mip_abs_gap": 0.0
+      },
+      "min_coefficient": 0.021168522422671872,
+      "max_coefficient": 957.2480432802147
+    },
+    {
+      "status": 2,
+      "options": {
+        "random_seed": 0,
+        "parallel": false,
+        "time_limit": 0.4315124158747494,
+        "mip_feasibility_tolerance": 1e-10,
+        "primal_feasibility_tolerance": 1e-10,
+        "dual_feasibility_tolerance": 1e-10,
+        "presolve": false
+      },
+      "min_coefficient": 0.021168522422671872,
+      "max_coefficient": 957.2480432802147
+    }
+  ],
+  "model_hashes": {
+    "model0.npz": "fe015d282e025939eb5be3cf23d87bc67def299269cc7c9a560ed66fb46bc23d",
+    "model1.npz": "be9133a4719d2ce8aae00c9f62bcfb94798d21f77fe9d93b0a8e3cbdf98b0bfe",
+    "originalB.npz": "417711fda99db43f1129045fc20f3abb5e70fe7a681caaa9deb7462bff462a3b"
+  },
+  "environment_steps": 0,
+  "parameter_updates": 0
+}
