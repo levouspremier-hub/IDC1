@@ -1,11 +1,11 @@
 {
   "run_id": "m6p2c_fixed_short_formal_launch_v1",
-  "revision": "393f826e761e42eb2183fd69269f55f4f79a5f7f",
+  "revision": "ad5dc36641dbefc7a5fe2eb9082acbfe3aadaa3c",
   "dependency_lock_hash": "8e6bd4a67311b32b2369b2f2b9c1fc8780214b59c452982ecddd2cf9cbe51e0a",
-  "data_hash": "20cf6766dac6770520fa8ca04518b932e426f7d4259ee38c390f30b11517dbec",
+  "data_hash": "021bd8b97b306f2e8ec6bf04a5dc8634087e7c12eab8c2626c4b540d6a1922a4",
   "scenario_hash": "bec45f02b5b86f552112a6eecf3c1ffbc2fb9937875a7360250d73ec0eabb2d2",
   "seed": 0,
-  "command": "actual unique v26 host fixed short running; host numeric132 passed and actual fresh seed0 process; qualification and formal not submitted",
+  "command": "independent native v26 short terminal actual CP, all optimizer states and RNG audit; same-source host qualification actual read-only gate; no local environment or optimizer updates",
   "status": "running",
   "failure_classification": null
 }
