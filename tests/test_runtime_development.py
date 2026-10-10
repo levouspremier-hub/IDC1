@@ -35,3 +35,36 @@ def test_interruption_has_a_terminal_artifact(tmp_path, monkeypatch):
 def test_freeze_requires_committed_source_and_complete_registered_boundary(tmp_path):
     with pytest.raises(ValueError, match='boundary'):
         development.freeze_after_preflight(tmp_path / 'report.json', 'v27')
+
+
+def test_successful_phase_exit_codes_cannot_bypass_missing_boundary_inputs(tmp_path, monkeypatch):
+    monkeypatch.setattr(development, 'execute', lambda *args: 0)
+    assert development.preflight('missing-boundary', base_dir=tmp_path) == 1
+    report = json.loads((tmp_path / 'missing-boundary/report.json').read_text())
+    assert report['state'] == 'failed' and 'six source-verified' in report['error']
+    assert not report['passed']
+
+
+def test_interrupt_terminates_only_the_owned_child_process_group(tmp_path, monkeypatch):
+    launched, signals = {}, []
+    class Process:
+        pid = 123456789
+        waits = 0
+        def wait(self, **kwargs):
+            self.waits += 1
+            if self.waits == 1:
+                raise KeyboardInterrupt
+            return -15
+        def terminate(self):
+            signals.append('single_process_only')
+        def kill(self):
+            signals.append('single_process_only')
+    def spawn(command, **kwargs):
+        launched.update(kwargs)
+        return Process()
+    monkeypatch.setattr(development.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(development.os, 'killpg', lambda pid, sig: signals.append((pid, sig)))
+    with pytest.raises(KeyboardInterrupt):
+        development.execute('gate', ['make', 'check'], tmp_path)
+    assert launched.get('start_new_session') is True
+    assert signals == [(123456789, development.signal.SIGTERM)]
