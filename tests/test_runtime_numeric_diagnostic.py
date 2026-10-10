@@ -89,3 +89,13 @@ def test_successful_anchor_extraction_rejects_divergent_reconstruction():
     validate_observation([1., 2.], [1., 2., .5, .5, 1.])
     with pytest.raises(ValueError, match='observation'):
         validate_observation([1., 2.], [1., 3., .5, .5, 1.])
+
+
+def test_preregistered_unavailable_boundary_inputs_are_counted_and_fail():
+    registry = diagnostic.load_registry()
+    assert len(diagnostic.cases_for('boundary', registry)) == 234
+    assert len(diagnostic.cases_for('all', registry)) == 377
+    unavailable = next(c for c in diagnostic.cases_for('boundary', registry)
+                       if c['fixture'].startswith('m6p2c_train_success_'))
+    with pytest.raises(ValueError, match='source-verified.*missing'):
+        diagnostic.evaluate_case(unavailable, registry, {'runtime_budget_s': .50})
