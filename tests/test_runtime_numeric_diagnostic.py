@@ -153,7 +153,8 @@ def test_exploratory_status_alone_never_authorizes_acceptance(category):
                                        'classification': category})['accepted']
 
 
-def test_diagnostic_run_reports_acceptance_separately_from_executable_success(tmp_path, monkeypatch):
+def test_diagnostic_run_reports_acceptance_separately_from_executable_success(
+        tmp_path, monkeypatch):
     from scripts.runtime_qualification import certify_interval_contradiction
     case = {'case_id': 'proved/interval', 'fixture': LATEST, 'variant': 'recorded',
             'expectation': 'exploratory', 'suite': 'boundary'}

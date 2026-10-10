@@ -48,8 +48,10 @@ def freeze_after_preflight(report_path, version):
     report = json.loads(Path(report_path).read_text())
     if report.get('passed') is not True or report.get('exit_code') != 0:
         raise ValueError('local preflight has not passed')
-    if report['scientific_binding']['source_sha256'] != scientific_binding()['source_sha256']:
-        raise ValueError('scientific source changed after local preflight')
+    current = scientific_binding()
+    for key in ('source_sha256', 'validation_sha256', 'dependency_lock_hash'):
+        if report['scientific_binding'].get(key) != current[key]:
+            raise ValueError('scientific source or validation inputs changed after local preflight')
     if not re.fullmatch(r'v[1-9][0-9]*', version):
         raise ValueError('invalid new candidate version')
     candidates = [build_candidate(budget) for budget in BUDGETS]
@@ -111,8 +113,10 @@ def preflight(run_id, *, base_dir=None, freeze_version=None):
             save()
             if code != 0:
                 raise ValueError(f'preflight stopped at {label}: exit {code}')
-        if scientific_binding()['source_sha256'] != binding['source_sha256']:
-            raise ValueError('scientific source changed during preflight')
+        current = scientific_binding()
+        if any(current[k] != binding[k] for k in (
+                'source_sha256', 'validation_sha256', 'dependency_lock_hash')):
+            raise ValueError('scientific source or validation inputs changed during preflight')
         if len(load_registry().get('successful_anchors', {})) != 6:
             raise ValueError('boundary expansion pending: six source-verified success anchors')
         report.update(passed=True, state='succeeded', exit_code=0)

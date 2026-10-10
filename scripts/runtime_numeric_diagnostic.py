@@ -255,16 +255,50 @@ def evaluate_case(case, registry, config):
     return row
 
 
+def accept_case(row):
+    """Diagnostic acceptance differs from executable success; fail closed on unknowns."""
+    from fractions import Fraction
+
+    from planning.numeric_contract import PRIMAL_WITNESS_TOLERANCE
+    expectation = row.get('expectation')
+    if expectation not in ('must_pass', 'exploratory'):
+        return {'accepted': False, 'reason': 'unregistered_expectation'}
+    if row.get('passed') is True and row.get('classification') == 'passed':
+        return {'accepted': True, 'reason': 'certified_executable'}
+    proof = row.get('diagnostic_infeasibility_certificate', {})
+    if (expectation == 'exploratory' and row.get('passed') is False
+            and row.get('classification') == 'model_or_fixed_integer_infeasible'
+            and proof.get('passed') is True
+            and proof.get('kind') == 'original_row_interval_contradiction-v1'
+            and re.fullmatch(r'[0-9a-f]{64}', str(proof.get('original_input_sha256', '')))
+            and proof['original_input_sha256'] == row.get('diagnostic_original_b_sha256')
+            and proof.get('primal_tolerance') == PRIMAL_WITNESS_TOLERANCE
+            and type(proof.get('row')) is int and proof['row'] >= 0):
+        try:
+            gap = Fraction(float(proof['lower'])) - Fraction(float(proof['upper']))
+            if gap > 2 * Fraction(PRIMAL_WITNESS_TOLERANCE):
+                return {'accepted': True, 'reason': 'proved_exploratory_infeasibility'}
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+    return {'accepted': False, 'reason': 'required_solution_or_infeasibility_proof_missing'}
+
+
 def scientific_binding():
     paths = sorted(set(source_paths()) | {'scripts/runtime_numeric_diagnostic.py',
                                          'scripts/runtime_numeric_anchor_extract.py',
                                          'scripts/runtime_development.py'})
     hashes = {p: sha(ROOT / p) for p in paths}
+    validation_paths = sorted(p for folder in ('tests', 'configs')
+                              for p in (ROOT / folder).rglob('*')
+                              if p.is_file() and p.suffix in ('.py', '.json', '.yaml', '.yml')
+                              and '__pycache__' not in p.parts)
+    validation = {str(p.relative_to(ROOT)): sha(p) for p in validation_paths}
     diff = subprocess.check_output(['git', 'diff', 'HEAD', '--', *paths], cwd=ROOT)
     return {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
                                            text=True).strip(),
             'file_hashes': hashes, 'source_sha256': digest(hashes),
             'diff_sha256': hashlib.sha256(diff).hexdigest(), 'dirty': bool(diff),
+            'validation_file_hashes': validation, 'validation_sha256': digest(validation),
             'dependency_lock_hash': sha(ROOT / 'uv.lock')}
 
 
@@ -343,6 +377,7 @@ def run(suite, run_id, *, base_dir=None):
             row.update(total_wall_s=time.perf_counter()-case_started,
                        scientific_source_sha256=binding['source_sha256'],
                        dependency_lock_hash=binding['dependency_lock_hash'])
+            row['acceptance'] = accept_case(row)
             case_folder = folder / 'cases'
             case_folder.mkdir(exist_ok=True)
             case_path = case_folder / (str(len(rows)).zfill(4) + '.json')
@@ -358,11 +393,13 @@ def run(suite, run_id, *, base_dir=None):
             save()
         final_binding = scientific_binding()
         if any(final_binding[k] != binding[k] for k in (
-                'source_sha256', 'diff_sha256', 'dependency_lock_hash')):
+                'source_sha256', 'diff_sha256', 'dependency_lock_hash', 'validation_sha256')):
             raise ValueError('scientific source changed during diagnostic')
-        report.update(state='succeeded' if all(r['passed'] for r in rows) else 'failed',
-                      passed=bool(rows) and all(r['passed'] for r in rows),
+        accepted = bool(rows) and all(r['acceptance']['accepted'] for r in rows)
+        report.update(state='succeeded' if accepted else 'failed',
+                      passed=accepted,
                       elapsed_s=time.perf_counter()-started, case_count=len(rows),
+                      accepted_count=sum(r['acceptance']['accepted'] for r in rows),
                       passed_count=sum(r['passed'] for r in rows))
         report['exit_code'] = 0 if report['passed'] else 1
     except BaseException as exc:

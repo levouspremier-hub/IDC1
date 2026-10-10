@@ -362,6 +362,29 @@ def reused_short_qualified(folder, path, seed):
     return True
 
 
+def certify_interval_contradiction(lower, upper, original_sha256):
+    """Prove one original row cannot satisfy BOTH sides even at certificate tolerance.
+
+    Use exact binary64 rationals for the comparison: an inverted interval of a
+    few ULPs is not proof that the frozen tolerant certificate is unsatisfiable.
+    This is an offline diagnostic, never a production acceptance substitute.
+    """
+    from fractions import Fraction
+
+    from planning.numeric_contract import PRIMAL_WITNESS_TOLERANCE
+    for i, (lo, hi) in enumerate(zip(lower, upper, strict=True)):
+        if (np.isfinite(lo) and np.isfinite(hi)
+                and Fraction(float(lo)) - Fraction(float(hi))
+                > 2 * Fraction(PRIMAL_WITNESS_TOLERANCE)):
+            return {'passed': True, 'kind': 'original_row_interval_contradiction-v1',
+                    'original_input_sha256': original_sha256, 'row': i,
+                    'lower': float(lo), 'upper': float(hi),
+                    'primal_tolerance': PRIMAL_WITNESS_TOLERANCE}
+    return {'passed': False, 'kind': 'original_row_interval_contradiction-v1',
+            'original_input_sha256': original_sha256,
+            'reason': 'no_interval_contradiction_beyond_certificate_tolerance'}
+
+
 def replay_numeric_case(working_snapshot, proposal, *, budget, name, variant, fixture, source,
                         diagnostic=False):
     """One production corrector call, shared by qualification and offline diagnostics."""
@@ -451,6 +474,15 @@ def replay_numeric_case(working_snapshot, proposal, *, budget, name, variant, fi
            'stage_a_solve_time_s': result.stage_a_solve_time_s,
            'stage_b_solve_time_s': result.stage_b_solve_time_s}
     if diagnostic and original_b:
+        matrix = original_b['matrix'].tocsr()
+        binding = hashlib.sha256()
+        for array in (matrix.shape, matrix.data, matrix.indices, matrix.indptr,
+                      original_b['lower'], original_b['upper'], original_b['bounds'].lb,
+                      original_b['bounds'].ub, original_b['integrality']):
+            binding.update(np.ascontiguousarray(array).tobytes())
+        row['diagnostic_original_b_sha256'] = binding.hexdigest()
+        row['diagnostic_infeasibility_certificate'] = certify_interval_contradiction(
+            original_b['lower'], original_b['upper'], binding.hexdigest())
         _, row['diagnostic_original_b_anchor_certificate'] = numeric_contract.certify_witness(
             original_b['anchor'], original_b['bounds'].lb, original_b['bounds'].ub,
             original_b['integrality'], original_b['matrix'], original_b['lower'],
