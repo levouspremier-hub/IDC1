@@ -6,19 +6,23 @@ SHELL := /bin/bash
 
 MAIN_CHAIN_DIRS := scenario contracts checkpointing planning safe_rl_v2 evaluation viz tests
 MAIN_CHAIN_FILES := idc_model/allocation.py safe_rl/corrector_wrapper.py runs/writer.py
+MAIN_CHAIN_FILES += scripts/runtime_qualification.py scripts/runtime_numeric_diagnostic.py
+MAIN_CHAIN_FILES += scripts/runtime_numeric_anchor_extract.py scripts/runtime_development.py
 MAIN_PY := $(shell find $(MAIN_CHAIN_DIRS) -name '*.py' -not -path '*/__pycache__/*' 2>/dev/null) $(foreach f,$(MAIN_CHAIN_FILES),$(wildcard $(f)))
 
 # 训练入口参数透传：make train TRAIN_ARGS='--synthetic-smoke --steps 8 --seed 0 --corrector off'
 TRAIN_ARGS ?=
 
-.PHONY: check test contract probe smoke train eval figures report
+.PHONY: static check test contract probe smoke train eval figures report
 
 # 主门禁：依次运行 ruff -> mypy -> pytest -m 'not slow'
-check:
+static:
 	@echo "== ruff check =="
 	@if [ -z "$(MAIN_PY)" ]; then echo "ruff: 无新主链文件（M1-M5 将加入）"; else uv run ruff check $(MAIN_PY); fi
 	@echo "== mypy =="
 	@if [ -z "$(MAIN_PY)" ]; then echo "mypy: 无新主链文件（M1-M5 将加入）"; else uv run mypy --explicit-package-bases $(MAIN_PY); fi
+
+check: static
 	@echo "== pytest -m 'not slow' =="
 	@uv run pytest -m 'not slow'; code=$$?; if [ $$code -eq 5 ]; then echo "pytest: 0 个测试被收集（M0.4 增加测试骨架）"; exit 0; else exit $$code; fi
 
