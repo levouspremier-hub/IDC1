@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from contracts.inventory import ArrivedServiceReserve
@@ -38,6 +40,10 @@ def power_upper_envelope(env, temperature):
 
 def _coupled_reserve(env, summaries, capacity, floor, order, temperature, arrival, margin):
     remaining = [dict(task) for task in summaries]
+    initial_work = [float(task['remaining_work']) for task in summaries]
+    cutoffs = [max(0, min(len(temperature), task['deadline'] - int(env.current_step)))
+               for task in summaries]
+    due_remaining = list(initial_work)
     schedule, bases, coefficients, powers, limits = [], [], [], [], []
     arrivals, served, backlog = [], [], [0.]
     for k, temp in enumerate(temperature):
@@ -60,15 +66,19 @@ def _coupled_reserve(env, summaries, capacity, floor, order, temperature, arriva
         served.append(aggregate_work)
         for i in range(len(summaries)):
             remaining[i]["remaining_work"] = max(
-                remaining[i]["remaining_work"] - float(matrix[i].sum()), 0.)
-    per_task = np.asarray(schedule).reshape(len(temperature), len(summaries), len(capacity))
-    end = per_task.sum(axis=(0, 2)).tolist()
-    due = []
-    shortfall = 0.
-    for i, task in enumerate(summaries):
-        cutoff = max(0, min(len(temperature), task["deadline"] - int(env.current_step)))
-        due.append(float(per_task[:cutoff, i].sum()))
-        shortfall += max(task["remaining_work"] - min(end[i], due[-1]), 0.)
+                remaining[i]["remaining_work"] - math.fsum(matrix[i]), 0.)
+            if k + 1 == cutoffs[i]:
+                due_remaining[i] = remaining[i]['remaining_work']
+    # Derive required service from the SAME outstanding-work ledger used to
+    # generate the schedule. Independently summing the group/time matrix can
+    # demand 27.000000000000004 units from a task with only 27, creating an
+    # inverted planner interval. This does not clamp a model constraint or
+    # alter allocation: an arrived task can only lose its original work.
+    end = [work - task['remaining_work'] for work, task in zip(
+        initial_work, remaining, strict=True)]
+    due = [work - rest for work, rest in zip(initial_work, due_remaining, strict=True)]
+    shortfall = math.fsum(max(task['remaining_work'], rest) for task, rest in zip(
+        remaining, due_remaining, strict=True))
     return ArrivedServiceReserve(
         version=env.terminal_service_guard_version, temperature_margin_c=margin,
         charge_limit_kw=limits[0], charge_limits_kw=limits,

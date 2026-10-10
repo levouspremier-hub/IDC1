@@ -8,7 +8,8 @@ from planning import service_guard
 
 
 def reserve(monkeypatch, *, work, rate, capacity, horizon, deadline):
-    env = SimpleNamespace(current_step=0, terminal_service_guard_version='arrived-service-reserve-v3',
+    env = SimpleNamespace(current_step=0,
+                          terminal_service_guard_version='arrived-service-reserve-v3',
                           bess_charge_power_max_kW=100., access_limit_kw=100.)
     monkeypatch.setattr(service_guard, 'power_upper_envelope',
                         lambda *args: (0., np.ones(len(capacity))))
