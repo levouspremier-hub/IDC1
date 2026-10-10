@@ -6,6 +6,35 @@ from scipy.sparse import csr_matrix
 from planning.numeric_contract import scale_constraint_rows
 
 
+def test_row_scaling_is_exactly_reversible_for_normal_binary64_values():
+    matrix = csr_matrix([[50000.00000641581, -.024999987500006246, 1.],
+                         [3.141592653589793, 2e-10, 0.]])
+    lo = np.array([1.835836989154186, -np.inf])
+    hi = np.array([1.835836989154186, 5.00000000001])
+    scaled, lower, upper, audit = scale_constraint_rows(matrix, lo, hi)
+    factors = np.array(audit['factors'])
+    assert np.array_equal(scaled.toarray() / factors[:, None], matrix.toarray())
+    assert np.array_equal(lower / factors, lo)
+    assert np.array_equal(upper / factors, hi)
+
+
+def test_latest_full_discharge_uses_the_original_objective_and_certificate():
+    import json
+    from pathlib import Path
+
+    from contracts.inventory import InventorySnapshot
+    from contracts.models import DispatchProposal
+    from planning.corrector import correct
+    case = json.loads((Path(__file__).parent / 'fixtures' /
+                       'm6p2c_seed0_origin9744_step44.json').read_text())
+    result = correct(InventorySnapshot.model_validate(case['snapshot']),
+                     DispatchProposal(compute_actions=[1.] * 20, storage_action=1.),
+                     time_limit_s=.50)
+    assert result.executable and result.stage_b_status == 'optimal'
+    assert result.inventory_audit['execution_witness']['passed']
+    assert result.inventory_audit['primary_objective_certificate']['passed']
+
+
 @pytest.mark.parametrize(('matrix', 'lower', 'upper'), [
     ([[np.inf]], [0.], [1.]), ([[np.nan]], [0.], [1.]),
     ([[1.]], [np.nan], [1.]), ([[1.]], [0.], [np.nan]),
