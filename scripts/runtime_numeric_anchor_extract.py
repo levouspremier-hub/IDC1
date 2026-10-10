@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import signal
 import time
 
 import numpy as np
@@ -33,6 +35,8 @@ def validate_observation(observed, recorded):
 
 
 def extract(run_id):
+    if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,159}', run_id):
+        raise ValueError('invalid extraction run id')
     registry = load_registry()
     entry = registry['fixtures'][registry['latest']]
     fixture = load_fixture(registry['latest'], entry)
@@ -66,6 +70,7 @@ def extract(run_id):
     started = time.perf_counter()
     save()
     pending = []
+    cursor = 0
     try:
         cursor = 0
         final_snapshot = None
@@ -108,19 +113,33 @@ def extract(run_id):
                          'source_transition_index': item['source_transition_index'],
                          'horizon': item['snapshot']['planning_horizon_steps'],
                          'soc_kwh': item['snapshot']['soc_kwh']})
+        report['anchor_registry'] = {
+            row['fixture']: {'sha256': row['sha256'], 'kind': 'successful_trace',
+                             'source_path': entry['source_path'],
+                             'source_failure_sha256': entry['source_failure_sha256'],
+                             'source_transition_index': item['source_transition_index'],
+                             'snapshot_sha256': digest(item['snapshot']),
+                             'source_injection_hash': historical['origin_provenance'][
+                                 str(item['origin'])]}
+            for row, (_, item) in zip(rows, pending, strict=True)}
         report.update(passed=True, state='succeeded', executed_historical_actions=cursor,
                       reconstructed_failure_snapshot_equal=True,
                       elapsed_s=time.perf_counter()-started,
                       exit_code=0)
-    except Exception as exc:
-        report.update(state='failed', error=f'{type(exc).__name__}: {exc}',
-                      elapsed_s=time.perf_counter()-started, exit_code=1)
+    except BaseException as exc:
+        interrupted = isinstance(exc, (KeyboardInterrupt, SystemExit))
+        report.update(state='interrupted' if interrupted else 'failed',
+                      error=f'{type(exc).__name__}: {exc}', executed_historical_actions=cursor,
+                      elapsed_s=time.perf_counter()-started, exit_code=130 if interrupted else 1)
     save()
     print(json.dumps({k: report.get(k) for k in ('state', 'error', 'elapsed_s', 'exit_code')}))
     return report['exit_code']
 
 
 def main():
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupt)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run-id', required=True)
     return extract(parser.parse_args().run_id)

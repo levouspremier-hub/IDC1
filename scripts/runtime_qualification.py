@@ -456,7 +456,12 @@ def replay_numeric_case(working_snapshot, proposal, *, budget, name, variant, fi
             original_b['integrality'], original_b['matrix'], original_b['lower'],
             original_b['upper'])
         row['diagnostic_original_b_anchor_certificate']['scope'] = (
-            'original unscaled B feasibility only; never substituted into production')
+            'original unscaled B 1e-10 certificate only; never substituted into production')
+        row['diagnostic_original_b_interval_contradictions'] = [
+            {'row': int(i), 'lower': float(original_b['lower'][i]),
+             'upper': float(original_b['upper'][i]),
+             'gap': float(original_b['lower'][i] - original_b['upper'][i])}
+            for i in np.flatnonzero(original_b['lower'] > original_b['upper'])]
     return row
 
 

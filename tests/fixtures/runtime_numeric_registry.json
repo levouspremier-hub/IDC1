@@ -1,73 +1,132 @@
 {
-  "version": "runtime-numeric-diagnostic-v1",
+  "version": "runtime-numeric-diagnostic-v2",
   "seed": 20261010,
   "latest": "m6p2c_seed0_origin9744_step44.json",
   "fixtures": {
     "m6p2c_seed1_origin9120_step18.json": {
       "sha256": "dc949f2b3de427280fcfa214df4f43dfb8c83e8a6c29f62ae961340cf97c3c94",
       "source_failure_sha256": "1d7292ea79821cb4efe2d82dd63bc1e01c1d7f55bcf26d6d9d728441ea5fd88a",
-      "source_path": "runs/remote_runtime-formal-three-seed-v2-v10-r2/runs/m6p2c_formal_train_seed1_v2_v10/failed_batch.json"
+      "source_path": "runs/remote_runtime-formal-three-seed-v2-v10-r2/runs/m6p2c_formal_train_seed1_v2_v10/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin1008_step18.json": {
       "sha256": "7db4d4dd155b800583a686a9259ddf56d29e4bfe9fc89e7bac84ee7e95762908",
       "source_failure_sha256": "b0be5998f5340df53a1b238d08265866da8772e28d5b71e4453ffc18a26fcaf4",
-      "source_path": "runs/remote_runtime-formal-three-seed-v3-v11/runs/m6p2c_formal_train_seed1_v3_v11/failed_batch.json"
+      "source_path": "runs/remote_runtime-formal-three-seed-v3-v11/runs/m6p2c_formal_train_seed1_v3_v11/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin7584_step1.json": {
       "sha256": "04084abe3ba3f590b77aaadbe8106b47a4b8fb3d5eed570d92bed9af47925fa4",
       "source_failure_sha256": "a2e73b204e4bf0e4c2f61392c3d0e014adbabb5306d1fb37e647c3e5ea919aa8",
-      "source_path": "runs/remote_runtime-formal-three-seed-v4-v12/runs/m6p2c_formal_train_seed1_v4_v12/failed_batch.json"
+      "source_path": "runs/remote_runtime-formal-three-seed-v4-v12/runs/m6p2c_formal_train_seed1_v4_v12/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed0_origin6192_step47.json": {
       "sha256": "9d85de2bdc2dd0ff34caf21af0214572c4e0c17d47fc1397c1235457b3403ed2",
       "source_failure_sha256": "4db1588da008ee2c344bac3f6322ef64be66f36000afde2f2892bfcacdc9f7d2",
-      "source_path": "runs/remote_runtime-formal-three-seed-v6-v14/runs/m6p2c_formal_train_seed0_v6_v14/failed_batch.json"
+      "source_path": "runs/remote_runtime-formal-three-seed-v6-v14/runs/m6p2c_formal_train_seed0_v6_v14/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed0_origin384_step36.json": {
       "sha256": "75f0a446ed2a065eb9213fe99fef7ebabf63c4c0d96cf0d3e412dd29a909bd31",
       "source_failure_sha256": "437352409ff9ac4925ab95a08deff5247385b186beffa822d0c9c70148b99b88",
-      "source_path": "runs/remote_runtime-fixed-short-v18-v1/runs/runtime_v18_fixed_short_seed0/failed_batch.json"
+      "source_path": "runs/remote_runtime-fixed-short-v18-v1/runs/runtime_v18_fixed_short_seed0/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed0_origin480_step45.json": {
       "sha256": "63a45f40e2a79175e450e1fc097ba4400715d4a107ff34149b4ba1984b0ef1c5",
       "source_failure_sha256": "9bbf0d8829d27eb6bc88efea61ead956b21dc7dfcf7c3bedad2615171fee181d",
-      "source_path": "runs/remote_runtime-fixed-short-v19-v1/runs/runtime_v19_fixed_short_seed0/failed_batch.json"
+      "source_path": "runs/remote_runtime-fixed-short-v19-v1/runs/runtime_v19_fixed_short_seed0/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin576_step44.json": {
       "sha256": "babe5d1d37c3f53f7494bc7028baf6092447b90b711cc8831fcfc41207a99a3b",
       "source_failure_sha256": "5f7e0b726b76bbc1dafd4160e9a1fbef182ae0596308e0db2b3b9de9fef23f19",
-      "source_path": "runs/remote_runtime-fixed-short-v20-v1-r2/runs/runtime_v20_fixed_short_seed1/failed_batch.json"
+      "source_path": "runs/remote_runtime-fixed-short-v20-v1-r2/runs/runtime_v20_fixed_short_seed1/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin1968_step18.json": {
       "sha256": "dd2558418e89d67b6cea7fc4f0ed9da48c5875b8c656846848e1e97baeab7417",
       "source_failure_sha256": "23078430e114556d43d7d75ec31b354b3601434ad9784ed28fa80974e8509824",
-      "source_path": "runs/remote_runtime-campaign-qualification-v21-r2/runs/runtime_campaign_qualification_v21_r2_050_coverage_seed1/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v21-r2/runs/runtime_campaign_qualification_v21_r2_050_coverage_seed1/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin6336_step2.json": {
       "sha256": "fb7467b64c6e52636b27164a63815a112bd5338395bb61ca22c6146be0b02932",
       "source_failure_sha256": "8cd027cb1bceec7ae972352e9614fdbb023e9583f948a51bf60cd2471c8d95a2",
-      "source_path": "runs/remote_runtime-campaign-qualification-v22/runs/runtime_campaign_qualification_v22_050_coverage_seed1/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v22/runs/runtime_campaign_qualification_v22_050_coverage_seed1/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed0_origin3072_step18.json": {
       "sha256": "5d1e36bd855bdec242b6c0955675587dd119d4232b7daea036deee8e1c4a26ce",
       "source_failure_sha256": "332ac2b9dabbcda3942df1788084b824829a29d5dfebbd3046de24498e8d9333",
-      "source_path": "runs/remote_runtime-campaign-qualification-v23/runs/runtime_campaign_qualification_v23_050_coverage_seed0/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v23/runs/runtime_campaign_qualification_v23_050_coverage_seed0/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed1_origin2544_step23.json": {
       "sha256": "0f78ee2ce3bbc16c314204623b6a2b3294a82581923af68b738eefccb968070f",
       "source_failure_sha256": "8abf2df9248a47164bfba3dbd923908b0e90e9642259a3165cf07b83b670675a",
-      "source_path": "runs/remote_runtime-campaign-qualification-v24/runs/runtime_campaign_qualification_v24_050_coverage_seed1/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v24/runs/runtime_campaign_qualification_v24_050_coverage_seed1/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed2_origin8496_step6.json": {
       "sha256": "cc350e2561416d3f800b141546e89bf799065f84a5b3936779d6bab789710dfe",
       "source_failure_sha256": "df44621409911d0be41f26d02efb7c83b095150180718b1dcee220a50596d2a5",
-      "source_path": "runs/remote_runtime-campaign-qualification-v25/runs/runtime_campaign_qualification_v25_050_coverage_seed2/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v25/runs/runtime_campaign_qualification_v25_050_coverage_seed2/failed_batch.json",
+      "kind": "historical_failure"
     },
     "m6p2c_seed0_origin9744_step44.json": {
       "sha256": "4c9e6877e401dcf4e4438213fee330dc2c850c300febf8261cef4eb4ccd95f16",
       "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
-      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json"
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "kind": "historical_failure"
     }
   },
-  "boundary_rule": "original training snapshots; SOC endpoint/target inward ULP and \u00b1nano; tiny raw signed storage; conservative network headroom perturbation; unchanged tasks/forecast/episode horizon; exploratory; no feasibility presumption"
+  "boundary_rule": "original training snapshots; SOC endpoint/target inward ULP and \u00b1nano; tiny raw signed storage; conservative network headroom perturbation; unchanged tasks/forecast/episode horizon; exploratory; no feasibility presumption; joint headroom capacity never exceeds original snapshot access_limit_kw",
+  "successful_anchor_plan": {
+    "m6p2c_train_success_origin9696_step44.json": {
+      "origin": 9696,
+      "step": 44,
+      "source_transition_index": 92,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    },
+    "m6p2c_train_success_origin9696_step45.json": {
+      "origin": 9696,
+      "step": 45,
+      "source_transition_index": 93,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    },
+    "m6p2c_train_success_origin9696_step47.json": {
+      "origin": 9696,
+      "step": 47,
+      "source_transition_index": 95,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    },
+    "m6p2c_train_success_origin9744_step0.json": {
+      "origin": 9744,
+      "step": 0,
+      "source_transition_index": 96,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    },
+    "m6p2c_train_success_origin9744_step18.json": {
+      "origin": 9744,
+      "step": 18,
+      "source_transition_index": 114,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    },
+    "m6p2c_train_success_origin9744_step43.json": {
+      "origin": 9744,
+      "step": 43,
+      "source_transition_index": 139,
+      "required_source_fixture": "m6p2c_seed0_origin9744_step44.json",
+      "state": "source_verification_pending"
+    }
+  },
+  "successful_anchors": {},
+  "boundary_rule_version": "capacity-nonrelaxing-fixed-train-boundaries-v2"
 }

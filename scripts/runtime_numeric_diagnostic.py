@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -23,6 +24,11 @@ from scenario.runtime_release import NUMERIC_VARIANTS, candidate_config, source_
 from scripts.runtime_qualification import replay_numeric_case
 
 REGISTRY = ROOT / 'tests/fixtures/runtime_numeric_registry.json'
+CLASSIFICATIONS = ('model_or_fixed_integer_infeasible',
+                   'solver_missed_certified_feasible_witness',
+                   'original_matrix_certificate_failure', 'a_objective_bound_certificate_failure',
+                   'b_objective_certificate_failure', 'timeout', 'input_source_contract_failure',
+                   'unattributed', 'passed')
 BOUNDARY_VARIANTS = ('soc_min', 'soc_min_inward_ulp', 'soc_max', 'soc_max_inward_ulp',
                      'target_minus_ulp', 'target_plus_ulp', 'target_minus_nano',
                      'target_plus_nano', 'tiny_charge', 'tiny_discharge',
@@ -36,7 +42,7 @@ def digest(value):
 
 def load_registry():
     registry = json.loads(REGISTRY.read_text())
-    if registry['version'] != 'runtime-numeric-diagnostic-v1' or not registry['fixtures']:
+    if registry['version'] != 'runtime-numeric-diagnostic-v2' or not registry['fixtures']:
         raise ValueError('invalid numeric registry')
     return registry
 
@@ -81,10 +87,31 @@ def load_fixture(name, entry, *, fixture_dir=None):
     source = (ROOT / entry['source_path']).resolve()
     if not source.is_relative_to(ROOT) or sha(source) != entry['source_failure_sha256']:
         raise ValueError('failure file hash mismatch: ' + name)
-    historical = json.loads(source.read_text())['failure_step']
-    if (historical['snapshot'] != fixture['snapshot']
-            or historical['proposal'] != fixture['proposal']):
-        raise ValueError('fixture differs from bound historical failure: ' + name)
+    original = json.loads(source.read_text())
+    if entry['kind'] == 'historical_failure':
+        historical = original['failure_step']
+        if (historical['snapshot'] != fixture['snapshot']
+                or historical['proposal'] != fixture['proposal']):
+            raise ValueError('fixture differs from bound historical failure: ' + name)
+    elif entry['kind'] == 'successful_trace':
+        index = entry['source_transition_index']
+        if not 0 <= index < len(original['partial_transitions']):
+            raise ValueError('successful trace index is invalid')
+        historical = original['partial_transitions'][index]
+        raw = historical['raw_action']
+        origin = list(map(int, original['origin_provenance']))[index // 48]
+        if (fixture['origin'] != origin or fixture['source_transition_index'] != index
+                or fixture['snapshot']['step'] != index % 48):
+            raise ValueError('successful trace origin or step mismatch')
+        if (fixture['proposal']['compute_actions'] != raw[:20]
+                or fixture['proposal']['storage_action'] != raw[-1]
+                or not historical['correction_info']['correction_executable']):
+            raise ValueError('successful trace proposal or execution mismatch')
+        if (digest(fixture['snapshot']) != entry['snapshot_sha256']
+                or original['origin_provenance'][str(origin)] != entry['source_injection_hash']):
+            raise ValueError('successful trace snapshot or injection hash mismatch')
+    else:
+        raise ValueError('unregistered fixture source kind')
     if len(historical['raw_action']) != 21 or not np.all(np.isfinite(historical['raw_action'])):
         raise ValueError('historical raw action is incomplete: ' + name)
     fixture['historical_raw_action'] = historical['raw_action']
@@ -103,7 +130,11 @@ def cases_for(suite, registry):
                               'variant': variant, 'expectation': 'must_pass', 'suite': 'history'})
     if suite in ('boundary', 'all'):
         # All original horizons are retained: H=1,3,4,12,25,30,42,46,47.
-        for name in names:
+        for name in names + list(registry['successful_anchor_plan']):
+            if name in registry['successful_anchor_plan']:
+                cases.append({'case_id': name[:-5] + '/recorded', 'fixture': name,
+                              'variant': 'recorded', 'expectation': 'must_pass',
+                              'suite': 'boundary'})
             for variant in BOUNDARY_VARIANTS:
                 cases.append({'case_id': name[:-5] + '/boundary_' + variant,
                               'fixture': name, 'variant': variant,
@@ -152,7 +183,7 @@ def case_input(fixture, variant):
                           guard['reserve_power_coefficients_kw_per_work'],
                           guard['known_service_allocation'], guard['aggregate_service_work'],
                           strict=True)]
-            s['access_limit_kw'] = max(powers) + 1e-10
+            s['access_limit_kw'] = min(s['access_limit_kw'], max(powers) + 1e-10)
             guard['charge_limits_kw'] = [min(s['bess_charge_power_max_kw'],
                                             max(s['access_limit_kw'] - power, 0.))
                                         for power in powers]
@@ -181,6 +212,8 @@ def classify(row):
     if row['passed'] and all(audit.get(k, {}).get('passed') is True for k in (
             'stage_a_witness', 'execution_witness', 'primary_objective_certificate')):
         return 'passed'
+    if row.get('diagnostic_original_b_interval_contradictions'):
+        return 'model_or_fixed_integer_infeasible'
     if row.get('diagnostic_original_b_anchor_certificate', {}).get('passed') is True:
         return 'solver_missed_certified_feasible_witness'
     # No inference of genuine infeasibility or solver misclassification from status alone.
@@ -189,7 +222,10 @@ def classify(row):
 
 def evaluate_case(case, registry, config):
     name = case['fixture']
-    fixture = load_fixture(name, registry['fixtures'][name])
+    entry = registry['fixtures'].get(name) or registry.get('successful_anchors', {}).get(name)
+    if entry is None:
+        raise ValueError('source-verified boundary input missing: ' + name)
+    fixture = load_fixture(name, entry)
     data = case_input(fixture, case['variant'])
     validate_fixture(data)
     row = replay_numeric_case(InventorySnapshot.model_validate(data['snapshot']),
@@ -221,7 +257,8 @@ def evaluate_case(case, registry, config):
 
 def scientific_binding():
     paths = sorted(set(source_paths()) | {'scripts/runtime_numeric_diagnostic.py',
-                                         'scripts/runtime_numeric_anchor_extract.py'})
+                                         'scripts/runtime_numeric_anchor_extract.py',
+                                         'scripts/runtime_development.py'})
     hashes = {p: sha(ROOT / p) for p in paths}
     diff = subprocess.check_output(['git', 'diff', 'HEAD', '--', *paths], cwd=ROOT)
     return {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT,
@@ -237,15 +274,39 @@ def run(suite, run_id, *, base_dir=None):
     root = ROOT / 'runs' if base_dir is None else Path(base_dir)
     folder = root / run_id
     folder.mkdir(parents=True, exist_ok=False)
-    config = candidate_config(.50)
-    binding = scientific_binding()
-    registry = load_registry()
+    binding = None
+    try:
+        binding = scientific_binding()
+        config = candidate_config(.50)
+        registry = load_registry()
+    except Exception as exc:
+        error = f'{type(exc).__name__}: {exc}'
+        def available_hash(path):
+            return sha(path) if path.is_file() else None
+        write_run(run_id, base_dir=str(root), config={'suite': suite,
+                  'requested_budget_s': .50, 'execution_config_available': False},
+                  metrics=pd.DataFrame([{'phase': 'bootstrap', 'passed': False, 'error': error}]),
+                  report={'state': 'failed', 'passed': False, 'exit_code': 1, 'error': error,
+                          'classification': 'input_source_contract_failure', 'case_count': 0,
+                          'scientific_binding': binding, 'parameter_updates': 0,
+                          'environment_steps': 0, 'formal_training_ready': False},
+                  status='failed', failure_classification='input_source_contract_failure',
+                  command=' '.join(sys.argv), dependency_lock_hash=available_hash(ROOT / 'uv.lock'),
+                  data_hash=available_hash(
+                      ROOT / 'data/processed/singapore_2024/half_hour.parquet'),
+                  scenario_hash=available_hash(ROOT / 'data/manifest/formal_splits_v5/train.json'),
+                  manifest_metadata={'scientific_binding': binding, 'diagnostic_only': True})
+        print(json.dumps({'state': 'failed', 'exit_code': 1, 'error': error}), flush=True)
+        return 1
     rows = []
     report = {'state': 'running', 'passed': False, 'observations': rows, 'suite': suite,
               'scientific_binding': binding, 'registry_sha256': sha(REGISTRY),
               'parameter_updates': 0, 'environment_steps': 0, 'train_only': True,
               'formal_training_ready': False, 'diagnostic_only': True,
               'classification_note': 'infeasible status is unattributed without a proof',
+              'classification_taxonomy': CLASSIFICATIONS,
+              'certificate_scope_note': 'Original 1e-10 certificate acceptance is preserved; '
+              'an empty encoded interval is reported separately; no physical unreachability claim.',
               'exit_code': None}
     def save():
         write_run(run_id, base_dir=str(root), config={'config': config, 'registry': registry},
@@ -271,7 +332,14 @@ def run(suite, run_id, *, base_dir=None):
                     exc, (ValueError, KeyError, FileNotFoundError)) else 'unattributed'
                 row = {**case, 'passed': False, 'classification': category,
                        'failure_stage': 'input_or_runtime_exception',
-                       'error': f'{type(exc).__name__}: {exc}'}
+                       'error': f'{type(exc).__name__}: {exc}', 'input_sha256': None,
+                       'input_complete': False, 'certificate_performed': False,
+                       'seed': int(case['variant'][-1]) if case['variant'].startswith('sample')
+                       else 0}
+                origin_name = registry['successful_anchor_plan'].get(case['fixture'], {}).get(
+                    'required_source_fixture', case['fixture'])
+                row['declared_source_failure_sha256'] = registry['fixtures'][origin_name][
+                    'source_failure_sha256']
             row.update(total_wall_s=time.perf_counter()-case_started,
                        scientific_source_sha256=binding['source_sha256'],
                        dependency_lock_hash=binding['dependency_lock_hash'])
@@ -308,6 +376,9 @@ def run(suite, run_id, *, base_dir=None):
 
 
 def main():
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, interrupt)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', required=True, choices=('latest', 'history', 'boundary', 'all'))
     parser.add_argument('--run-id', required=True)
