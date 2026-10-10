@@ -181,6 +181,7 @@ marl/**/*.pyc
 
 # Project transfer index and historical root audit archive.
 !docs/PROJECT_TRANSFER.md
+!docs/PROJECT_HANDOFF_2026-10-10.md
 !docs/archive/
 !docs/archive/2026-08-14/
 !docs/archive/2026-08-14/*.md
