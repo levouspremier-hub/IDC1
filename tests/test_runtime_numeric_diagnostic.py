@@ -32,7 +32,8 @@ def test_latest_precedes_all_history_and_boundary_is_fixed():
     boundary = diagnostic.cases_for('boundary', registry)
     assert boundary == diagnostic.cases_for('boundary', registry)
     assert len({c['case_id'] for c in boundary}) == len(boundary)
-    assert all(c['expectation'] == 'exploratory' for c in boundary)
+    assert sum(c['expectation'] == 'must_pass' for c in boundary) == 6
+    assert sum(c['expectation'] == 'exploratory' for c in boundary) == 228
 
 
 def test_certificate_failure_cannot_become_a_success():
@@ -62,8 +63,9 @@ def test_original_9744_failure_is_directly_reproducible(monkeypatch):
     case = diagnostic.cases_for('latest', registry)[0]
     row = diagnostic.evaluate_case(case, registry, candidate_config(.50))
     assert not row['passed']
-    assert row['classification'] == 'solver_missed_certified_feasible_witness'
+    assert row['classification'] == 'model_or_fixed_integer_infeasible'
     assert row['diagnostic_original_b_anchor_certificate']['passed']
+    assert row['diagnostic_original_b_interval_contradictions']
     assert row['stage_b_status'] == 'infeasible'
     assert row['inventory_audit']['stage_a_witness']['passed']
     assert row['input_sha256'] and row['solver_calls']
@@ -99,3 +101,16 @@ def test_preregistered_unavailable_boundary_inputs_are_counted_and_fail():
                        if c['fixture'].startswith('m6p2c_train_success_'))
     with pytest.raises(ValueError, match='source-verified.*missing'):
         diagnostic.evaluate_case(unavailable, registry, {'runtime_budget_s': .50})
+
+
+def test_invalid_registry_bootstrap_still_has_a_failed_five_artifact_run(tmp_path, monkeypatch):
+    def invalid_registry():
+        raise ValueError('registry schema is invalid')
+    monkeypatch.setattr(diagnostic, 'load_registry', invalid_registry)
+    assert diagnostic.run('latest', 'invalid-registry', base_dir=tmp_path) == 1
+    folder = tmp_path / 'invalid-registry'
+    assert all((folder / name).exists() for name in (
+        'config.yaml', 'metrics.parquet', 'report.json', 'manifest.json', 'figures'))
+    report = json.loads((folder / 'report.json').read_text())
+    assert report['state'] == 'failed' and report['exit_code'] == 1
+    assert report['case_count'] == 0 and report['parameter_updates'] == 0
