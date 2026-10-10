@@ -1,7 +1,6 @@
 """Diagnostic failures are evidence, never release authorization."""
 import copy
 import json
-from pathlib import Path
 
 import pytest
 
@@ -54,13 +53,17 @@ def test_certificate_failure_cannot_become_a_success():
 def test_original_9744_failure_is_directly_reproducible(monkeypatch):
     from planning import numeric_contract
     from scenario.runtime_release import candidate_config
+    original_translate = numeric_contract.translate_continuous_origin
+    monkeypatch.setattr(numeric_contract, 'translate_continuous_origin',
+                        lambda a, i, b, m, lo, hi, **kw: original_translate(a, i, b, m, lo, hi))
     monkeypatch.setattr(numeric_contract, 'scale_constraint_rows',
-                        lambda m, lo, hi: (m, lo, hi, {'version': 'disabled-for-test'}))
+                        lambda m, lo, hi, **kw: (m, lo, hi, {'version': 'disabled-for-test'}))
     registry = diagnostic.load_registry()
     case = diagnostic.cases_for('latest', registry)[0]
     row = diagnostic.evaluate_case(case, registry, candidate_config(.50))
     assert not row['passed']
-    assert row['classification'] == 'unattributed'
+    assert row['classification'] == 'solver_missed_certified_feasible_witness'
+    assert row['diagnostic_original_b_anchor_certificate']['passed']
     assert row['stage_b_status'] == 'infeasible'
     assert row['inventory_audit']['stage_a_witness']['passed']
     assert row['input_sha256'] and row['solver_calls']
@@ -79,3 +82,10 @@ def test_source_mismatch_is_terminal_and_all_artifacts_exist(tmp_path, monkeypat
     assert report['observations'][0]['classification'] == 'input_source_contract_failure'
     assert report['scientific_binding']['file_hashes']['planning/model.py']
     assert report['parameter_updates'] == 0
+
+
+def test_successful_anchor_extraction_rejects_divergent_reconstruction():
+    from scripts.runtime_numeric_anchor_extract import validate_observation
+    validate_observation([1., 2.], [1., 2., .5, .5, 1.])
+    with pytest.raises(ValueError, match='observation'):
+        validate_observation([1., 2.], [1., 3., .5, .5, 1.])
