@@ -76,3 +76,27 @@ def test_fractional_rates_cannot_accumulate_more_than_their_exact_capacity(
     assert Fraction(actual) <= horizon * Fraction(rate)
     assert result.known_service_required_due_work == [actual]
     assert actual > 0.
+
+
+@pytest.mark.parametrize('rate', [.1, .3, 1.7, 27.])
+def test_derived_progress_bounds_are_valid_for_exact_rate_arithmetic(rate):
+    from fractions import Fraction
+    # Check every prefix of all registered horizon lengths against exact inputs.
+    for horizon in range(1, 49):
+        total = horizon * Fraction(rate)
+        end = float(total)
+        if Fraction(end) > total:
+            end = float(np.nextafter(end, -np.inf))
+        for k in range(horizon):
+            lo, hi = service_guard.service_progress_bounds(
+                2000., rate, end, end, horizon, horizon, k)
+            exact_lo = max(Fraction(0), Fraction(end) - (horizon-k-1)*Fraction(rate))
+            exact_hi = (k+1)*Fraction(rate)
+            assert Fraction(lo) <= exact_lo <= exact_hi <= Fraction(hi)
+            assert lo <= hi
+
+
+def test_progress_bounds_do_not_hide_an_inconsistent_original_requirement():
+    lo, hi = service_guard.service_progress_bounds(
+        27., 27., float(np.nextafter(27., np.inf)), 27., 1, 1, 0)
+    assert lo > hi
