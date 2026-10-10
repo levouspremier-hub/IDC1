@@ -362,15 +362,110 @@ def reused_short_qualified(folder, path, seed):
     return True
 
 
-def numerics(run_id, path):
-    """Fixed failure inputs plus registered action variants, without env or PPO."""
+def replay_numeric_case(working_snapshot, proposal, *, budget, name, variant, fixture, source,
+                        diagnostic=False):
+    """One production corrector call, shared by qualification and offline diagnostics."""
     import hashlib
 
     import scipy.optimize
 
+    from planning import numeric_contract
+    from planning.corrector import correct
+    real_milp = scipy.optimize.milp
+    real_linprog = scipy.optimize.linprog
+    real_translate = numeric_contract.translate_continuous_origin
+    original_b = {}
+    def observe_translate(anchor, integrality, bounds, matrix, lower, upper, **kwargs):
+        original_b.update(anchor=anchor.copy(), integrality=integrality.copy(),
+                          bounds=bounds, matrix=matrix.copy(), lower=lower.copy(),
+                          upper=upper.copy())
+        return real_translate(anchor, integrality, bounds, matrix, lower, upper, **kwargs)
+    calls = []
+    polish_calls = []
+    def observe(_calls=calls, **kwargs):
+        con = kwargs['constraints'][0]
+        matrix = con.A.tocsr()
+        arrays = {'data': matrix.data, 'indices': matrix.indices,
+                  'indptr': matrix.indptr, 'lb': kwargs['bounds'].lb,
+                  'ub': kwargs['bounds'].ub, 'clb': con.lb, 'cub': con.ub,
+                  'objective': kwargs['c'], 'integrality': kwargs['integrality']}
+        _calls.append({'options': dict(kwargs['options']),
+                      'matrix_shape': list(matrix.shape),
+                      'mathematical_input_hashes': {
+                          key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
+                          for key, value in arrays.items()}})
+        started_call = time.perf_counter()
+        result = real_milp(**kwargs)
+        _calls[-1].update(elapsed_s=time.perf_counter()-started_call,
+                         status=int(result.status), message=str(result.message),
+                         objective_value=getattr(result, 'fun', None),
+                         dual_bound=getattr(result, 'mip_dual_bound', None),
+                         solution=None if result.x is None else result.x.tolist())
+        return result
+    def observe_polish(_calls=polish_calls, **kwargs):
+        arrays = {'objective': kwargs['c'], 'bounds': kwargs['bounds'],
+                  'equality_rhs': kwargs['b_eq'],
+                  'inequality_rhs': kwargs['b_ub']}
+        for label in ('A_eq', 'A_ub'):
+            sparse = kwargs[label].tocsr()
+            arrays.update({label+'_'+key: getattr(sparse, key)
+                           for key in ('data', 'indices', 'indptr')})
+        _calls.append({'method': kwargs['method'],
+                       'options': dict(kwargs['options']),
+                       'mathematical_input_hashes': {
+                           key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
+                           for key, value in arrays.items()}})
+        started_call = time.perf_counter()
+        result = real_linprog(**kwargs)
+        _calls[-1].update(elapsed_s=time.perf_counter()-started_call,
+                         status=int(result.status), message=str(result.message),
+                         objective_value=getattr(result, 'fun', None),
+                         solution=None if result.x is None else result.x.tolist())
+        return result
+    scipy.optimize.milp = observe
+    scipy.optimize.linprog = observe_polish
+    if diagnostic:
+        numeric_contract.translate_continuous_origin = observe_translate
+    started = time.perf_counter()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)
+            result = correct(working_snapshot, proposal,
+                time_limit_s=budget)
+    finally:
+        scipy.optimize.milp = real_milp
+        scipy.optimize.linprog = real_linprog
+        numeric_contract.translate_continuous_origin = real_translate
+    row = {'fixture': name, 'fixture_sha256': sha(source), 'variant': variant,
+           'source_failure_sha256': fixture['source_failure_sha256'],
+           'snapshot_soc_kwh': working_snapshot.soc_kwh,
+           'snapshot_perturbation': variant if variant.startswith('soc_') else None,
+           'proposal': proposal.model_dump(), 'wall_s': time.perf_counter() - started,
+           'passed': result.executable and result.candidate_check.get('passed', False),
+           'stage_a_status': result.stage_a_status,
+           'stage_b_status': result.stage_b_status,
+           'execution_source': result.execution_source,
+           'candidate_check': result.candidate_check,
+           'inventory_audit': result.inventory_audit, 'solver_calls': calls,
+           'primal_polish_calls': polish_calls,
+           'stage_a_solve_time_s': result.stage_a_solve_time_s,
+           'stage_b_solve_time_s': result.stage_b_solve_time_s}
+    if diagnostic and original_b:
+        _, row['diagnostic_original_b_anchor_certificate'] = numeric_contract.certify_witness(
+            original_b['anchor'], original_b['bounds'].lb, original_b['bounds'].ub,
+            original_b['integrality'], original_b['matrix'], original_b['lower'],
+            original_b['upper'])
+        row['diagnostic_original_b_anchor_certificate']['scope'] = (
+            'original unscaled B feasibility only; never substituted into production')
+    return row
+
+
+def numerics(run_id, path):
+    """Fixed failure inputs plus registered action variants, without env or PPO."""
+    import scipy.optimize
+
     from contracts.inventory import InventorySnapshot
     from contracts.models import DispatchProposal
-    from planning.corrector import correct
     from scenario.runtime_release import (
         NUMERIC_FIXTURES,
         NUMERIC_VARIANTS,
@@ -414,58 +509,9 @@ def numerics(run_id, path):
                     proposal = DispatchProposal(
                         compute_actions=generator.random(len(snapshot.group_work_capacity)).tolist(),
                         storage_action=float(generator.uniform(-1., 1.)))
-                calls = []
-                polish_calls = []
-                def observe(_calls=calls, **kwargs):
-                    con = kwargs['constraints'][0]
-                    matrix = con.A.tocsr()
-                    arrays = {'data': matrix.data, 'indices': matrix.indices,
-                              'indptr': matrix.indptr, 'lb': kwargs['bounds'].lb,
-                              'ub': kwargs['bounds'].ub, 'clb': con.lb, 'cub': con.ub,
-                              'objective': kwargs['c'], 'integrality': kwargs['integrality']}
-                    _calls.append({'options': dict(kwargs['options']),
-                                  'matrix_shape': list(matrix.shape),
-                                  'mathematical_input_hashes': {
-                                      key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
-                                      for key, value in arrays.items()}})
-                    return real_milp(**kwargs)
-                def observe_polish(_calls=polish_calls, **kwargs):
-                    arrays = {'objective': kwargs['c'], 'bounds': kwargs['bounds'],
-                              'equality_rhs': kwargs['b_eq'],
-                              'inequality_rhs': kwargs['b_ub']}
-                    for label in ('A_eq', 'A_ub'):
-                        sparse = kwargs[label].tocsr()
-                        arrays.update({label+'_'+key: getattr(sparse, key)
-                                       for key in ('data', 'indices', 'indptr')})
-                    _calls.append({'method': kwargs['method'],
-                                   'options': dict(kwargs['options']),
-                                   'mathematical_input_hashes': {
-                                       key: hashlib.sha256(np.asarray(value).tobytes()).hexdigest()
-                                       for key, value in arrays.items()}})
-                    return real_linprog(**kwargs)
-                scipy.optimize.milp = observe
-                scipy.optimize.linprog = observe_polish
-                started = time.perf_counter()
-                try:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter('ignore', RuntimeWarning)
-                        result = correct(working_snapshot, proposal,
-                            time_limit_s=candidate['config']['runtime_budget_s'])
-                finally:
-                    scipy.optimize.milp = real_milp
-                    scipy.optimize.linprog = real_linprog
-                row = {'fixture': name, 'fixture_sha256': sha(source), 'variant': variant,
-                       'source_failure_sha256': fixture['source_failure_sha256'],
-                       'snapshot_soc_kwh': working_snapshot.soc_kwh,
-                       'snapshot_perturbation': variant if variant.startswith('soc_') else None,
-                       'proposal': proposal.model_dump(), 'wall_s': time.perf_counter() - started,
-                       'passed': result.executable and result.candidate_check.get('passed', False),
-                       'stage_a_status': result.stage_a_status,
-                       'stage_b_status': result.stage_b_status,
-                       'execution_source': result.execution_source,
-                       'candidate_check': result.candidate_check,
-                       'inventory_audit': result.inventory_audit, 'solver_calls': calls,
-                       'primal_polish_calls': polish_calls}
+                row = replay_numeric_case(working_snapshot, proposal,
+                    budget=candidate['config']['runtime_budget_s'], name=name, variant=variant,
+                    fixture=fixture, source=source)
                 rows.append(row)
                 dump(folder / 'observations.json', rows)
                 save(run_id, candidate, rows, report, 'running')
