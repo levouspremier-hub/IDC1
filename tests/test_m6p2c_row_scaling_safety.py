@@ -6,6 +6,24 @@ from scipy.sparse import csr_matrix
 from planning.numeric_contract import scale_constraint_rows
 
 
+def test_quarter_origin_is_a_bijection_and_preserves_integer_domains():
+    from scipy.optimize import Bounds
+
+    from planning.numeric_contract import translate_continuous_origin
+    anchor = np.array([1., 20., 2e-10])
+    bounds = Bounds(np.zeros(3), np.array([1., 30., 1.]))
+    matrix = csr_matrix([[1., 2., -3.]])
+    lo, hi = np.array([0.]), np.array([50.])
+    shift, translated, lower, upper = translate_continuous_origin(
+        anchor, np.array([1, 0, 0]), bounds, matrix, lo, hi, fraction=.25)
+    assert np.array_equal(shift, [0., 5., 5e-11])
+    assert translated.lb[0] == 0. and translated.ub[0] == 1.
+    assert np.array_equal(translated.lb + shift, bounds.lb)
+    assert np.array_equal(translated.ub + shift, bounds.ub)
+    assert np.array_equal(lower + matrix @ shift, lo)
+    assert np.array_equal(upper + matrix @ shift, hi)
+
+
 def test_row_scaling_is_exactly_reversible_for_normal_binary64_values():
     matrix = csr_matrix([[50000.00000641581, -.024999987500006246, 1.],
                          [3.141592653589793, 2e-10, 0.]])
@@ -68,3 +86,14 @@ def test_empty_zero_and_infinite_bound_rows_have_reproducible_audit():
         assert np.array_equal(lower, lo) and np.array_equal(upper, hi)
         assert audit['original_input_sha256'] and audit['scaled_input_sha256']
         assert audit['factors'] == [1.] * matrix.shape[0]
+
+
+def test_original_infeasible_intervals_can_only_be_preserved_explicitly():
+    lo = np.array([np.nextafter(27., np.inf)])
+    hi = np.array([27.])
+    scaled, lower, upper, audit = scale_constraint_rows(
+        csr_matrix([[1.]]), lo, hi, preserve_infeasible_intervals=True)
+    assert lower[0] > upper[0]
+    assert np.array_equal(lo, lower) and np.array_equal(hi, upper)
+    assert audit['inverted_intervals_preserved'] == 1
+    assert scaled[0, 0] == 1.
