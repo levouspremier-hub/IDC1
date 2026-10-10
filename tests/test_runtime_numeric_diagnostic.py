@@ -114,3 +114,12 @@ def test_invalid_registry_bootstrap_still_has_a_failed_five_artifact_run(tmp_pat
     report = json.loads((folder / 'report.json').read_text())
     assert report['state'] == 'failed' and report['exit_code'] == 1
     assert report['case_count'] == 0 and report['parameter_updates'] == 0
+
+
+def test_joint_boundary_perturbation_never_relaxes_the_original_access_capacity():
+    registry = diagnostic.load_registry()
+    fixture = diagnostic.load_fixture(LATEST, registry['fixtures'][LATEST])
+    for variant in ('joint_headroom_charge', 'joint_headroom_discharge'):
+        perturbed = diagnostic.case_input(fixture, variant)
+        assert perturbed['snapshot']['access_limit_kw'] <= fixture['snapshot']['access_limit_kw']
+        diagnostic.validate_fixture(perturbed)
