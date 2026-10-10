@@ -63,3 +63,16 @@ def test_capacity_shortage_is_preserved_as_unserved_work(monkeypatch):
     assert result.known_service_required_end_work == [6.]
     assert result.known_service_required_due_work == [4.]
     assert result.known_service_shortfall_work == 6.
+
+
+@pytest.mark.parametrize('horizon', [1, 3, 7, 12, 30, 48])
+@pytest.mark.parametrize('rate', [.1, .3, 1.7])
+def test_fractional_rates_cannot_accumulate_more_than_their_exact_capacity(
+        monkeypatch, horizon, rate):
+    from fractions import Fraction
+    result = reserve(monkeypatch, work=100., rate=rate, capacity=[rate],
+                     horizon=horizon, deadline=horizon)
+    actual = result.known_service_required_end_work[0]
+    assert Fraction(actual) <= horizon * Fraction(rate)
+    assert result.known_service_required_due_work == [actual]
+    assert actual > 0.
