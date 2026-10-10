@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import math
+from fractions import Fraction
 
 import numpy as np
 
@@ -10,6 +10,31 @@ from contracts.inventory import ArrivedServiceReserve
 from idc_model.allocation import allocate_tasks
 
 SERVICE_GUARD_VERSION = "arrived-service-reserve-v3"
+
+
+def _floor_binary64(value):
+    """Encode an exact nonnegative service quantity without overstating it."""
+    rounded = float(value)
+    return float(np.nextafter(rounded, -np.inf)) if Fraction(rounded) > value else rounded
+
+
+def service_progress_bounds(work, rate, required_end, required_due, horizon, due, step):
+    """Outward encode redundant prefix bounds implied by the original task/rate.
+
+    Computing end - rate*n in binary64 can create an empty interval even when
+    exact arithmetic is feasible (e.g. rate=.3, end=1.2, n=3). Do not clamp an
+    inconsistent requirement: round the exact implied lower down and upper up.
+    The original task/rate constraints remain authoritative.
+    """
+    rate_exact = Fraction(float(rate))
+    lower = max(Fraction(0), Fraction(float(required_end)) - rate_exact*(horizon-step-1))
+    if step < due:
+        lower = max(lower, Fraction(float(required_due)) - rate_exact*(due-step-1))
+    upper = min(Fraction(float(work)), (step+1)*rate_exact)
+    encoded_upper = float(upper)
+    if Fraction(encoded_upper) < upper:
+        encoded_upper = float(np.nextafter(encoded_upper, np.inf))
+    return _floor_binary64(lower), encoded_upper
 
 
 def power_upper_envelope(env, temperature):
@@ -40,7 +65,9 @@ def power_upper_envelope(env, temperature):
 
 def _coupled_reserve(env, summaries, capacity, floor, order, temperature, arrival, margin):
     remaining = [dict(task) for task in summaries]
-    initial_work = [float(task['remaining_work']) for task in summaries]
+    initial_work = [Fraction(float(task['remaining_work'])) for task in summaries]
+    outstanding = list(initial_work)
+    rates = [Fraction(float(task['max_rate'])) for task in summaries]
     cutoffs = [max(0, min(len(temperature), task['deadline'] - int(env.current_step)))
                for task in summaries]
     due_remaining = list(initial_work)
@@ -65,20 +92,26 @@ def _coupled_reserve(env, summaries, capacity, floor, order, temperature, arriva
         arrivals.append(amount)
         served.append(aggregate_work)
         for i in range(len(summaries)):
-            remaining[i]["remaining_work"] = max(
-                remaining[i]["remaining_work"] - math.fsum(matrix[i]), 0.)
+            # Account physical service against both remaining work and rate.
+            # Binary64 group fragments can sum a few ULPs above demand. Exact
+            # accounting cannot credit that excess or accumulate it over time.
+            allocated = sum((Fraction(float(v)) for v in matrix[i]), Fraction(0))
+            completed = min(allocated, outstanding[i], rates[i])
+            outstanding[i] -= completed
+            remaining[i]['remaining_work'] = _floor_binary64(outstanding[i])
             if k + 1 == cutoffs[i]:
-                due_remaining[i] = remaining[i]['remaining_work']
+                due_remaining[i] = outstanding[i]
     # Derive required service from the SAME outstanding-work ledger used to
     # generate the schedule. Independently summing the group/time matrix can
     # demand 27.000000000000004 units from a task with only 27, creating an
     # inverted planner interval. This does not clamp a model constraint or
     # alter allocation: an arrived task can only lose its original work.
-    end = [work - task['remaining_work'] for work, task in zip(
-        initial_work, remaining, strict=True)]
-    due = [work - rest for work, rest in zip(initial_work, due_remaining, strict=True)]
-    shortfall = math.fsum(max(task['remaining_work'], rest) for task, rest in zip(
-        remaining, due_remaining, strict=True))
+    end = [_floor_binary64(work - rest) for work, rest in zip(
+        initial_work, outstanding, strict=True)]
+    due = [_floor_binary64(work - rest) for work, rest in zip(
+        initial_work, due_remaining, strict=True)]
+    shortfall = float(sum((max(rest, due_rest) for rest, due_rest in zip(
+        outstanding, due_remaining, strict=True)), Fraction(0)))
     return ArrivedServiceReserve(
         version=env.terminal_service_guard_version, temperature_margin_c=margin,
         charge_limit_kw=limits[0], charge_limits_kw=limits,

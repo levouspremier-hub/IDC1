@@ -1297,13 +1297,11 @@ def solve_time_indexed_mip_raw_projection(
                 add({**cumulative, finished(i, k): -work}, 0., np.inf,
                     f"known_executor_finished[{i},{k}]")
                 due = max(0, min(H, task.deadline - snapshot.step))
-                minimum_progress = max(guard.known_service_required_end_work[i]
-                                       - rate * (H - k - 1), 0.)
-                if k < due:
-                    minimum_progress = max(minimum_progress,
-                                           guard.known_service_required_due_work[i]
-                                           - rate * (due - k - 1))
-                add(cumulative, minimum_progress, min(work, (k + 1) * rate),
+                from planning.service_guard import service_progress_bounds
+                minimum_progress, maximum_progress = service_progress_bounds(
+                    work, rate, guard.known_service_required_end_work[i],
+                    guard.known_service_required_due_work[i], H, due, k)
+                add(cumulative, minimum_progress, maximum_progress,
                     f"known_executor_derived_progress_bounds[{i},{k}]")
                 if k:
                     add({finished(i, k): 1., finished(i, k - 1): -1.}, 0., np.inf,
