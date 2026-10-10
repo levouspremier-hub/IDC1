@@ -68,3 +68,19 @@ def test_interrupt_terminates_only_the_owned_child_process_group(tmp_path, monke
         development.execute('gate', ['make', 'check'], tmp_path)
     assert launched.get('start_new_session') is True
     assert signals == [(123456789, development.signal.SIGTERM)]
+
+
+def test_preflight_rejects_validation_inputs_changed_during_checks(tmp_path, monkeypatch):
+    original = development.scientific_binding()
+    calls = 0
+    def binding():
+        nonlocal calls
+        calls += 1
+        return {**original, 'validation_sha256': 'before' if calls == 1 else 'after'}
+    monkeypatch.setattr(development, 'scientific_binding', binding)
+    monkeypatch.setattr(development, 'execute', lambda *args: 0)
+    monkeypatch.setattr(development, 'load_registry',
+                        lambda: {'successful_anchors': dict.fromkeys(range(6))})
+    assert development.preflight('changed-validation', base_dir=tmp_path) == 1
+    report = json.loads((tmp_path / 'changed-validation/report.json').read_text())
+    assert 'validation' in report['error']

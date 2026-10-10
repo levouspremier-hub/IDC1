@@ -123,3 +123,55 @@ def test_joint_boundary_perturbation_never_relaxes_the_original_access_capacity(
         perturbed = diagnostic.case_input(fixture, variant)
         assert perturbed['snapshot']['access_limit_kw'] <= fixture['snapshot']['access_limit_kw']
         diagnostic.validate_fixture(perturbed)
+
+
+def test_exploratory_infeasibility_requires_original_tolerance_aware_proof():
+    from scripts.runtime_qualification import certify_interval_contradiction
+    proof = certify_interval_contradiction([1.], [0.], 'a' * 64)
+    row = {'expectation': 'exploratory', 'passed': False,
+           'classification': 'model_or_fixed_integer_infeasible',
+           'diagnostic_original_b_sha256': 'a' * 64,
+           'diagnostic_infeasibility_certificate': proof}
+    assert diagnostic.accept_case(row)['accepted']
+    assert row['passed'] is False
+    assert not diagnostic.accept_case({**row, 'expectation': 'must_pass'})['accepted']
+    assert not diagnostic.accept_case({**row, 'classification': 'timeout'})['accepted']
+    assert not diagnostic.accept_case({**row, 'diagnostic_original_b_sha256': 'b' * 64})[
+        'accepted']
+    tiny = certify_interval_contradiction([1e-15], [0.], 'a' * 64)
+    assert not tiny['passed']
+    assert not diagnostic.accept_case({**row, 'diagnostic_infeasibility_certificate': tiny})[
+        'accepted']
+    forged = {**proof, 'lower': 0., 'upper': 1.}
+    assert not diagnostic.accept_case({**row, 'diagnostic_infeasibility_certificate': forged})[
+        'accepted']
+
+
+@pytest.mark.parametrize('category', diagnostic.CLASSIFICATIONS[:-1])
+def test_exploratory_status_alone_never_authorizes_acceptance(category):
+    assert not diagnostic.accept_case({'expectation': 'exploratory', 'passed': False,
+                                       'classification': category})['accepted']
+
+
+def test_diagnostic_run_reports_acceptance_separately_from_executable_success(tmp_path, monkeypatch):
+    from scripts.runtime_qualification import certify_interval_contradiction
+    case = {'case_id': 'proved/interval', 'fixture': LATEST, 'variant': 'recorded',
+            'expectation': 'exploratory', 'suite': 'boundary'}
+    row = {**case, 'passed': False, 'classification': 'model_or_fixed_integer_infeasible',
+           'diagnostic_original_b_sha256': 'a' * 64,
+           'diagnostic_infeasibility_certificate': certify_interval_contradiction(
+               [1.], [0.], 'a' * 64)}
+    monkeypatch.setattr(diagnostic, 'cases_for', lambda *args: [case])
+    monkeypatch.setattr(diagnostic, 'evaluate_case', lambda *args: copy.deepcopy(row))
+    assert diagnostic.run('boundary', 'proved', base_dir=tmp_path) == 0
+    report = json.loads((tmp_path / 'proved/report.json').read_text())
+    assert report['passed'] and report['accepted_count'] == 1 and report['passed_count'] == 0
+    assert report['observations'][0]['passed'] is False
+    assert report['formal_training_ready'] is False
+
+
+def test_validation_binding_includes_registered_fixtures_tests_and_configs():
+    binding = diagnostic.scientific_binding()
+    assert binding['validation_file_hashes']['tests/fixtures/runtime_numeric_registry.json']
+    assert binding['validation_file_hashes']['tests/test_runtime_numeric_diagnostic.py']
+    assert any(p.startswith('configs/') for p in binding['validation_file_hashes'])
