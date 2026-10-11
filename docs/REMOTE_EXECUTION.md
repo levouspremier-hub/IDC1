@@ -1,5 +1,18 @@
 # Mac 开发 / Y9000P WSL2 执行：方案 1
 
+## 当前连接约定（2026-10-11）
+
+后续项目 SSH、模型/数据传输及训练结果回传默认使用 **idc-y9000p-campus**。
+本机 `.idc_remote.json` 的 `host` 已切换到该别名，原 `remote_root`、`asset_set`
+保持不变；既有 `status` / `collect` / `watch` 通过此配置选择连接主机。
+校内路径不可用时直接报错或继续等待该校内路径恢复，不自动回退其他主机别名。
+`idc-y9000p` 只保留作 Tailscale 管理/恢复入口，不能用作默认大文件传输。
+
+校内 SSH 和 32 MiB 主机→Mac 传输实测通过；**计费验收待确认**。
+地址变化、Windows 重启后路由恢复、明确选择文件的 rsync 命令及回滚见
+[校园内网传输说明](CAMPUS_TRANSFER.md)。下文早期 Tailscale 接入记录保留为历史。
+已有资产集不默认重新 seed，不默认同步整个项目、全部 checkpoint 或历史 runs。
+
 本工具仅负责固定代码版本、任务隔离、SSH 执行和全部产物回传。
 当前正式训练故障仍未闭合；配置完成不代表授权运行正式训练、seed 1/2 或 held-out 评估。
 Mac 现有长时零更新诊断继续运行，本次不操作其进程或绑定源码。
@@ -87,10 +100,13 @@ Host idc-y9000p
 
 ```sh
 cd /Users/levous/Desktop/IDC
-python3 -m scripts.idc_remote configure --host idc-y9000p --remote-root /home/<user>/idc-host
+python3 -m scripts.idc_remote configure --host idc-y9000p-campus --remote-root /home/<user>/idc-host
 python3 -m scripts.idc_remote doctor
-python3 -m scripts.idc_remote seed
 ```
+
+以上 configure 用于首次接入；已有配置切换连接时必须保留原 asset_set，
+不要用未带 --asset-set 的 configure 覆盖。首次 seed 涉及全量资产，仅在明确授权
+并确认所选资产范围后单独运行，不属于日常连接检查。
 
 `doctor` 部署控制脚本并读取主机信息；它不安装依赖或运行任务。
 `seed` 首次将 data 与全部已终止 runs（包含模型、失败证据及资格证据）传过去，

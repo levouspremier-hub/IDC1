@@ -9,6 +9,7 @@
 - [最新诊断与证据限制](docs/audits/M6_P2b_S0_DIAGNOSIS.md)
 - [换机与目录说明](docs/PROJECT_TRANSFER.md)
 - [Mac→WSL 远程任务与全部回传](docs/REMOTE_EXECUTION.md)
+- [校园内网传输默认约定、验收与回滚](docs/CAMPUS_TRANSFER.md)
 - [项目背景交接](docs/CHATGPT_HANDOFF_2026-10-03.md)
 - [协作规则](AGENTS.md)
 
