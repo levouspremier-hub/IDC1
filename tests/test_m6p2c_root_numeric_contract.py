@@ -116,8 +116,28 @@ def test_candidate_binds_the_numeric_contract_and_two_learning_cycles():
     assert contract['integer_representation_ulps'] == 8
     assert contract['primal_witness_tolerance'] == 1e-10
     assert contract['learning_origin_cycles'] == 2
+    assert contract['stage_b_row_scaling_version'] == (
+        'reversible-power-of-two-row-equilibration-v2')
     assert config['training']['corrector']['primary_mip_rel_gap'] == 0.
     assert config['training']['corrector']['time_limit_s'] == .50
+
+
+def test_stage_b_row_equilibration_preserves_rows_and_bounds():
+    from planning.numeric_contract import scale_constraint_rows
+    matrix = csr_matrix([[50000., -1.], [0., .5], [0., 0.]])
+    lower = np.array([-np.inf, .25, -np.inf])
+    upper = np.array([0., .75, np.inf])
+    scaled, scaled_lower, scaled_upper, audit = scale_constraint_rows(
+        matrix, lower, upper)
+    assert audit['version'] == 'reversible-power-of-two-row-equilibration-v2'
+    assert audit['scaled_rows'] == 1 and audit['minimum_factor'] == 1 / 65536.
+    for x in (np.array([0., 0.]), np.array([1., 0.]), np.array([0., 1.])):
+        original_activity = matrix @ x
+        scaled_activity = scaled @ x
+        assert np.allclose(scaled_activity, original_activity * np.array(
+            [1 / 65536., 1., 1.]), rtol=0., atol=1e-15)
+        assert np.array_equal(np.isfinite(scaled_lower), np.isfinite(lower))
+        assert np.array_equal(np.isfinite(scaled_upper), np.isfinite(upper))
 
 
 def test_learning_coverage_follows_two_complete_registered_origin_cycles():

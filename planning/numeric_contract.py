@@ -12,10 +12,11 @@ PRIMAL_WITNESS_TOLERANCE = 1e-10
 NUMERIC_CONTRACT_VERSION = 'canonical-integer-lexicographic-v1'
 ONE_STEP_STORAGE_BOUND_VERSION = 'soc-balance-exclusion-one-step-v1'
 COUPLED_CHARGE_DOMAIN_VERSION = 'reserve-headroom-conserved-backlog-domain-v2'
-STAGE_B_COORDINATE_VERSION = 'certified-a-continuous-origin-v1'
+STAGE_B_COORDINATE_VERSION = 'certified-a-quarter-continuous-origin-v2'
 FIXED_INTEGER_POLISH_VERSION = 'capacity-supported-fixed-integer-lp-v4'
 INVENTORY_MODE_COVER_VERSION = 'soc-balance-essential-integer-power-cover-v2'
 PROJECTION_STORAGE_DOMAIN_VERSION = 'encoded-projection-storage-power-domain-v1'
+STAGE_B_ROW_SCALING_VERSION = 'reversible-power-of-two-row-equilibration-v2'
 PROJECTION_POWER_CUT_MAX_COEFFICIENT = 1e8
 
 
@@ -108,14 +109,89 @@ def inventory_mode_cover(initial, final_lower, final_upper, dt, eta_c, eta_d,
                 math.fsum(discharge_weights) - 1., np.inf))}
 
 
-def translate_continuous_origin(anchor, integrality, bounds, matrix, row_lower, row_upper):
+def translate_continuous_origin(anchor, integrality, bounds, matrix, row_lower, row_upper,
+                                *, fraction=1.):
     """Bijective x=y+anchor for continuous variables; leave integer domains intact."""
     from scipy.optimize import Bounds
+    if fraction not in (1., .25):
+        raise ValueError('unregistered continuous origin fraction')
     shift = np.asarray(anchor, dtype=float).copy()
+    if fraction == .25:
+        with np.errstate(under='ignore'):
+            quarter = np.ldexp(shift, -2)
+        reversible = np.ldexp(quarter, 2) == shift
+        shift[reversible] = quarter[reversible]
     shift[np.asarray(integrality) != 0] = 0.
     row_shift = matrix @ shift
     return (shift, Bounds(bounds.lb - shift, bounds.ub - shift),
             np.asarray(row_lower) - row_shift, np.asarray(row_upper) - row_shift)
+
+
+def scale_constraint_rows(matrix, row_lower, row_upper, *, preserve_infeasible_intervals=False):
+    """Scale only solver rows, using exactly reversible binary exponents.
+
+    Ordinary reciprocal norms round unrelated coefficients and finite bounds
+    independently. Powers of two preserve their binary64 ratios exactly. If a
+    subnormal would lose any information, retain that entire original row.
+    Original coordinates/matrix/target certificates remain authoritative.
+    """
+    import hashlib
+
+    rows = matrix.tocsr(copy=True)
+    lower = np.asarray(row_lower, dtype=np.float64)
+    upper = np.asarray(row_upper, dtype=np.float64)
+    if (lower.shape != (rows.shape[0],) or upper.shape != lower.shape
+            or not np.all(np.isfinite(rows.data))
+            or np.any(np.isnan(lower)) or np.any(np.isnan(upper))
+            or np.any(np.isposinf(lower)) or np.any(np.isneginf(upper))
+            or (not preserve_infeasible_intervals and np.any(lower > upper))):
+        raise ValueError('invalid row scaling matrix or bounds')
+    scales = np.ones(rows.shape[0], dtype=np.float64)
+    exponents = np.zeros(rows.shape[0], dtype=np.int32)
+    guarded = 0
+    for i in range(rows.shape[0]):
+        values = rows.data[rows.indptr[i]:rows.indptr[i+1]]
+        maximum = float(np.max(np.abs(values), initial=0.))
+        if maximum <= 1.:
+            continue
+        # frexp avoids log2 rounding at adjacent powers of two and overflow
+        # when the largest coefficient approaches DBL_MAX.
+        mantissa, exponent = np.frexp(maximum)
+        power = int(exponent) - int(mantissa == .5)
+        factor = float(np.ldexp(1., -power))
+        if not np.isfinite(factor) or factor <= 0.:
+            raise ValueError('invalid positive row factor')
+        with np.errstate(under='ignore'):
+            transformed = np.ldexp(values, -power)
+            finite_bounds = np.array([v for v in (lower[i], upper[i]) if np.isfinite(v)])
+            transformed_bounds = np.ldexp(finite_bounds, -power)
+        if (not np.array_equal(np.ldexp(transformed, power), values)
+                or not np.array_equal(np.ldexp(transformed_bounds, power), finite_bounds)):
+            guarded += 1
+            continue
+        scales[i] = factor
+        exponents[i] = -power
+    scaled = rows.copy()
+    scaled.data = np.ldexp(rows.data, np.repeat(exponents, np.diff(rows.indptr)))
+    scaled_lower = np.ldexp(lower, exponents)
+    scaled_upper = np.ldexp(upper, exponents)
+
+    def binding(m, lo, hi):
+        h = hashlib.sha256()
+        for values in (np.array(m.shape, dtype=np.int64), m.data, m.indices, m.indptr, lo, hi):
+            h.update(np.ascontiguousarray(values).tobytes())
+        return h.hexdigest()
+
+    return (scaled, scaled_lower, scaled_upper,
+            {'version': STAGE_B_ROW_SCALING_VERSION, 'rows': int(rows.shape[0]),
+             'scaled_rows': int(np.count_nonzero(scales != 1.)),
+             'underflow_guarded_rows': guarded, 'factors': scales.tolist(),
+             'binary_exponents': exponents.tolist(), 'exact_binary64_roundtrip': True,
+             'inverted_intervals_preserved': int(np.count_nonzero(lower > upper)),
+             'original_input_sha256': binding(rows, lower, upper),
+             'scaled_input_sha256': binding(scaled, scaled_lower, scaled_upper),
+             'minimum_factor': float(np.min(scales, initial=1.)),
+             'maximum_factor': float(np.max(scales, initial=1.))})
 
 
 def coupled_charge_domain_upper(hardware_max, encoded_headroom, minimum_service_power):

@@ -1012,6 +1012,7 @@ def solve_time_indexed_mip_raw_projection(
     terminal = snapshot.terminal_inventory if isinstance(snapshot, InventorySnapshot) else None
     if isinstance(snapshot, InventorySnapshot):
         validate_inventory_snapshot(snapshot)
+    model_build_started = time.perf_counter()
     call_deadline = (_monotonic() + float(time_limit_s)
                      if inventory_enabled and time_limit_s is not None
                      else None)
@@ -1438,6 +1439,7 @@ def solve_time_indexed_mip_raw_projection(
     # --- 阶段 A：最小化原始动作偏移 ---
     from scipy.optimize import milp as _milp
 
+    model_build_time_s = time.perf_counter() - model_build_started
     inventory_audit: dict = {}
     if coupled_charge_upper:
         inventory_audit['coupled_charge_domain_upper_kw'] = coupled_charge_upper
@@ -1586,6 +1588,7 @@ def solve_time_indexed_mip_raw_projection(
         attainable = float(res_inventory.x[off_soc + H])
         band_gap = max(terminal.lower_kwh - attainable, attainable - terminal.upper_kwh, 0.0)
         inventory_audit = {
+            "model_build_time_s": model_build_time_s,
             "version": terminal.version, "episode_end_step": terminal.episode_end_step,
             "remaining_steps": terminal.remaining_steps, "target_kwh": terminal.target_kwh,
             "lower_kwh": terminal.lower_kwh, "upper_kwh": terminal.upper_kwh,
@@ -1699,6 +1702,7 @@ def solve_time_indexed_mip_raw_projection(
 
     if inventory_enabled:
         from planning.numeric_contract import certify_or_polish_witness, certify_primary_objective
+        certificate_started = time.perf_counter()
         witness_a, certificate_a = certify_or_polish_witness(
             res_a.x, lb, ub, integrality, A_csr, np.array(lbs), np.array(ubs),
             objective=c_off, remaining=_remaining, storage_modes=storage_modes,
@@ -1706,6 +1710,7 @@ def solve_time_indexed_mip_raw_projection(
             storage_required_power=storage_required_power())
         tA = time.perf_counter() - tA0
         inventory_audit['stage_a_witness'] = certificate_a
+        inventory_audit['stage_a_certificate_time_s'] = time.perf_counter() - certificate_started
         if witness_a is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
                                      {**_audit, "stage_a_status": status_a,
@@ -1713,6 +1718,7 @@ def solve_time_indexed_mip_raw_projection(
         primary_certificate = certify_primary_objective(
             res_a, witness_a, c_off, tolerance=stage_b_tolerance)
         inventory_audit['primary_objective_certificate'] = primary_certificate
+        inventory_audit['stage_a_certificate_time_s'] = time.perf_counter() - certificate_started
         if not primary_certificate['passed']:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
                                      {**_audit, "stage_a_status": status_a,
@@ -1802,40 +1808,63 @@ def solve_time_indexed_mip_raw_projection(
         if inventory_enabled:
             from planning.numeric_contract import (
                 STAGE_B_COORDINATE_VERSION,
+                scale_constraint_rows,
                 translate_continuous_origin,
             )
             b_shift, b_bounds, b_lower, b_upper = translate_continuous_origin(
-                res_a.x, integrality, b_bounds, A_b, b_lower, b_upper)
+                res_a.x, integrality, b_bounds, A_b, b_lower, b_upper, fraction=.25)
             inventory_audit['stage_b_coordinates'] = {
                 'version': STAGE_B_COORDINATE_VERSION,
                 'continuous_origin': 'certified_stage_a',
+                'binary_fraction': .25,
                 'integer_domains_unchanged': True,
                 'objective_constant': float(c_econ @ b_shift),
             }
-        res_b = _milp(
-            c=c_econ, constraints=[LinearConstraint(A_b, b_lower, b_upper)],
-            integrality=integrality, bounds=b_bounds, options=_options(stage_b=True))
-        if b_shift is not None:
-            if res_b.x is not None:
-                res_b.x = res_b.x + b_shift
-            for field in ('fun', 'mip_dual_bound'):
-                if getattr(res_b, field, None) is not None:
-                    setattr(res_b, field, getattr(res_b, field) + float(c_econ @ b_shift))
-        tB = time.perf_counter() - tB0
-        status_b = _status(res_b)
-        if status_b == SOLVER_OPTIMAL:
-            x = res_b.x
-            execution_source = "stage_b"
-        elif status_b == SOLVER_TIME_LIMIT:
+        if inventory_enabled:
+            A_b_solver, b_lower_solver, b_upper_solver, row_scaling = scale_constraint_rows(
+                A_b, b_lower, b_upper, preserve_infeasible_intervals=True)
+            inventory_audit['stage_b_row_scaling'] = row_scaling
+        else:
+            A_b_solver, b_lower_solver, b_upper_solver = A_b, b_lower, b_upper
+        if inventory_enabled:
+            inventory_audit['stage_b_transform_time_s'] = time.perf_counter() - tB0
+        rem_b = _remaining()
+        if rem_b is not None and rem_b <= 0.:
+            # Row equilibration and coordinate assembly share the SAME budget.
+            # Do not launch another solver with a zero limit after they exhaust
+            # it; retain A through the existing original-certificate path.
+            status_b = "not_run"
             x = res_a.x
             execution_source = "stage_a"
+            inventory_audit['stage_b_budget_exhausted_after_transform'] = True
+            tB = time.perf_counter() - tB0
         else:
-            return _projection_empty(
-                snapshot, status_b, FAILURE_SOLVER_FAILURE,
-                {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
-                 "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
+            res_b = _milp(
+                c=c_econ, constraints=[LinearConstraint(
+                    A_b_solver, b_lower_solver, b_upper_solver)],
+                integrality=integrality, bounds=b_bounds, options=_options(stage_b=True))
+            if b_shift is not None:
+                if res_b.x is not None:
+                    res_b.x = res_b.x + b_shift
+                for field in ('fun', 'mip_dual_bound'):
+                    if getattr(res_b, field, None) is not None:
+                        setattr(res_b, field, getattr(res_b, field) + float(c_econ @ b_shift))
+            tB = time.perf_counter() - tB0
+            status_b = _status(res_b)
+            if status_b == SOLVER_OPTIMAL:
+                x = res_b.x
+                execution_source = "stage_b"
+            elif status_b == SOLVER_TIME_LIMIT:
+                x = res_a.x
+                execution_source = "stage_a"
+            else:
+                return _projection_empty(
+                    snapshot, status_b, FAILURE_SOLVER_FAILURE,
+                    {**_audit, "stage_a_status": status_a, "stage_b_status": status_b,
+                     "stage_a_solve_time_s": tA, "stage_b_solve_time_s": tB})
     if inventory_enabled:
         from planning.numeric_contract import certify_or_polish_witness
+        certificate_started = time.perf_counter()
         canonical_x, final_certificate = certify_or_polish_witness(
             x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b),
             objective=c_econ, remaining=_remaining, storage_modes=storage_modes,
@@ -1843,6 +1872,7 @@ def solve_time_indexed_mip_raw_projection(
             storage_required_power=storage_required_power())
         tB += final_certificate.get('primal_polish', {}).get('elapsed_s', 0.)
         inventory_audit['execution_witness'] = final_certificate
+        inventory_audit['stage_b_certificate_time_s'] = time.perf_counter() - certificate_started
         if canonical_x is None:
             return _projection_empty(snapshot, SOLVER_FAILURE, FAILURE_SOLVER_FAILURE,
                                      {**_audit, "stage_a_status": status_a,
@@ -1857,6 +1887,7 @@ def solve_time_indexed_mip_raw_projection(
                                          {**_audit, 'stage_a_status': status_a,
                                           'stage_b_status': status_b})
         x = canonical_x
+        inventory_audit['stage_b_certificate_time_s'] = time.perf_counter() - certificate_started
     candidate_check = check_projection_candidate(
         x, lb, ub, integrality, A_b, np.array(lbs_b), np.array(ubs_b))
     if not candidate_check["passed"]:

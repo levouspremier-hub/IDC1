@@ -7,7 +7,7 @@ from pathlib import Path
 
 from scenario.inventory_release import MATRIX_PATH, ROOT, _git, load_config, load_matrix, sha
 
-VERSION = 'certified-lexicographic-learning-coverage-v2'
+VERSION = 'certified-lexicographic-learning-coverage-v3'
 BUDGETS = (.25, .50, 1.00)
 NUMERIC_FIXTURES = (
     'm6p2c_seed1_origin9120_step18.json',
@@ -22,6 +22,7 @@ NUMERIC_FIXTURES = (
     'm6p2c_seed0_origin3072_step18.json',
     'm6p2c_seed1_origin2544_step23.json',
     'm6p2c_seed2_origin8496_step6.json',
+    'm6p2c_seed0_origin9744_step44.json',
 )
 NUMERIC_VARIANTS = ('recorded', 'zero_charge', 'full_discharge',
                     'sample0', 'sample1', 'sample2', 'sample3',
@@ -54,6 +55,7 @@ def candidate_config(budget):
         PRIMAL_WITNESS_TOLERANCE,
         PROJECTION_STORAGE_DOMAIN_VERSION,
         STAGE_B_COORDINATE_VERSION,
+        STAGE_B_ROW_SCALING_VERSION,
     )
     config['training']['corrector']['primary_mip_rel_gap'] = 0.
     config['training']['corrector']['primary_mip_abs_gap'] = 0.
@@ -70,6 +72,7 @@ def candidate_config(budget):
         'fixed_integer_primal_polish_version': FIXED_INTEGER_POLISH_VERSION,
         'inventory_mode_cover_version': INVENTORY_MODE_COVER_VERSION,
         'projection_storage_power_domain_version': PROJECTION_STORAGE_DOMAIN_VERSION,
+        'stage_b_row_scaling_version': STAGE_B_ROW_SCALING_VERSION,
     }
     config['training']['backend']['note'] = (
         f'CPU / torch=1; inventory solver feasibility={tolerance:g}; '
@@ -107,6 +110,7 @@ def asset_binding():
                  ('reward_repair', 'service_temperature_reserve'))
     paths.update(ROOT / e['path'] for e in config['reward_shaping']['train_evidence'])
     paths.update(ROOT / 'tests/fixtures' / name for name in NUMERIC_FIXTURES)
+    paths.add(ROOT / 'tests/fixtures/runtime_numeric_registry.json')
     visited = {}
 
     def references(value):
@@ -191,6 +195,9 @@ def validate_numeric_evidence(result, candidate_path):
         if audit.get('projection_storage_power_domain', {}).get('version') != (
                 candidate['config']['numeric_contract']['projection_storage_power_domain_version']):
             raise ValueError('numeric qualification projection storage domain differs')
+        if audit.get('stage_b_row_scaling', {}).get('version') != (
+                candidate['config']['numeric_contract']['stage_b_row_scaling_version']):
+            raise ValueError('numeric qualification Stage B row scaling differs')
         for key in ('stage_a_witness', 'execution_witness', 'primary_objective_certificate'):
             if audit.get(key, {}).get('passed') is not True:
                 raise ValueError('numeric qualification lacks certified lexicographic witnesses')
