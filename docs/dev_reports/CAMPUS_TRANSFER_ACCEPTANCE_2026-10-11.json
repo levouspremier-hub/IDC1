@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-11",
+  "timezone": "Asia/Shanghai",
+  "campus_tcp_bidirectional": "passed",
+  "campus_ssh": "passed",
+  "file_transfer_32MiB": "passed",
+  "bytes": 33554432,
+  "elapsed_seconds": 8.25,
+  "sha256": "0917b1ed07ded6aac39a90fe023b5283427a845e4e91c1d8ca602822680e7784",
+  "test_compression": false,
+  "test_bwlimit_KiB_s": 4096,
+  "billing": "pending_confirmation",
+  "billing_reason": [
+    "unknown_accounting_update_delay",
+    "background_traffic_on_same_account",
+    "sum_bytes_and_sum_seconds_not_updated"
+  ],
+  "fresh_baseline": {
+    "error": "ok",
+    "sum_bytes": 121309429192,
+    "sum_seconds": 1912785,
+    "online_device_total": "4",
+    "billing_name": "阶段6：下行超出80G后，1G/元",
+    "products_name": "学生账户",
+    "sysver": "1.01.20220301",
+    "account_sha256": "d87fd371fc4110084753ce6a9e2c80ee1b4ba600ed0081bdd174cfa17e51f93c",
+    "time": "2026-10-11T12:30:40.875578+08:00",
+    "source": "https://ipgw.neu.edu.cn/cgi-bin/rad_user_info?callback=campusAudit",
+    "via": "WSL campus SSH; campus training-host portal session",
+    "display_unit": "GB (1024^3 bytes)",
+    "display_precision": "0.01 GB",
+    "display_used_gb": "112.98",
+    "phase": "pre-transfer"
+  },
+  "latest_post_reading": {
+    "error": "ok",
+    "sum_bytes": 121309429192,
+    "sum_seconds": 1912785,
+    "online_device_total": "4",
+    "billing_name": "阶段6：下行超出80G后，1G/元",
+    "products_name": "学生账户",
+    "sysver": "1.01.20220301",
+    "account_sha256": "d87fd371fc4110084753ce6a9e2c80ee1b4ba600ed0081bdd174cfa17e51f93c",
+    "time": "2026-10-11T12:38:16.096788+08:00",
+    "source": "https://ipgw.neu.edu.cn/cgi-bin/rad_user_info?callback=campusAudit",
+    "via": "WSL campus SSH; campus training-host portal session",
+    "display_unit": "GB (1024^3 bytes)",
+    "display_precision": "0.01 GB",
+    "display_used_gb": "112.98",
+    "phase": "user-followup"
+  },
+  "physical_interfaces": {
+    "mac": "en0",
+    "windows": "WLAN20"
+  },
+  "tailscale_management": "preserved",
+  "temporary_listeners": "stopped",
+  "temporary_payloads": "deleted",
+  "future_default_host": "idc-y9000p-campus",
+  "fallback_host": "none",
+  "source_evidence_directory": "/Users/levous/Desktop/campus-transfer-20261011",
+  "local_remote_config_non_host_fields_preserved": true
+}
