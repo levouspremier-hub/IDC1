@@ -127,6 +127,61 @@
       "state": "source_verification_pending"
     }
   },
-  "successful_anchors": {},
+  "successful_anchors": {
+    "m6p2c_train_success_origin9696_step44.json": {
+      "sha256": "ae217d784afbd50b972ad2ec3006425886e5b86cd7d199b8178444d95860dca1",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 92,
+      "snapshot_sha256": "e6f20b80ba37b7c3ff5efc746092626c44b7505060bd63ad32c3a60e4978394f",
+      "source_injection_hash": "4f606e20b43a9dc448d382d628544708e05a0c86ad725c4940c78aa32df1bc83"
+    },
+    "m6p2c_train_success_origin9696_step45.json": {
+      "sha256": "590db7a387aa04b2afbc6d3d3fe8fe63dc40dc62b257228fc812aff507bf87ae",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 93,
+      "snapshot_sha256": "7eb5190658c2f9ea8af550ef52e9c68622f95f4b24a2fd6719bd3b3a5c809b4f",
+      "source_injection_hash": "4f606e20b43a9dc448d382d628544708e05a0c86ad725c4940c78aa32df1bc83"
+    },
+    "m6p2c_train_success_origin9696_step47.json": {
+      "sha256": "37eeba8db16aa221e4d98b1c49fd883eed917bcd34b4c097d1f2d8ccc3db2e4f",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 95,
+      "snapshot_sha256": "4601838542dd6c70e2bb3f78ec2ce96de8d814da8364571144659c886486a813",
+      "source_injection_hash": "4f606e20b43a9dc448d382d628544708e05a0c86ad725c4940c78aa32df1bc83"
+    },
+    "m6p2c_train_success_origin9744_step0.json": {
+      "sha256": "3d7e6a5bde833fb56ef60fba7f1b7efa9552dfc39c938b95dfd44e4da0c232ad",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 96,
+      "snapshot_sha256": "691f703257fe7e03991712632aa5c0c9b59189a89fcf8b8473128c5a390f1394",
+      "source_injection_hash": "7d851493450edf1cfce2ef382b1d0005a1621e34544ed9d561d7919777ed11e3"
+    },
+    "m6p2c_train_success_origin9744_step18.json": {
+      "sha256": "6307169fc3a85b4df512d4e616d827f4caa07ebeeb5f5a463620e19da1fa59b4",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 114,
+      "snapshot_sha256": "e8f4b7f4f930a7d405aef64a6e622ca409056100ba2c54d4287cdd2ef49f011e",
+      "source_injection_hash": "7d851493450edf1cfce2ef382b1d0005a1621e34544ed9d561d7919777ed11e3"
+    },
+    "m6p2c_train_success_origin9744_step43.json": {
+      "sha256": "74a4bb86cfcef28e020f4130e4b3d429ea4c468e51026557918258d5c29e0918",
+      "kind": "successful_trace",
+      "source_path": "runs/remote_runtime-campaign-qualification-v26/runs/runtime_campaign_qualification_v26_050_coverage_seed0/failed_batch.json",
+      "source_failure_sha256": "f71cacfc7e4ed8ff4ce4e4b84dfb7dcd848c857107797a9e2c59064e14d2a07e",
+      "source_transition_index": 139,
+      "snapshot_sha256": "549e6dffb4535037b191b3b3efc4f2e7db43ed4024679a2145804bb13f304c4e",
+      "source_injection_hash": "7d851493450edf1cfce2ef382b1d0005a1621e34544ed9d561d7919777ed11e3"
+    }
+  },
   "boundary_rule_version": "capacity-nonrelaxing-fixed-train-boundaries-v2"
 }

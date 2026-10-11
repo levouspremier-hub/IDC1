@@ -95,12 +95,23 @@ def test_successful_anchor_extraction_rejects_divergent_reconstruction():
 
 def test_preregistered_unavailable_boundary_inputs_are_counted_and_fail():
     registry = diagnostic.load_registry()
+    # Exercise the missing-source contract even after real anchors are recovered.
+    registry['successful_anchors'] = {}
     assert len(diagnostic.cases_for('boundary', registry)) == 234
     assert len(diagnostic.cases_for('all', registry)) == 377
     unavailable = next(c for c in diagnostic.cases_for('boundary', registry)
                        if c['fixture'].startswith('m6p2c_train_success_'))
     with pytest.raises(ValueError, match='source-verified.*missing'):
         diagnostic.evaluate_case(unavailable, registry, {'runtime_budget_s': .50})
+
+
+def test_recovered_success_anchors_match_original_train_trace():
+    registry = diagnostic.load_registry()
+    assert len(registry['successful_anchors']) == 6
+    for name, entry in registry['successful_anchors'].items():
+        fixture = diagnostic.load_fixture(name, entry)
+        assert fixture['source_transition_index'] == entry['source_transition_index']
+        assert diagnostic.digest(fixture['snapshot']) == entry['snapshot_sha256']
 
 
 def test_invalid_registry_bootstrap_still_has_a_failed_five_artifact_run(tmp_path, monkeypatch):
