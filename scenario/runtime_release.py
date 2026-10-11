@@ -99,7 +99,19 @@ def source_paths():
 def asset_binding():
     # Bind the complete existing data set and recursively referenced evidence.
     from scenario.inventory_release import ASSET_PATHS, RELEASE_PATH
+    from scripts.runtime_numeric_diagnostic import load_fixture, load_registry
+
+    registry = load_registry()
+    registered_inputs = set()
+    for name, entry in {**registry['fixtures'], **registry['successful_anchors']}.items():
+        # Use the same strict source/input contract as production diagnostics.
+        # Registry keys are filenames, so the generic path walker cannot find
+        # them. Missing or altered inputs must fail before a candidate freezes.
+        load_fixture(name, entry)
+        registered_inputs.add(ROOT / 'tests/fixtures' / name)
+        registered_inputs.add(ROOT / entry['source_path'])
     paths = {ROOT / p for p in ASSET_PATHS.values()}
+    paths.update(registered_inputs)
     paths.add(ROOT / RELEASE_PATH)
     paths.update(p for p in (ROOT / 'data').rglob('*') if p.is_file()
                  and '__pycache__' not in p.parts and p.name != '.DS_Store')
